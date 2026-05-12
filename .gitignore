@@ -1,0 +1,36 @@
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Auto-generated
+src/roadrunner/_version.py
+
+# Results
+scripts_results/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Output
+figures/
+
+# Planning documents (not part of source code)
+planA.md
+planB.md
+QUICK_REFERENCE.md
+MODULE_MAP.md
+FLOWCHARTS.md
+*.dot
+*.png
