@@ -26,6 +26,9 @@ htmlcov/
 # Output
 figures/
 
+# Reference subpackage (untracked, will be deleted after migration)
+src/roadrunner/_accme/
+
 # Planning documents (not part of source code)
 planA.md
 planB.md
