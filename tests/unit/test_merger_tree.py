@@ -107,37 +107,6 @@ class TestSelectAccretionHost:
         assert result.empty
 
 
-class TestComputeSatellites:
-    @pytest.fixture
-    def reader(self):
-        return MergerTreeReader(TEST_TREE)
-
-    def test_returns_dict(self, reader):
-        snap = reader.snapshots[0]
-        snap_df = reader.select_snapshots([snap])
-        sats = reader.compute_satellites(snap_df)
-        assert isinstance(sats, dict)
-
-    def test_keys_are_host_ids(self, reader):
-        snap = reader.snapshots[0]
-        snap_df = reader.select_snapshots([snap])
-        sats = reader.compute_satellites(snap_df)
-        for host_id in sats:
-            assert isinstance(host_id, int)
-
-
-class TestComputeMostBoundSatellite:
-    @pytest.fixture
-    def reader(self):
-        return MergerTreeReader(TEST_TREE)
-
-    def test_returns_dict(self, reader):
-        snap = reader.snapshots[0]
-        snap_df = reader.select_snapshots([snap])
-        result = reader.compute_most_bound_satellite(snap_df)
-        assert isinstance(result, dict)
-
-
 class TestToNumeric:
     def test_returns_dataframe(self):
         reader = MergerTreeReader(TEST_TREE)

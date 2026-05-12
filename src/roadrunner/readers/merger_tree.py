@@ -39,55 +39,5 @@ class MergerTreeReader:
             return snap_df.loc[[idx]]
         raise ValueError(f"unknown criterion: {criterion}")
 
-    def compute_scale_radii(self, snapshot_df: pd.DataFrame) -> pd.DataFrame:
-        df = snapshot_df.copy()
-        if "scale_radius" not in df.columns or df["scale_radius"].isna().all():
-            return df
-        return df
-
-    def compute_satellites(
-        self, snapshot_df: pd.DataFrame, rvir_factor: float = 1.0
-    ) -> dict[int, list[int]]:
-        satellites: dict[int, list[int]] = {}
-        for _, row in snapshot_df.iterrows():
-            host_raw = row.get("Sub_tree_id_host")
-            if pd.isna(host_raw):
-                continue
-            host_id = int(host_raw)
-            halo_id = int(row["Sub_tree_id"])
-            if host_id > 0 and host_id != halo_id:
-                satellites.setdefault(host_id, []).append(halo_id)
-        return satellites
-
-    def compute_most_bound_satellite(
-        self, snapshot_df: pd.DataFrame
-    ) -> dict[int, int]:
-        most_bound: dict[int, int] = {}
-        for _, row in snapshot_df.iterrows():
-            host_raw = row.get("Sub_tree_id_host")
-            if pd.isna(host_raw):
-                continue
-            host_id = int(host_raw)
-            halo_id = int(row["Sub_tree_id"])
-            if host_id > 0 and host_id != halo_id:
-                if host_id not in most_bound:
-                    most_bound[host_id] = halo_id
-                elif not pd.isna(row.get("bound_mass")) and row["bound_mass"] > 0:
-                    current = most_bound[host_id]
-                    curr_row = snapshot_df[
-                        snapshot_df["Sub_tree_id"] == current
-                    ]
-                    if not curr_row.empty and row["bound_mass"] > curr_row.iloc[0].get("bound_mass", 0):
-                        most_bound[host_id] = halo_id
-        return most_bound
-
-    def compute_distance_to_host(
-        self, snapshot_df: pd.DataFrame, column: str = "host_distance"
-    ) -> pd.DataFrame:
-        df = snapshot_df.copy()
-        if column in df.columns:
-            return df
-        return df
-
     def to_numeric(self) -> pd.DataFrame:
         return self._df.copy().infer_objects()
