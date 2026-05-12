@@ -29,6 +29,9 @@ figures/
 # Reference subpackage (untracked, will be deleted after migration)
 src/roadrunner/_accme/
 
+# Test data (potentially large files)
+test_data/
+
 # Planning documents (not part of source code)
 planA.md
 planB.md
