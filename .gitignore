@@ -37,10 +37,4 @@ src/roadrunner/_accme/
 test_data/
 
 # Planning documents (not part of source code)
-planA.md
-planB.md
-QUICK_REFERENCE.md
-MODULE_MAP.md
-FLOWCHARTS.md
-*.dot
-*.png
+planning/
