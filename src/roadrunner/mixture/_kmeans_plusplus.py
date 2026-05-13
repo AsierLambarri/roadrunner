@@ -11,22 +11,8 @@
 #############################################################################
 
 import numpy as np
-from numba import njit
 
-
-@njit(fastmath=False)
-def row_squared_norms(X):
-    """Computes np.sum(X * Y, axis=1) using Numba.
-    """
-    n_samples, n_features = X.shape
-    result = np.empty(n_samples, dtype=X.dtype)
-    for i in range(n_samples):
-        s = 0.0
-        for j in range(n_features):
-            s += X[i, j] * X[i, j]
-        result[i] = s
-        
-    return result
+from ._math import row_squared_norms
     
 def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=None):
     X = np.asarray(X, dtype=float)
