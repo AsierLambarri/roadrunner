@@ -1,7 +1,7 @@
 import pandas as pd
 
 
-class MergerTreeReader:
+class MergerTreeReaderCSV:
     def __init__(self, data: str | pd.DataFrame):
         if isinstance(data, str):
             self._df = pd.read_csv(data)
@@ -22,10 +22,15 @@ class MergerTreeReader:
     def subtree_ids(self) -> list[int]:
         return sorted(int(x) for x in self._df["Sub_tree_id"].unique())
 
-    def select_snapshots(self, snap_ids: list[int]) -> pd.DataFrame:
+
+    def select_snapshots(self, snap_ids: list[int] | int) -> pd.DataFrame:
+        if not pd.api.types.is_list_like(snap_ids):
+            snap_ids = [snap_ids]
         return self._df[self._df["Snapshot"].isin(snap_ids)].copy()
 
-    def select_subtrees(self, tree_ids: list[int]) -> pd.DataFrame:
+    def select_subtrees(self, tree_ids: list[int] | int) -> pd.DataFrame:
+        if not pd.api.types.is_list_like(tree_ids):
+            tree_ids = [tree_ids]
         return self._df[self._df["Sub_tree_id"].isin(tree_ids)].copy()
 
     def select_accretion_host(
@@ -33,7 +38,7 @@ class MergerTreeReader:
     ) -> pd.DataFrame:
         snap_df = self.select_snapshots([snapshot_id])
         if snap_df.empty:
-            return snap_df
+            raise ValueError("Invalid snapshot selection: empty tree.")
         if criterion == "max_mass":
             idx = snap_df["mass"].idxmax()
             return snap_df.loc[[idx]]
