@@ -20,6 +20,19 @@ class HaloModel:
         self.redshift = float(redshift)
         self.comoving = comoving
         self._1plusz  = 1 / (1 + self.redshift) if comoving else 1
+        self._boundness: tuple | None = None
+
+    def set_boundness(
+        self, indices: np.ndarray, energies: np.ndarray, tdyns: np.ndarray
+    ) -> None:
+        self._boundness = (indices, energies, tdyns)
+
+    def get_boundness(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        return self._boundness
+
+    @property
+    def has_boundness(self) -> bool:
+        return self._boundness is not None
 
     def potential(self, xyz_or_r: np.ndarray) -> np.ndarray:
         if xyz_or_r.ndim == 2:

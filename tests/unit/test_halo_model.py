@@ -57,6 +57,44 @@ class TestPotential:
         assert np.allclose(result, expected)
 
 
+class TestBoundness:
+    def test_no_boundness_by_default(self):
+        inner = KeplerPotential(M=1e12)
+        halo = HaloModel(inner, np.zeros(3), sub_tree_id=1, redshift=0.0)
+        assert not halo.has_boundness
+        assert halo.get_boundness() is None
+
+    def test_set_boundness(self):
+        inner = KeplerPotential(M=1e12)
+        halo = HaloModel(inner, np.zeros(3), sub_tree_id=1, redshift=0.0)
+        indices = np.array([0, 1, 2], dtype=np.uint64)
+        energies = np.array([0.5, 0.8], dtype=np.float64)
+        tdyns = np.array([1.0, 2.0], dtype=np.float64)
+        halo.set_boundness(indices, energies, tdyns)
+        assert halo.has_boundness
+        result = halo.get_boundness()
+        assert result is not None
+        assert np.array_equal(result[0], indices)
+        assert np.array_equal(result[1], energies)
+        assert np.array_equal(result[2], tdyns)
+
+    def test_set_boundness_overwrites(self):
+        inner = KeplerPotential(M=1e12)
+        halo = HaloModel(inner, np.zeros(3), sub_tree_id=1, redshift=0.0)
+        halo.set_boundness(np.array([0]), np.array([0.1]), np.array([1.0]))
+        halo.set_boundness(np.array([5]), np.array([0.9]), np.array([2.0]))
+        result = halo.get_boundness()
+        assert result[0][0] == 5
+
+    def test_get_boundness_returns_tuple(self):
+        inner = KeplerPotential(M=1e12)
+        halo = HaloModel(inner, np.zeros(3), sub_tree_id=1, redshift=0.0)
+        halo.set_boundness(np.array([0]), np.array([0.1]), np.array([1.0]))
+        result = halo.get_boundness()
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+
 class TestTidalDenominator:
     def test_kepler(self):
         inner = KeplerPotential(M=1e12)
