@@ -138,3 +138,41 @@ class TestProtocol:
             def tidal_denominator(self, r):
                 return 3 * r
         assert isinstance(MockPot(), PotentialModel)
+
+
+class TestGetPotential:
+    def test_get_kepler(self):
+        from roadrunner.physics.potentials import get_potential
+        pot = get_potential("kepler", M=1e12)
+        assert isinstance(pot, KeplerPotential)
+
+    def test_get_nfw(self):
+        from roadrunner.physics.potentials import get_potential
+        pot = get_potential("nfw", M=1e12, Rs=10.0, c=10.0)
+        assert isinstance(pot, NFWPotential)
+
+    def test_get_kepler_case_insensitive(self):
+        from roadrunner.physics.potentials import get_potential
+        for name in ("kepler", "Kepler", "KEPLER"):
+            pot = get_potential(name, M=1e12)
+            assert isinstance(pot, KeplerPotential)
+
+    def test_get_unknown_raises(self):
+        from roadrunner.physics.potentials import get_potential
+        import pytest
+        with pytest.raises(ValueError, match="Unknown potential model"):
+            get_potential("foo", M=1e12)
+
+    def test_get_kepler_usable(self):
+        from roadrunner.physics.potentials import get_potential
+        pot = get_potential("kepler", M=1e12, G=4.3e-6)
+        r = np.array([100.0])
+        expected = KeplerPotential(M=1e12, G=4.3e-6).potential(r)
+        assert np.isclose(pot.potential(r), expected).all()
+
+    def test_get_nfw_usable(self):
+        from roadrunner.physics.potentials import get_potential
+        pot = get_potential("nfw", M=1e12, Rs=10.0, c=10.0, G=4.3e-6)
+        r = np.array([10.0])
+        expected = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6).potential(r)
+        assert np.isclose(pot.potential(r), expected).all()
