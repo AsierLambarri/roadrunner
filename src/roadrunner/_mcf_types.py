@@ -74,17 +74,14 @@ class AssignmentResult:
 
 
 @runtime_checkable
-class Assigner(Protocol):
+class ParticleAssigner(Protocol):
     def assign(
         self,
+        halos: list,
         particle_coords: np.ndarray,
         newborn_indices: np.ndarray,
-        boundness: BoundnessResult,
         groups: list[list[int]],
-        group_subtrees: list[int],
-        halo_positions: np.ndarray,
-        previous_resp: CSCResp | None = None,
-        **kwargs: object,
+        **kwargs,
     ) -> AssignmentResult: ...
 
 

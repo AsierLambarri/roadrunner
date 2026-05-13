@@ -1,9 +1,9 @@
 import numpy as np
 
 from roadrunner._mcf_types import (
-    Assigner,
     AssignmentResult,
     BoundnessResult,
+    ParticleAssigner,
     PotentialModel,
     SnapshotData,
 )
@@ -99,7 +99,7 @@ class TestAssignmentResult:
 
 
 class MockAssigner:
-    def assign(self, **kwargs):
+    def assign(self, halos, particle_coords, newborn_indices, groups, **kwargs):
         import pandas as pd
 
         return AssignmentResult(
@@ -110,12 +110,19 @@ class MockAssigner:
         )
 
 
-class TestAssignerProtocol:
+class TestParticleAssignerProtocol:
     def test_mock_assigner_passes_isinstance(self):
-        assert isinstance(MockAssigner(), Assigner)
+        assert isinstance(MockAssigner(), ParticleAssigner)
 
     def test_assign_returns_assignment_result(self):
-        result = MockAssigner().assign()
+        import numpy as np
+
+        result = MockAssigner().assign(
+            halos=[],
+            particle_coords=np.zeros((0, 6)),
+            newborn_indices=np.array([]),
+            groups=[],
+        )
         assert isinstance(result, AssignmentResult)
 
 
