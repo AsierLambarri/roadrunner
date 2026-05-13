@@ -1,7 +1,9 @@
+import numpy as np
 import pandas as pd
 import pytest
 
-from roadrunner.readers.merger_tree import MergerTreeReader
+from roadrunner.physics.merger_tree import nfw_cmz_relation_duffy
+from roadrunner.readers.merger_tree import MergerTreeReaderCSV as MergerTreeReader
 
 TEST_TREE = "test_data/test_tree.csv"
 
@@ -102,9 +104,9 @@ class TestSelectAccretionHost:
         with pytest.raises(ValueError, match="unknown criterion"):
             reader.select_accretion_host(0, criterion="invalid")
 
-    def test_empty_snapshot(self, reader):
-        result = reader.select_accretion_host(99999)
-        assert result.empty
+    def test_empty_snapshot_raises(self, reader):
+        with pytest.raises(ValueError, match="empty tree"):
+            reader.select_accretion_host(99999)
 
 
 class TestToNumeric:
@@ -113,3 +115,32 @@ class TestToNumeric:
         result = reader.to_numeric()
         assert isinstance(result, pd.DataFrame)
         assert len(result) == len(reader.dataframe)
+
+
+class TestNfwCmz:
+    def test_known_value_scalar(self):
+        result = nfw_cmz_relation_duffy(1e12, 0.0)
+        expected = 7.85 * (0.5) ** (-0.081)
+        assert abs(result - expected) < 1e-12
+        assert isinstance(result, float)
+
+    def test_array_input(self):
+        M = np.array([1e11, 1e12, 1e13])
+        result = nfw_cmz_relation_duffy(M, 0.0)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (3,)
+        assert all(result[i] > result[i + 1] for i in range(len(result) - 1))
+
+    def test_monotonic_decreasing_with_mass(self):
+        low = nfw_cmz_relation_duffy(1e11, 0.0)
+        high = nfw_cmz_relation_duffy(1e14, 0.0)
+        assert low > high
+
+    def test_monotonic_decreasing_with_redshift(self):
+        z0 = nfw_cmz_relation_duffy(1e12, 0.0)
+        z2 = nfw_cmz_relation_duffy(1e12, 2.0)
+        assert z0 > z2
+
+    def test_exact_midpoint(self):
+        result = nfw_cmz_relation_duffy(2e12, 0.0)
+        assert abs(result - 7.85) < 1e-12
