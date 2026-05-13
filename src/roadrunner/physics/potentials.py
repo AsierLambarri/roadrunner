@@ -12,12 +12,11 @@ class KeplerPotential:
         r_safe = np.sqrt(r**2 + SOFTENING_KEPLER**2)
         return -self.G * self.M / r_safe
 
-    def dynamical_time(self, E):
+    def dynamical_time(self, r):
         with np.errstate(invalid="ignore"):
-            a = -0.5 * self.G * self.M / E
-            return np.sqrt(a**3 / (self.G * self.M))
+            return np.sqrt(r**3 / (self.G * self.M))
 
-    def tidal_denominator(self, r=None):
+    def tidal_denominator(self, r):
         return 3 * self.M
 
 
@@ -67,7 +66,7 @@ def potential(model, r, **kwargs):
 def dynamical_time(model, **kwargs):
     if model.lower() == "kepler":
         p = KeplerPotential(M=kwargs["M"], G=kwargs.get("G", G_KM))
-        return p.dynamical_time(kwargs["E"])
+        return p.dynamical_time(kwargs["r"])
     if model.lower() == "nfw":
         p = NFWPotential(
             M=kwargs["M"], Rs=kwargs["Rs"],

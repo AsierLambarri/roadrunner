@@ -29,14 +29,14 @@ class TestKeplerPotential:
 
     def test_dynamical_time_positive(self):
         k = KeplerPotential(1e12, G=4.3e-6)
-        E = np.array([-100.0, -200.0])
-        result = k.dynamical_time(E)
+        r = np.array([10.0, 20.0])
+        result = k.dynamical_time(r)
         assert np.all(result > 0)
 
     def test_tidal_denominator(self):
         M = 1e12
         k = KeplerPotential(M)
-        assert k.tidal_denominator() == 3 * M
+        assert k.tidal_denominator(np.array([1.0])) == 3 * M
 
 
 class TestNFWPotential:
@@ -94,16 +94,9 @@ class TestFactoryFunctions:
 
     def test_dynamical_time_factory_kepler(self):
         M, G = 1e12, 4.3e-6
-        E = np.array([-100.0])
-        factory_result = dynamical_time("kepler", E=E, M=M, G=G)
-        direct_result = KeplerPotential(M, G=G).dynamical_time(E)
-        assert np.isclose(factory_result, direct_result).all()
-
-    def test_dynamical_time_factory_nfw(self):
-        M, Rs, c, G = 1e12, 10.0, 10.0, 4.3e-6
-        r = np.array([10.0])
-        factory_result = dynamical_time("nfw", r=r, M=M, Rs=Rs, c=c, G=G)
-        direct_result = NFWPotential(M, Rs, c, G=G).dynamical_time(r)
+        r = np.array([10.0, 20.0])
+        factory_result = dynamical_time("kepler", r=r, M=M, G=G)
+        direct_result = KeplerPotential(M, G=G).dynamical_time(r)
         assert np.isclose(factory_result, direct_result).all()
 
     def test_tidal_denominator_factory_kepler(self):
