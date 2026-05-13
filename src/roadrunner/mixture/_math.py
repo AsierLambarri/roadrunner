@@ -1,0 +1,35 @@
+import numpy as np
+from numba import njit, prange
+
+
+@njit(parallel=True, fastmath=False, inline="always")
+def logsumexp(log_probs):
+    N, M = log_probs.shape
+    out = np.empty((N, 1), dtype=log_probs.dtype)
+
+    for i in prange(N):
+        a_max = log_probs[i, 0]
+        for j in range(1, M):
+            v = log_probs[i, j]
+            if v > a_max:
+                a_max = v
+
+        s = 0.0
+        for j in range(M):
+            s += np.exp(log_probs[i, j] - a_max)
+
+        out[i, 0] = a_max + np.log(s)
+
+    return out
+
+
+@njit(fastmath=False)
+def row_squared_norms(X):
+    n_samples, n_features = X.shape
+    result = np.empty(n_samples, dtype=X.dtype)
+    for i in range(n_samples):
+        s = 0.0
+        for j in range(n_features):
+            s += X[i, j] * X[i, j]
+        result[i] = s
+    return result
