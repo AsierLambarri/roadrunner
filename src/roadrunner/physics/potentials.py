@@ -88,17 +88,21 @@ def tidal_denominator(model, **kwargs):
     raise ValueError(f"Unknown potential model: {model}")
 
 
-_POTENTIAL_MODELS: dict[str, type] = {
+_POTENTIAL_MODELS: dict[str, type[KeplerPotential | NFWPotential]] = {
     "kepler": KeplerPotential,
     "nfw": NFWPotential,
 }
 
 
-def get_potential(model: str, **kwargs) -> KeplerPotential | NFWPotential:
+def get_potential(
+    model: str, **kwargs
+) -> type[KeplerPotential | NFWPotential] | KeplerPotential | NFWPotential:
     cls = _POTENTIAL_MODELS.get(model.lower())
     if cls is None:
         raise ValueError(
             f"Unknown potential model: {model}. "
             f"Available: {list(_POTENTIAL_MODELS)}"
         )
+    if not kwargs:
+        return cls
     return cls(**kwargs)

@@ -176,3 +176,46 @@ class TestGetPotential:
         r = np.array([10.0])
         expected = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6).potential(r)
         assert np.isclose(pot.potential(r), expected).all()
+
+
+class TestGetPotentialClass:
+    def test_get_kepler_class_no_kwargs(self):
+        from roadrunner.physics.potentials import get_potential
+        cls = get_potential("kepler")
+        assert cls is KeplerPotential
+        assert issubclass(cls, PotentialModel)
+
+    def test_get_nfw_class_no_kwargs(self):
+        from roadrunner.physics.potentials import get_potential
+        cls = get_potential("nfw")
+        assert cls is NFWPotential
+        assert issubclass(cls, PotentialModel)
+
+    def test_reusable_kepler_class(self):
+        from roadrunner.physics.potentials import get_potential
+        cls = get_potential("kepler")
+        instance_1 = cls(M=1e12, G=G_KM)
+        instance_2 = cls(M=5e11, G=G_KM)
+        assert instance_1 is not instance_2
+        assert instance_1.M != instance_2.M
+        assert np.isclose(instance_1.potential(np.array([100.0])),
+                          -G_KM * 1e12 / 100.0, rtol=1e-3)
+
+    def test_reusable_nfw_class(self):
+        from roadrunner.physics.potentials import get_potential
+        cls = get_potential("nfw")
+        inst_a = cls(M=1e12, Rs=10.0, c=10.0, G=G_KM)
+        inst_b = cls(M=5e11, Rs=5.0, c=8.0, G=G_KM)
+        assert inst_a is not inst_b
+        assert inst_a.M != inst_b.M
+
+    def test_class_identity(self):
+        from roadrunner.physics.potentials import get_potential
+        assert get_potential("kepler") is get_potential("kepler")
+        assert get_potential("nfw") is get_potential("nfw")
+
+    def test_class_raises_on_unknown(self):
+        from roadrunner.physics.potentials import get_potential
+        import pytest
+        with pytest.raises(ValueError, match="Unknown potential model"):
+            get_potential("foo")
