@@ -10,12 +10,16 @@ class HaloModel:
         self,
         inner: PotentialModel,
         xcen: np.ndarray,
+        velocity: np.ndarray,
+        virial_radius: float,
         sub_tree_id: int,
         redshift: float,
         comoving: bool = True,
     ):
         self._inner = inner
         self.xcen = np.asarray(xcen, dtype=np.float64)
+        self.velocity = np.asarray(velocity, dtype=np.float64)
+        self.virial_radius = float(virial_radius)
         self.sub_tree_id = sub_tree_id
         self.redshift = float(redshift)
         self.comoving = comoving
@@ -60,6 +64,9 @@ class HaloModel:
         xcen = np.array([
             row["position_x"], row["position_y"], row["position_z"],
         ], dtype=np.float64)
+        velocity = np.array([
+            row["velocity_x"], row["velocity_y"], row["velocity_z"],
+        ], dtype=np.float64)
         conc = row["virial_radius"] / row["scale_radius"]
         kwargs = {"M": row["mass"], "G": G_KM}
         if model.lower() == "nfw":
@@ -69,6 +76,8 @@ class HaloModel:
         return cls(
             inner=inner,
             xcen=xcen,
+            velocity=velocity,
+            virial_radius=float(row["virial_radius"]),
             sub_tree_id=int(row["Sub_tree_id"]),
             redshift=float(row["Redshift"]),
             comoving=comoving,
