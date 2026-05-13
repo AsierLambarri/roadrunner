@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._mcf_types import AssignmentResult
-from roadrunner.clustering.assignment.base import ParticleAssigner
+from roadrunner._mcf_types import ParticleAssigner
 
 
 class MockAssigner:
