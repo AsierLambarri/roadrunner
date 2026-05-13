@@ -30,7 +30,7 @@ def _check_parameter_values(weights, means, covariances, cov_type):
 
 
 
-class BaseMixture:
+class BaseMixture(abc.ABC):
     def __init__(self, n_components=2, init_params='kmeans', max_iter=10, tol=1e-3, verbose=0,
                  random_state=None, reg_covar=1E-6, cast_dtype=np.float32, **kwargs):
 

@@ -8,35 +8,26 @@ from roadrunner.mixture.base import (
 )
 
 
+class _ConcreteMixture(BaseMixture):
+    def _set_parameters(self): pass
+    def _check_parameters(self, X): pass
+    def _initialize_complete(self, X, resp, point_weights): pass
+    def _is_incomplete_init(self): return True
+    def _initialize_means(self, X, point_weights, alpha): pass
+    def _estimate_log_weights(self): pass
+    def _m_step(self, X, resp, point_weights): pass
+    def _estimate_log_gaussian_prob(self, X): pass
+
+
 class TestAbstractMethods:
-    @pytest.mark.xfail(strict=False)
-    def test_set_parameters_raises(self):
-        bm = BaseMixture()
-        with pytest.raises(NotImplementedError):
-            bm._set_parameters()
-
-    @pytest.mark.xfail(strict=False)
-    def test_check_parameters_raises(self):
-        bm = BaseMixture()
-        with pytest.raises(NotImplementedError):
-            bm._check_parameters(None)
-
-    @pytest.mark.xfail(strict=False)
-    def test_initialize_complete_raises(self):
-        bm = BaseMixture()
-        with pytest.raises(NotImplementedError):
-            bm._initialize_complete(None, None, None)
-
-    @pytest.mark.xfail(strict=False)
-    def test_is_incomplete_init_raises(self):
-        bm = BaseMixture()
-        with pytest.raises(NotImplementedError):
-            bm._is_incomplete_init()
+    def test_cannot_instantiate_base(self):
+        with pytest.raises(TypeError):
+            BaseMixture()
 
 
 class TestInitializeWeightsAndPrior:
     def test_none_inputs(self):
-        bm = BaseMixture(n_components=3)
+        bm = _ConcreteMixture(n_components=3)
         X = np.ones((10, 2), dtype=np.float32)
         pw, alpha, log_a = bm._initialize_weights_and_prior(X, None, None)
         assert pw.shape == (10,)
@@ -46,7 +37,7 @@ class TestInitializeWeightsAndPrior:
         assert np.allclose(alpha.sum(axis=1), 3.0)
 
     def test_custom_latent_prior(self):
-        bm = BaseMixture(n_components=3)
+        bm = _ConcreteMixture(n_components=3)
         X = np.ones((10, 2), dtype=np.float32)
         custom_prior = np.random.uniform(0.1, 1.0, (10, 3)).astype(np.float32)
         pw, alpha, log_a = bm._initialize_weights_and_prior(X, None, custom_prior)
@@ -54,7 +45,7 @@ class TestInitializeWeightsAndPrior:
         assert np.allclose(alpha.sum(axis=1), 3.0)
 
     def test_custom_point_weights(self):
-        bm = BaseMixture(n_components=2)
+        bm = _ConcreteMixture(n_components=2)
         X = np.ones((5, 3), dtype=np.float32)
         pw, _, _ = bm._initialize_weights_and_prior(
             X, np.array([0.5, 1.0, 1.5, 2.0, 2.5]), None
@@ -62,7 +53,7 @@ class TestInitializeWeightsAndPrior:
         assert np.allclose(pw, [0.5, 1.0, 1.5, 2.0, 2.5])
 
     def test_wrong_prior_shape_raises(self):
-        bm = BaseMixture(n_components=2)
+        bm = _ConcreteMixture(n_components=2)
         X = np.ones((5, 3), dtype=np.float32)
         with pytest.raises(ValueError, match="latent_prior must have shape"):
             bm._initialize_weights_and_prior(X, None, np.ones((5, 3)))
