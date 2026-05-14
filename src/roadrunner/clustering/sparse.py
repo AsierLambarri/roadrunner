@@ -60,7 +60,7 @@ class SparseCSC:
         self.column_indices = column_indices
         self.column_values = column_values
 
-    def to_dense(self, columns=None):
+    def to_dense(self, columns=None, col_func=None):
         if columns is None:
             col_indices = self.column_indices
             col_values = self.column_values
@@ -71,6 +71,9 @@ class SparseCSC:
         true_indices = np.unique(np.concatenate(col_indices))
         if true_indices.size == 0:
             return np.zeros((0, len(col_indices)))
+
+        if col_func is not None:
+            col_values = [col_func(v) for v in col_values]
 
         return build_dense_from_csc(
             matrix_shape=(true_indices.size, len(col_indices)),

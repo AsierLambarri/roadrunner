@@ -6,7 +6,7 @@ from scipy.stats import rankdata
 from tqdm import tqdm
 
 from roadrunner._mcf_types import AssignmentResult
-from roadrunner.clustering.sparse import build_dense_from_csc, stitch_zero_rows
+from roadrunner.clustering.sparse import SparseCSC, build_dense_from_csc, stitch_zero_rows
 from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
@@ -15,35 +15,15 @@ from roadrunner.mixture.weighted_gmm import (
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 
 
-def _build_normalized_resp(matrix_shape, true_indices, column_indices, column_values):
-    assert matrix_shape == (true_indices.size, len(column_indices))
-    for k, values in enumerate(column_values):
-        if len(values) == 0:
-            warnings.warn(f"Column {k} (halo) has empty values.")
-    resp = build_dense_from_csc(
-        matrix_shape, true_indices, column_indices, column_values
-    )
-    resp = row_l1_normalize(resp).astype(np.float32, copy=False)
-    return resp
+def _no_transform(values):
+    return values
 
 
-def _build_normalized_resp_func_rank(
-    matrix_shape, true_indices, column_indices, column_values, func_rank=np.log1p
-):
-    assert matrix_shape == (true_indices.size, len(column_indices))
-    ranked_values = []
-    for k, values in enumerate(column_values):
-        if len(values) == 0:
-            warnings.warn(f"Column {k} (halo) has empty values.")
-            ranked_values.append(values)
-            continue
-        ranks = rankdata(values, method="ordinal")
-        ranked_values.append(func_rank(ranks).astype(np.float32, copy=False))
-    resp = build_dense_from_csc(
-        matrix_shape, true_indices, column_indices, ranked_values
-    )
-    resp = row_l1_normalize(resp).astype(np.float32, copy=False)
-    return resp
+def _rank_transform(values, func_rank=np.log1p):
+    if len(values) == 0:
+        return values
+    ranks = rankdata(values, method="ordinal")
+    return func_rank(ranks).astype(np.float32, copy=False)
 
 
 def _build_raw_resp_with_previous_and_bound(
@@ -201,12 +181,10 @@ class GMMAssigner:
         return post_prob, nonz
 
     def _fit_unresolved(self, gp_idx, group_candidates, group_boundness):
-        post_prob = _build_normalized_resp(
-            (gp_idx.size, len(group_candidates)),
-            gp_idx,
-            group_candidates,
-            group_boundness,
-        )
+        csc = SparseCSC(group_candidates, group_boundness)
+        post_prob = row_l1_normalize(
+            csc.to_dense(col_func=_no_transform)
+        ).astype(np.float32, copy=False)
         nonz = (post_prob > 0).astype(np.uint8)
         return post_prob, nonz
 
@@ -279,12 +257,10 @@ class GMMAssigner:
         n_samples = coords.shape[0]
         n_components = len(csc_boundness[0])
 
-        prior = _build_normalized_resp_func_rank(
-            (n_samples, n_components),
-            true_indices,
-            csc_boundness[0],
-            csc_boundness[1],
-        )
+        csc = SparseCSC(csc_boundness[0], csc_boundness[1])
+        prior = row_l1_normalize(
+            csc.to_dense(col_func=_rank_transform)
+        ).astype(np.float32, copy=False)
 
         if self.previous_resp:
             raw = _build_raw_resp_with_previous_and_bound(
