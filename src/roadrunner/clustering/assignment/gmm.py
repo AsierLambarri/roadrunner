@@ -2,11 +2,11 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from numba import njit, prange
 from scipy.stats import rankdata
-from tqdm import tqdm
 
 from roadrunner._mcf_types import AssignmentResult
-from roadrunner.clustering.sparse import build_dense_from_csc, stitch_zero_rows
+from roadrunner.clustering.sparse import stitch_zero_rows
 from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
@@ -26,54 +26,33 @@ def _rank_transform(values, func_rank=np.log1p):
     return func_rank(ranks).astype(np.float32, copy=False)
 
 
-def _build_raw_resp_with_previous_and_bound(
-    matrix_shape,
-    group_subtrees,
-    newborn_array_indexes,
-    true_indices,
-    csc_boundness,
-    prev_resp_map,
-):
-    n_samples, n_components = matrix_shape
-    default_value = 1.0 / n_components
-    col_idx_boundness, col_val_boundness = csc_boundness
-    new_col_idx, new_col_val = [], []
+@njit(parallel=True)
+def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
+    """Merge previous responsibilities with boundness.
 
-    for k, sub_id in tqdm(
-        enumerate(group_subtrees),
-        desc="Building resp matrix...",
-        total=n_components,
-    ):
-        curr_pids = col_idx_boundness[k]
-        if curr_pids.size == 0:
-            new_col_idx.append(np.array([], dtype=np.float32))
-            new_col_val.append(np.array([], dtype=np.float32))
-            continue
-
-        prev_pids, prev_vals = prev_resp_map.pop(
-            sub_id,
-            (np.array([], dtype=np.float32), np.array([], dtype=np.float32)),
-        )
-        newbound = np.setdiff1d(curr_pids, prev_pids, assume_unique=True)
-        newly_bound = np.setdiff1d(newbound, newborn_array_indexes, assume_unique=True)
-        new_values = np.full(curr_pids.shape, 0, dtype=np.float32)
-        new_values[np.isin(curr_pids, newly_bound)] = default_value
-
-        if prev_pids.size > 0:
-            ordering = np.argsort(prev_pids)
-            sorted_prev_idx = prev_pids[ordering]
-            sorted_prev_val = prev_vals[ordering]
-            pos = np.searchsorted(sorted_prev_idx, curr_pids)
-            valid = pos < sorted_prev_idx.size
-            valid[valid] &= sorted_prev_idx[pos[valid]] == curr_pids[valid]
-            new_values[valid] = sorted_prev_val[pos[valid]]
-
-        new_col_idx.append(curr_pids)
-        new_col_val.append(new_values)
-
-    return build_dense_from_csc(
-        matrix_shape, true_indices, new_col_idx, new_col_val
-    )
+    Parameters
+    ----------
+    raw : float32 (n, k) — prev_dense on input, overwritten with merged result.
+    bound : float32 (n, k) — dense boundness matrix.
+    n_components : int
+    newborn_1d : bool (n,) — True for newborn particles.
+    """
+    n = raw.shape[0]
+    inv_ncomp = 1.0 / n_components
+    for n_idx in prange(n):
+        is_newb = newborn_1d[n_idx]
+        for k_idx in range(n_components):
+            b = bound[n_idx, k_idx]
+            p = raw[n_idx, k_idx]
+            if b > 0:
+                if p > 0:
+                    raw[n_idx, k_idx] = p
+                elif not is_newb:
+                    raw[n_idx, k_idx] = inv_ncomp
+                else:
+                    raw[n_idx, k_idx] = 0.0
+            else:
+                raw[n_idx, k_idx] = 0.0
 
 
 class GMMAssigner:
@@ -98,9 +77,7 @@ class GMMAssigner:
     def assign(
         self, halos, particle_coords, newborn_indices, groups, **kwargs
     ) -> AssignmentResult:
-        self.ensemble = (
-            HaloEnsemble(halos) if not isinstance(halos, HaloEnsemble) else halos
-        )
+        self.ensemble = HaloEnsemble(halos) if not isinstance(halos, HaloEnsemble) else halos
         self.particle_coords = particle_coords
         self.newborn_indices = newborn_indices
         self.previous_resp = kwargs.get("previous_resp", {})
@@ -122,21 +99,17 @@ class GMMAssigner:
             self._process_group(group)
 
         self.particles_df.reset_index(inplace=True)
-
-        stats = {
-            "groups": len(groups),
-            "halos_in_groups": sum(len(g) for g in groups),
-            "bound_particles": self.ensemble.nstars,
-        }
-
         return AssignmentResult(
-            self.particles_df, self.resp_map, self.parameters, stats
-        )
+            self.particles_df, self.resp_map, self.parameters, {
+                "groups": len(groups),
+                "halos_in_groups": sum(len(g) for g in groups),
+                "bound_particles": self.ensemble.nstars
+        })
 
     def _process_group(self, group):
-        sub = self.ensemble.select(group)
-        csc_b, _ = sub.get_particles()
-        group_subtrees = sub.sub_tree_ids
+        sub_ensemble = self.ensemble.select(group)
+        csc_b, _ = sub_ensemble.get_particles()
+        group_subtrees = sub_ensemble.sub_tree_ids
         gp_idx = np.unique(np.concatenate(csc_b.column_indices))
 
         if gp_idx.size == 0:
@@ -253,14 +226,26 @@ class GMMAssigner:
         ).astype(np.float32, copy=False)
 
         if self.previous_resp:
-            raw = _build_raw_resp_with_previous_and_bound(
-                (n_samples, n_components),
-                subtrees,
-                self.newborn_indices,
-                true_indices,
-                (csc_b.column_indices, csc_b.column_values),
-                dict(self.previous_resp),
-            )
+            bound_dense = csc_b.to_dense()
+
+            idx_map = np.full(int(true_indices.max()) + 1, -1, dtype=np.int64)
+            idx_map[true_indices] = np.arange(true_indices.size)
+
+            prev_dense = np.zeros((n_samples, n_components), dtype=np.float32)
+            for k, sub_id in enumerate(subtrees):
+                pids, vals = self.previous_resp.get(
+                    sub_id,
+                    (np.array([], dtype=np.uint64), np.array([], dtype=np.float32)),
+                )
+                if pids.size > 0:
+                    rows = idx_map[pids]
+                    valid = rows >= 0
+                    prev_dense[rows[valid], k] = vals[valid]
+
+            newborn_1d = np.isin(true_indices, self.newborn_indices)
+            _merge_resp_kernel(prev_dense, bound_dense, n_components, newborn_1d)
+            raw = prev_dense
+
             resp = stitch_zero_rows(prior, raw)
             row_sums = resp.sum(axis=1, keepdims=True)
             zero_rows = np.where(row_sums.flatten() == 0)[0]
