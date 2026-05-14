@@ -6,7 +6,7 @@ from scipy.stats import rankdata
 from tqdm import tqdm
 
 from roadrunner._mcf_types import AssignmentResult
-from roadrunner.clustering.sparse import SparseCSC, build_dense_from_csc, stitch_zero_rows
+from roadrunner.clustering.sparse import build_dense_from_csc, stitch_zero_rows
 from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
@@ -103,7 +103,6 @@ class GMMAssigner:
         )
         self.particle_coords = particle_coords
         self.newborn_indices = newborn_indices
-        self.groups = groups
         self.previous_resp = kwargs.get("previous_resp", {})
 
         N = particle_coords.shape[0]
@@ -138,9 +137,7 @@ class GMMAssigner:
         sub = self.ensemble.select(group)
         csc_b, _ = sub.get_particles()
         group_subtrees = sub.sub_tree_ids
-        group_candidates = csc_b.column_indices
-        group_boundness = csc_b.column_values
-        gp_idx = np.unique(np.concatenate(group_candidates))
+        gp_idx = np.unique(np.concatenate(csc_b.column_indices))
 
         if gp_idx.size == 0:
             warnings.warn(
@@ -156,12 +153,10 @@ class GMMAssigner:
             warnings.warn(
                 f"WARNING: {n_comp} galaxies are unresolved inside a group!"
             )
-            post_prob, nonz = self._fit_unresolved(
-                gp_idx, group_candidates, group_boundness
-            )
+            post_prob, nonz = self._fit_unresolved(gp_idx, csc_b)
         else:
             post_prob, nonz = self._fit_resolved(
-                gp_idx, group_subtrees, group_candidates, group_boundness
+                gp_idx, group_subtrees, csc_b
             )
 
         for i in range(len(group)):
@@ -180,26 +175,22 @@ class GMMAssigner:
         nonz = (post_prob > 0).astype(np.uint8)
         return post_prob, nonz
 
-    def _fit_unresolved(self, gp_idx, group_candidates, group_boundness):
-        csc = SparseCSC(group_candidates, group_boundness)
+    def _fit_unresolved(self, gp_idx, csc_b):
         post_prob = row_l1_normalize(
-            csc.to_dense(col_func=_no_transform)
+            csc_b.to_dense(col_func=_no_transform)
         ).astype(np.float32, copy=False)
         nonz = (post_prob > 0).astype(np.uint8)
         return post_prob, nonz
 
-    def _fit_resolved(
-        self, gp_idx, group_subtrees, group_candidates, group_boundness
-    ):
+    def _fit_resolved(self, gp_idx, group_subtrees, csc_b):
         coords = self.particle_coords[gp_idx]
         mean_offset = np.mean(coords, axis=0)
         coords -= mean_offset
         scalings = 10.0 / (coords.max(axis=0) - coords.min(axis=0))
         coords *= scalings
 
-        csc_boundness = (group_candidates, group_boundness)
         prior, w_init, m_init, c_init, cov_t = self._estimate_initial_params(
-            coords, group_subtrees, gp_idx, csc_boundness
+            coords, group_subtrees, gp_idx, csc_b
         )
         nonz = (prior > 0).astype(np.uint8)
         n_comp = len(group_subtrees)
@@ -252,14 +243,13 @@ class GMMAssigner:
         return post_prob, nonz
 
     def _estimate_initial_params(
-        self, coords, subtrees, true_indices, csc_boundness
+        self, coords, subtrees, true_indices, csc_b
     ):
         n_samples = coords.shape[0]
-        n_components = len(csc_boundness[0])
+        n_components = len(csc_b.column_indices)
 
-        csc = SparseCSC(csc_boundness[0], csc_boundness[1])
         prior = row_l1_normalize(
-            csc.to_dense(col_func=_rank_transform)
+            csc_b.to_dense(col_func=_rank_transform)
         ).astype(np.float32, copy=False)
 
         if self.previous_resp:
@@ -268,7 +258,7 @@ class GMMAssigner:
                 subtrees,
                 self.newborn_indices,
                 true_indices,
-                csc_boundness,
+                (csc_b.column_indices, csc_b.column_values),
                 dict(self.previous_resp),
             )
             resp = stitch_zero_rows(prior, raw)
