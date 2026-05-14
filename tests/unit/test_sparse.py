@@ -68,8 +68,18 @@ class TestSparseCSC:
             column_values=[np.array([1.0, 2.0]), np.array([3.0, 4.0])],
         )
         result = csc.to_dense(columns=[0])
-        assert result.shape == (2, 1)
-        assert np.array_equal(result[:, 0], [1.0, 2.0])
+        assert result.shape == (3, 1)
+        assert list(result[:, 0]) == [1.0, 2.0, 0.0]
+
+    def test_to_dense_subset_by_id(self):
+        csc = SparseCSC(
+            column_indices=[np.array([0, 1]), np.array([1, 2])],
+            column_values=[np.array([1.0, 2.0]), np.array([3.0, 4.0])],
+            column_id=[10, 20],
+        )
+        result = csc.to_dense(columns=[20])
+        assert result.shape == (3, 1)
+        assert list(result[:, 0]) == [0.0, 3.0, 4.0]
 
     def test_to_dense_empty_column(self):
         csc = SparseCSC(
@@ -111,3 +121,95 @@ class TestStitchZeroRows:
                 py_result[i, :] = m1[i, :]
 
         assert np.array_equal(numba_result, py_result)
+
+
+class TestSparseCSCAlign:
+    def test_align_same_shape(self):
+        a = SparseCSC(
+            column_indices=[np.array([0, 1]), np.array([1, 2])],
+            column_values=[np.array([1.0, 2.0]), np.array([3.0, 4.0])],
+            column_id=[10, 20],
+        )
+        b = SparseCSC(
+            column_indices=[np.array([0, 2]), np.array([2, 3])],
+            column_values=[np.array([5.0, 6.0]), np.array([7.0, 8.0])],
+            column_id=[20, 30],
+        )
+        aa, bb = a.align(b, fill=True)
+        assert np.array_equal(aa.row_id, np.array([0, 1, 2, 3]))
+        assert np.array_equal(bb.row_id, np.array([0, 1, 2, 3]))
+        assert np.array_equal(aa.column_id, np.array([10, 20, 30]))
+        assert np.array_equal(bb.column_id, np.array([10, 20, 30]))
+
+    def test_align_fill_false(self):
+        a = SparseCSC(
+            column_indices=[np.array([0, 1]), np.array([1, 2])],
+            column_values=[np.array([1.0, 2.0]), np.array([3.0, 4.0])],
+            column_id=[10, 20],
+        )
+        b = SparseCSC(
+            column_indices=[np.array([0, 2]), np.array([2, 3])],
+            column_values=[np.array([5.0, 6.0]), np.array([7.0, 8.0])],
+            column_id=[20, 30],
+        )
+        aa, bb = a.align(b, fill=False)
+        assert np.array_equal(aa.row_id, np.array([0, 2]))
+        assert np.array_equal(bb.row_id, np.array([0, 2]))
+        assert np.array_equal(aa.column_id, np.array([20]))
+        assert np.array_equal(bb.column_id, np.array([20]))
+
+    def test_align_commutative(self):
+        a = SparseCSC(
+            column_indices=[np.array([0, 1]), np.array([1, 2])],
+            column_values=[np.array([1.0, 2.0]), np.array([3.0, 4.0])],
+            column_id=[10, 20],
+        )
+        b = SparseCSC(
+            column_indices=[np.array([0, 2])],
+            column_values=[np.array([5.0, 6.0])],
+            column_id=[15],
+        )
+        aa1, bb1 = a.align(b, fill=True)
+        aa2, bb2 = b.align(a, fill=True)
+        assert np.array_equal(aa1.row_id, aa2.row_id)
+        assert np.array_equal(aa1.column_id, aa2.column_id)
+        assert np.array_equal(bb1.row_id, bb2.row_id)
+        assert np.array_equal(bb1.column_id, bb2.column_id)
+
+    def test_align_dense_values(self):
+        a = SparseCSC(
+            column_indices=[np.array([0, 1])],
+            column_values=[np.array([1.0, 2.0])],
+            column_id=[10],
+        )
+        b = SparseCSC(
+            column_indices=[np.array([1, 2])],
+            column_values=[np.array([3.0, 4.0])],
+            column_id=[20],
+        )
+        da = a.to_dense()
+        db = b.to_dense()
+        aa, bb = a.align(b, fill=True)
+        aa_dense = aa.to_dense()
+        bb_dense = bb.to_dense()
+        assert aa_dense.shape == bb_dense.shape
+        assert aa_dense.shape[0] == 3  # rows 0, 1, 2
+        assert aa_dense.shape[1] == 2  # cols 10, 20
+        assert list(aa_dense[:, 0]) == [1.0, 2.0, 0.0]
+        assert list(bb_dense[:, 1]) == [0.0, 3.0, 4.0]
+
+    def test_align_empty_columns(self):
+        a = SparseCSC(
+            column_indices=[np.array([], dtype=np.uint64)],
+            column_values=[np.array([], dtype=np.float32)],
+            column_id=[10],
+        )
+        b = SparseCSC(
+            column_indices=[np.array([0])],
+            column_values=[np.array([5.0])],
+            column_id=[20],
+        )
+        aa, bb = a.align(b, fill=True)
+        assert aa.row_id.size == 1
+        assert bb.row_id.size == 1
+        assert len(aa.column_id) == 2

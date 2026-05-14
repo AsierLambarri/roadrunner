@@ -66,7 +66,8 @@ class HaloEnsemble:
                 boundness.append(empty_val)
                 tdyns.append(empty_val)
 
-        return SparseCSC(candidates, boundness), SparseCSC(candidates, tdyns)
+        col_id = np.array([h.sub_tree_id for h in self._halos], dtype=np.int64)
+        return SparseCSC(candidates, boundness, column_id=col_id), SparseCSC(candidates, tdyns, column_id=col_id)
 
     def populated_indices(self) -> np.ndarray:
         csc, _ = self.get_particles()

@@ -55,29 +55,82 @@ def stitch_zero_rows(matrix1, matrix2):
     return matrix2
 
 
+def _build_row_id(indices_list):
+    all_rows = np.unique(np.concatenate(indices_list))
+    return all_rows if all_rows.size > 0 else np.array([], dtype=np.uint64)
+
+
 class SparseCSC:
-    def __init__(self, column_indices, column_values):
+    def __init__(self, column_indices, column_values, column_id=None):
         self.column_indices = column_indices
         self.column_values = column_values
+        n = len(column_indices)
+        self.column_id = (
+            np.arange(n) if column_id is None
+            else np.asarray(column_id, dtype=np.int64)
+        )
+        self.row_id = _build_row_id(column_indices)
+
+    def __len__(self):
+        return len(self.column_indices)
 
     def to_dense(self, columns=None, col_func=None):
         if columns is None:
-            col_indices = self.column_indices
-            col_values = self.column_values
+            col_idx_list = self.column_indices
+            col_val_list = self.column_values
         else:
-            col_indices = [self.column_indices[j] for j in columns]
-            col_values = [self.column_values[j] for j in columns]
+            mask = np.isin(self.column_id, columns)
+            if not np.any(mask):
+                return np.zeros((self.row_id.size, 0), dtype=np.float32)
+            idx = np.where(mask)[0]
+            col_idx_list = [self.column_indices[i] for i in idx]
+            col_val_list = [self.column_values[i] for i in idx]
 
-        true_indices = np.unique(np.concatenate(col_indices))
-        if true_indices.size == 0:
-            return np.zeros((0, len(col_indices)))
+        if self.row_id.size == 0:
+            return np.zeros((0, len(col_idx_list)))
 
         if col_func is not None:
-            col_values = [col_func(v) for v in col_values]
+            col_val_list = [col_func(v) for v in col_val_list]
 
         return build_dense_from_csc(
-            matrix_shape=(true_indices.size, len(col_indices)),
-            true_indices=true_indices,
-            column_indices=col_indices,
-            column_values=col_values,
+            matrix_shape=(self.row_id.size, len(col_idx_list)),
+            true_indices=self.row_id,
+            column_indices=col_idx_list,
+            column_values=col_val_list,
         )
+
+    def align(self, other, fill=True):
+        if fill:
+            new_rows = np.union1d(self.row_id, other.row_id).astype(np.int64)
+            new_cols = np.union1d(self.column_id, other.column_id).astype(np.int64)
+        else:
+            new_rows = np.intersect1d(self.row_id, other.row_id).astype(np.int64)
+            new_cols = np.intersect1d(self.column_id, other.column_id).astype(np.int64)
+
+        def _align_one(csc):
+            row_map = np.full(
+                int(new_rows.max()) + 1 if new_rows.size > 0 else 1,
+                -1, dtype=np.int64,
+            )
+            row_map[new_rows] = np.arange(new_rows.size)
+
+            new_idx, new_val = [], []
+            for cid in new_cols:
+                col_pos = np.where(csc.column_id == cid)[0]
+                if col_pos.size > 0:
+                    k = col_pos[0]
+                    old_idx = csc.column_indices[k]
+                    old_val = csc.column_values[k]
+                    mapped = row_map[old_idx]
+                    valid = mapped >= 0
+                    new_idx.append(old_idx[valid])
+                    new_val.append(old_val[valid])
+                else:
+                    new_idx.append(np.array([], dtype=np.int64))
+                    new_val.append(np.array([], dtype=np.float32))
+
+            result = SparseCSC(new_idx, new_val, column_id=new_cols.copy())
+            result.row_id = new_rows.copy()
+            return result
+
+        return _align_one(self), _align_one(other)
