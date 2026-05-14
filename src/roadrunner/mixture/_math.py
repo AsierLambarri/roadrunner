@@ -23,6 +23,21 @@ def logsumexp(log_probs):
     return out
 
 
+@njit(parallel=True)
+def row_l1_normalize(resp):
+    n_samples, n_components = resp.shape
+    for n in prange(n_samples):
+        row = resp[n]
+        row_sum = 0.0
+        for k in range(n_components):
+            row_sum += float(row[k])
+        if row_sum > 0:
+            inv_sum = 1.0 / row_sum
+            for k in range(n_components):
+                row[k] *= inv_sum
+    return resp
+
+
 @njit(fastmath=False)
 def row_squared_norms(X):
     n_samples, n_features = X.shape

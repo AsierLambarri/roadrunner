@@ -1,8 +1,7 @@
 import numpy as np
-import scipy
 from scipy.special import logsumexp as scipy_logsumexp
 
-from roadrunner.mixture._math import logsumexp, row_squared_norms
+from roadrunner.mixture._math import logsumexp, row_l1_normalize, row_squared_norms
 
 
 class TestLogSumExp:
@@ -23,6 +22,31 @@ class TestLogSumExp:
         X = np.array([[-1.0], [-2.0], [-3.0]], dtype=np.float64)
         result = logsumexp(X)
         assert np.allclose(result, X.reshape(-1, 1))
+
+
+class TestRowL1Normalize:
+    def test_rows_sum_to_one(self):
+        X = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+        result = row_l1_normalize(X.copy())
+        assert np.allclose(result.sum(axis=1), 1.0)
+
+    def test_zero_row_unchanged(self):
+        X = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 0.0]], dtype=np.float32)
+        result = row_l1_normalize(X.copy())
+        assert result[0, 0] == 0.0 and result[0, 1] == 0.0 and result[0, 2] == 0.0
+        assert np.isclose(result[1, 0], 1.0 / 3.0)
+
+    def test_matches_python(self):
+        X = np.random.default_rng(42).uniform(0, 10, (50, 5)).astype(np.float32)
+        numba_result = row_l1_normalize(X.copy())
+        py_result = X / X.sum(axis=1, keepdims=True)
+        assert np.allclose(numba_result, py_result)
+
+    def test_single_row(self):
+        X = np.array([[3.0, 4.0]], dtype=np.float32)
+        result = row_l1_normalize(X.copy())
+        assert np.isclose(result[0, 0], 3.0 / 7.0)
+        assert np.isclose(result[0, 1], 4.0 / 7.0)
 
 
 class TestRowSquaredNorms:

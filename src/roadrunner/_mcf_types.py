@@ -8,6 +8,7 @@ ParticleArray = NDArray[np.floating]
 HaloID = int
 SnapshotID = int
 CSCResp = tuple[list[list[int]], list[list[float]]]
+RespMap = dict[int, tuple[np.ndarray, np.ndarray]]
 
 
 class SnapshotData:
