@@ -12,6 +12,7 @@ from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
     _estimate_gaussian_parameters,
 )
+from roadrunner.physics.halo_ensemble import HaloEnsemble
 
 
 def _build_normalized_resp(matrix_shape, true_indices, column_indices, column_values):
@@ -117,22 +118,13 @@ class GMMAssigner:
     def assign(
         self, halos, particle_coords, newborn_indices, groups, **kwargs
     ) -> AssignmentResult:
-        self.halos = halos
+        self.ensemble = (
+            HaloEnsemble(halos) if not isinstance(halos, HaloEnsemble) else halos
+        )
         self.particle_coords = particle_coords
         self.newborn_indices = newborn_indices
         self.groups = groups
         self.previous_resp = kwargs.get("previous_resp", {})
-
-        self.candidate_list = []
-        self.boundness_list = []
-        for h in halos:
-            if h.has_boundness:
-                inds, ener, tdyns = h.get_boundness()
-                self.candidate_list.append(inds)
-                self.boundness_list.append(ener)
-            else:
-                self.candidate_list.append(np.array([], dtype=np.uint64))
-                self.boundness_list.append(np.array([], dtype=np.float32))
 
         N = particle_coords.shape[0]
         self.particles_df = pd.DataFrame(
@@ -142,7 +134,7 @@ class GMMAssigner:
             }
         ).set_index("array_index")
         self.resp_map: dict[int, tuple[np.ndarray, np.ndarray]] = {}
-        self.parameters = [{}, {}, {}]
+        self.parameters: dict[int, dict] = {}
 
         ngal = np.concatenate(groups).size if groups else 0
         print(f"{ngal} in a total of {len(groups)} groups")
@@ -155,7 +147,7 @@ class GMMAssigner:
         stats = {
             "groups": len(groups),
             "halos_in_groups": sum(len(g) for g in groups),
-            "bound_particles": sum(len(c) for c in self.candidate_list),
+            "bound_particles": self.ensemble.nstars,
         }
 
         return AssignmentResult(
@@ -163,10 +155,11 @@ class GMMAssigner:
         )
 
     def _process_group(self, group):
-        group_halos = [self.halos[i] for i in group]
-        group_subtrees = np.array([h.sub_tree_id for h in group_halos])
-        group_candidates = [self.candidate_list[j] for j in group]
-        group_boundness = [self.boundness_list[j] for j in group]
+        sub = self.ensemble.select(group)
+        csc_b, _ = sub.get_particles()
+        group_subtrees = sub.sub_tree_ids
+        group_candidates = csc_b.column_indices
+        group_boundness = csc_b.column_values
         gp_idx = np.unique(np.concatenate(group_candidates))
 
         if gp_idx.size == 0:
@@ -178,25 +171,20 @@ class GMMAssigner:
         n_comp = len(group_subtrees)
 
         if n_comp == 1:
-            post_prob, nonz = self._fit_single(group_halos, gp_idx)
+            post_prob, nonz = self._fit_single(gp_idx)
         elif gp_idx.size < 10 * n_comp:
             warnings.warn(
                 f"WARNING: {n_comp} galaxies are unresolved inside a group!"
             )
             post_prob, nonz = self._fit_unresolved(
-                group_halos, gp_idx, group_candidates, group_boundness
+                gp_idx, group_candidates, group_boundness
             )
         else:
-            post_prob, nonz, stored = self._fit_resolved(
-                group_halos, gp_idx, group_candidates, group_boundness
+            post_prob, nonz = self._fit_resolved(
+                gp_idx, group_subtrees, group_candidates, group_boundness
             )
-            for sid in group_subtrees:
-                if sid in stored.get("means", {}):
-                    self.parameters[0][sid] = stored["means"][sid]
-                    self.parameters[1][sid] = stored["weights"][sid]
-                    self.parameters[2][sid] = stored["covariances"][sid]
 
-        for i, halo_idx in enumerate(group):
+        for i in range(len(group)):
             mask = nonz[:, i] > 0
             if np.any(mask):
                 self.resp_map[group_subtrees[i]] = (
@@ -207,14 +195,12 @@ class GMMAssigner:
         assigned = group_subtrees[post_prob.argmax(axis=1)]
         self.particles_df.loc[gp_idx, "Sub_tree_id"] = assigned
 
-    def _fit_single(self, group_halos, gp_idx):
+    def _fit_single(self, gp_idx):
         post_prob = np.ones((gp_idx.size, 1))
         nonz = (post_prob > 0).astype(np.uint8)
         return post_prob, nonz
 
-    def _fit_unresolved(
-        self, group_halos, gp_idx, group_candidates, group_boundness
-    ):
+    def _fit_unresolved(self, gp_idx, group_candidates, group_boundness):
         post_prob = _build_normalized_resp(
             (gp_idx.size, len(group_candidates)),
             gp_idx,
@@ -225,9 +211,8 @@ class GMMAssigner:
         return post_prob, nonz
 
     def _fit_resolved(
-        self, group_halos, gp_idx, group_candidates, group_boundness
+        self, gp_idx, group_subtrees, group_candidates, group_boundness
     ):
-        group_subtrees = np.array([h.sub_tree_id for h in group_halos])
         coords = self.particle_coords[gp_idx]
         mean_offset = np.mean(coords, axis=0)
         coords -= mean_offset
@@ -278,7 +263,15 @@ class GMMAssigner:
         }
         natural = self.get_parameters_natural(scaled, mean_offset, scalings)
 
-        return post_prob, nonz, natural
+        for sid in group_subtrees:
+            if sid in natural["means"]:
+                self.parameters[sid] = {
+                    "mean": natural["means"][sid],
+                    "weight": natural["weights"][sid],
+                    "covariance": natural["covariances"][sid],
+                }
+
+        return post_prob, nonz
 
     def _estimate_initial_params(
         self, coords, subtrees, true_indices, csc_boundness
