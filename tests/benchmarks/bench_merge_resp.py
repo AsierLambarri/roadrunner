@@ -14,16 +14,20 @@ from numba import njit, prange
 RNG = np.random.default_rng(42)
 
 CONFIGS = [
-    # (N, K, label)
-    (10_000,   10,   "10kx10"),
-    (50_000,   10,   "50kx10"),
-    (100_000,  10,   "100kx10"),
-    (10_000,   50,   "10kx50"),
-    (50_000,   50,   "50kx50"),
-    (100_000,  50,   "100kx50"),
-    (10_000,   100,  "10kx100"),
-    (50_000,   100,  "50kx100"),
-    (5_000,    500,  "5kx500"),
+    # (N, K, label)   — N >> K regime
+    (100_000,   2,    "100kx2"),
+    (500_000,   2,    "500kx2"),
+    (1_000_000, 2,    "1Mx2"),
+    (2_000_000, 2,    "2Mx2"),
+    (500_000,   5,    "500kx5"),
+    (1_000_000, 5,    "1Mx5"),
+    (100_000,   10,   "100kx10"),
+    (500_000,   10,   "500kx10"),
+    (1_000_000, 10,   "1Mx10"),
+    (100_000,   50,   "100kx50"),
+    (500_000,   50,   "500kx50"),
+    (100_000,   100,  "100kx100"),
+    (50_000,    200,  "50kx200"),
 ]
 
 
@@ -95,25 +99,29 @@ if __name__ == "__main__":
     print("-" * 95)
 
     for N, K, label in CONFIGS:
-        mem_mb = 4 * N * K * 17 / 1024 / 1024  # numpy peak (worst case)
-        if mem_mb > 3500:
-            print(f"  {label:>15s}  SKIP (est. {mem_mb:.0f} MB > 3.5 GB)")
-            continue
+        mem_numpy_mb = 4 * N * K * 17 / 1024 / 1024
+        mem_kernel_mb = 4 * N * K * 8 / 1024 / 1024
 
-        # Generate random data
+        # Generate data
         bound = RNG.uniform(0, 1, (N, K)).astype(np.float32)
         prev = RNG.uniform(0, 1, (N, K)).astype(np.float32)
         newborn = RNG.random(N) < 0.1
-
-        # Make some entries zero (as in real data)
         bound[RNG.random((N, K)) < 0.3] = 0.0
         prev[RNG.random((N, K)) < 0.5] = 0.0
 
+        # Always run kernel
         mk, sk = bench_kernel(bound, prev, newborn, K)
-        mn, sn = bench_numpy(bound, prev, newborn, K)
-        speedup = mn / mk if mk > 0 else float("inf")
 
-        print(f"  {label:>15s}  {N:>8d} {K:>6d}  "
-              f"{mk:>9.3f} {sk:>10.3f}  "
-              f"{mn:>9.3f} {sn:>10.3f}  "
-              f"{speedup:>6.1f}x")
+        # Run numpy only if safe (< 4 GB peak)
+        if mem_numpy_mb < 4000:
+            mn, sn = bench_numpy(bound, prev, newborn, K)
+            speedup = mn / mk if mk > 0 else float("inf")
+            print(f"  {label:>15s}  {N:>8d} {K:>6d}  "
+                  f"{mk:>9.3f} {sk:>10.3f}  "
+                  f"{mn:>9.3f} {sn:>10.3f}  "
+                  f"{speedup:>6.1f}x")
+        else:
+            print(f"  {label:>15s}  {N:>8d} {K:>6d}  "
+                  f"{mk:>9.3f} {sk:>10.3f}  "
+                  f"{'OOM SKIP':>9s} {'':>11s}  "
+                  f"{'—':>7s}")

@@ -2,7 +2,7 @@ import numpy as np
 
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER, SOFTENING_NFW
 
-
+_2PI = 2 * np.pi
 class KeplerPotential:
     def __init__(self, M, G=G_KM):
         self.M = M
@@ -14,7 +14,7 @@ class KeplerPotential:
 
     def dynamical_time(self, r):
         with np.errstate(invalid="ignore"):
-            return np.sqrt(r**3 / (self.G * self.M))
+            return _2PI * np.sqrt(r**3 / (self.G * self.M))
 
     def tidal_denominator(self, r):
         return 3 * self.M
@@ -41,7 +41,7 @@ class NFWPotential:
     def dynamical_time(self, r):
         with np.errstate(invalid="ignore"):
             menc = self.enclosed_mass(r)
-            return np.sqrt(r**3 / (self.G * menc))
+            return _2PI * np.sqrt(r**3 / (self.G * menc))
 
     def tidal_denominator(self, r):
         def _f(x):

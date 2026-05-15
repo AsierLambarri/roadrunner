@@ -1,21 +1,33 @@
+from math import sqrt
+
 import roadrunner.physics.constants as C
 
 
 class TestConstantsExist:
-    def test_G_KM_defined(self):
-        assert C.G_KM == -1
+    def test_G_KM_positive(self):
+        assert C.G_KM > 0
 
-    def test_G_GALACTIC_defined(self):
-        assert C.G_GALACTIC == -1
+    def test_G_KM_value(self):
+        assert C.G_KM == 4.300917270038E-6
 
-    def test_DYN_TIME_FACTOR_defined(self):
-        assert C.DYN_TIME_FACTOR == -1
+    def test_G_GALACTIC_positive(self):
+        assert C.G_GALACTIC > 0
 
-    def test_softening_kepler_defined(self):
-        assert C.SOFTENING_KEPLER == -1
+    def test_G_GALACTIC_value(self):
+        assert C.G_GALACTIC == 4.49850215E-6
 
-    def test_softening_nfw_defined(self):
-        assert C.SOFTENING_NFW == -1
+    def test_DYN_TIME_FACTOR_positive(self):
+        assert C.DYN_TIME_FACTOR > 0
+
+    def test_DYN_TIME_FACTOR_self_consistent(self):
+        expected = sqrt(C.G_GALACTIC / C.G_KM)
+        assert C.DYN_TIME_FACTOR == expected
+
+    def test_softening_kepler_positive(self):
+        assert C.SOFTENING_KEPLER > 0
+
+    def test_softening_nfw_positive(self):
+        assert C.SOFTENING_NFW > 0
 
     def test_all_in__all__(self):
         expected = [
