@@ -8,6 +8,8 @@ from roadrunner.postprocessing.properties import (
     enclosed_mass_radius,
     half_mass_radius,
     projected_half_mass_radius,
+    velocity_dispersion,
+    line_of_sight_velocity_dispersion,
 )
 
 
@@ -274,3 +276,82 @@ class TestProjectedHalfMassRadius:
         los_matrices = np.array([R1, R2])
         result = projected_half_mass_radius(pos, masses, center, los_matrices)
         assert not np.isclose(result[0], result[1], atol=0.01)
+
+
+class TestVelocityDispersion:
+    def test_known_velocities(self):
+        vel = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
+        # σ_x = 1.414, σ_y = 0, σ_z = 0 → σ = 1.414
+        sigma = velocity_dispersion(vel)
+        assert np.isclose(sigma, np.sqrt(2), atol=1e-6)
+
+    def test_isotropic(self):
+        rng = np.random.default_rng(42)
+        vel = rng.normal(0, 100, (1000, 3))
+        sigma = velocity_dispersion(vel)
+        assert np.isclose(sigma, np.sqrt(3) * 100, rtol=0.1)
+
+    def test_single_particle(self):
+        vel = np.array([[10.0, 20.0, 30.0]])
+        sigma = velocity_dispersion(vel)
+        # std of single point is 0 with ddof=1 → nan
+        assert np.isnan(sigma) or sigma == 0.0
+
+    def test_all_identical(self):
+        vel = np.tile([100.0, 200.0, 300.0], (10, 1))
+        sigma = velocity_dispersion(vel)
+        assert sigma == 0.0
+
+
+class TestLineOfSightVelocityDispersion:
+    def test_single_particle_in_aperture(self):
+        pos = np.array([[0.0, 0.0, 0.0]])
+        vel = np.array([[100.0, 0.0, 0.0]])
+        los = np.eye(3)[np.newaxis]
+        apertures = np.array([10.0])
+        sigma = line_of_sight_velocity_dispersion(pos, vel, los, apertures)
+        # std of single point with ddof=1 → nan
+        assert np.isnan(sigma[0])
+
+    def test_multiple_particles_in_aperture(self):
+        pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        vel = np.array([[0.0, 0.0, 10.0], [0.0, 0.0, 20.0], [0.0, 0.0, 30.0]])
+        los = np.eye(3)[np.newaxis]
+        apertures = np.array([5.0])
+        sigma = line_of_sight_velocity_dispersion(pos, vel, los, apertures)
+        assert np.isclose(sigma[0], np.std([10.0, 20.0, 30.0], ddof=1))
+
+    def test_no_particles_in_aperture(self):
+        pos = np.array([[100.0, 0.0, 0.0], [200.0, 0.0, 0.0]])
+        vel = np.array([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]])
+        los = np.eye(3)[np.newaxis]
+        apertures = np.array([1.0])
+        sigma = line_of_sight_velocity_dispersion(pos, vel, los, apertures)
+        assert np.isnan(sigma[0])
+
+    def test_projection_removes_xy_velocity(self):
+        # particle with pure xy velocity → v_los = 0 after rot
+        pos = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+        vel = np.array([[100.0, 0.0, 0.0], [-100.0, 0.0, 0.0]])
+        los = np.eye(3)[np.newaxis]
+        apertures = np.array([1.0])
+        sigma = line_of_sight_velocity_dispersion(pos, vel, los, apertures)
+        # the std of [0, 0] with ddof=1 → 0
+        assert np.isclose(sigma[0], 0.0)
+
+    def test_multiple_los(self):
+        rng = np.random.default_rng(42)
+        pos = rng.normal(0, 1, (100, 3))
+        vel = rng.normal(0, 100, (100, 3))
+        los_matrices = np.array([np.eye(3), np.eye(3)])
+        apertures = np.array([5.0, 5.0])
+        sigma = line_of_sight_velocity_dispersion(pos, vel, los_matrices, apertures)
+        assert sigma.shape == (2,)
+
+    def test_mismatched_shapes_raises(self):
+        pos = np.zeros((10, 3))
+        vel = np.zeros((10, 3))
+        los = np.eye(3)[np.newaxis]
+        apertures = np.array([1.0, 2.0])  # 2 apertures, 1 LOS
+        with pytest.raises(ValueError, match="match"):
+            line_of_sight_velocity_dispersion(pos, vel, los, apertures)

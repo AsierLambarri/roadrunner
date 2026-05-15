@@ -111,3 +111,35 @@ def projected_half_mass_radius(positions, masses, center, los_matrices, mass_fra
         radii = np.sqrt(pos_rot[:, 0] ** 2 + pos_rot[:, 1] ** 2)
         result[i] = enclosed_mass_radius(radii, masses, mass_fraction)
     return result if Nlos > 1 else result[0]
+
+
+def velocity_dispersion(velocities):
+    sigma_per_axis = np.std(velocities, axis=0, ddof=1)
+    return np.sqrt(np.sum(sigma_per_axis ** 2))
+
+
+def line_of_sight_velocity_dispersion(positions, velocities, los_matrices, apertures):
+    los_matrices = np.asarray(los_matrices)
+    apertures = np.asarray(apertures)
+
+    if los_matrices.shape[0] != apertures.shape[0]:
+        raise ValueError(
+            "Number of los_matrices must match number of apertures"
+        )
+
+    Nlos = los_matrices.shape[0]
+    sigma_los = np.full(Nlos, np.nan)
+
+    for i in range(Nlos):
+        R = los_matrices[i]
+        pos_rot = positions @ R.T
+        vel_rot = velocities @ R.T
+
+        r_proj = np.sqrt(pos_rot[:, 0] ** 2 + pos_rot[:, 1] ** 2)
+        mask = r_proj <= apertures[i]
+
+        if np.any(mask):
+            v_los = vel_rot[mask, 2]
+            sigma_los[i] = np.std(v_los, ddof=1)
+
+    return sigma_los
