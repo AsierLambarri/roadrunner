@@ -385,6 +385,7 @@ class TestComputeGalaxyProperties:
             galaxy_particles=galaxy_particles,
             galaxy_table=galaxy_table,
             host_props=host_props,
+            halo_model="kepler",
             n_los=3,
         )
         expected_cols = [
@@ -421,6 +422,7 @@ class TestComputeGalaxyProperties:
             galaxy_particles=galaxy_particles,
             galaxy_table=galaxy_table,
             host_props=host_props,
+            halo_model="kepler",
             n_los=3,
         )
         assert len(result) == 1
@@ -451,6 +453,7 @@ class TestComputeGalaxyProperties:
             galaxy_particles=galaxy_particles,
             galaxy_table=galaxy_table,
             host_props=host_props,
+            halo_model="kepler",
             n_los=3,
         )
         row = result.iloc[0]
@@ -476,6 +479,7 @@ class TestComputeGalaxyProperties:
             galaxy_particles=galaxy_particles,
             galaxy_table=galaxy_table,
             host_props=host_props,
+            halo_model="kepler",
             n_los=3,
         )
         row = result.iloc[0]
@@ -502,6 +506,7 @@ class TestComputeGalaxyProperties:
             galaxy_particles=galaxy_particles,
             galaxy_table=galaxy_table,
             host_props=host_props,
+            halo_model="kepler",
             n_los=3,
         )
         assert len(result) == 1
@@ -527,6 +532,7 @@ class TestComputeGalaxyProperties:
             galaxy_particles=galaxy_particles,
             galaxy_table=galaxy_table,
             host_props=host_props,
+            halo_model="kepler",
             n_los=3,
         )
         assert len(result) == 1

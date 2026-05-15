@@ -156,8 +156,9 @@ def compute_galaxy_properties(
     galaxy_particles,
     galaxy_table,
     host_props,
+    halo_model,
     n_los=11,
-    halo_model="kepler",
+    galaxy_centers=None,
 ):
     columns = [
         "Sub_tree_id", "mb_host_id",
@@ -213,7 +214,12 @@ def compute_galaxy_properties(
             ))
             continue
 
-        center_pos, center_vel = find_center(gal_pos, gal_vel, gal_masses)
+        fitted = None if galaxy_centers is None else galaxy_centers.get(sid)
+        if fitted is not None:
+            center_pos = fitted[:3]
+            center_vel = fitted[3:6]
+        else:
+            center_pos, center_vel = find_center(gal_pos, gal_vel, gal_masses)
 
         if npart < 30:
             records.append(dict(
