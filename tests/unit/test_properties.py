@@ -5,6 +5,9 @@ from roadrunner.postprocessing.properties import (
     random_lines_of_sight,
     rotation_matrix_from_los,
     find_center,
+    enclosed_mass_radius,
+    half_mass_radius,
+    projected_half_mass_radius,
 )
 
 
@@ -161,3 +164,113 @@ class TestCentering:
         cpos, cvel = find_center(pos, vel, masses)
         assert np.allclose(cpos, [5.0, 6.0, 7.0])
         assert np.allclose(cvel, [10.0, 20.0, 30.0])
+
+
+class TestEnclosedMassRadius:
+    def test_known_radial_profile(self):
+        # 100 particles at radii 0..99, equal masses → half-mass at r=50
+        radii = np.arange(100, dtype=np.float64)
+        masses = np.ones(100)
+        r50 = enclosed_mass_radius(radii, masses, 0.5)
+        assert np.isclose(r50, 50.0, atol=1.0)
+
+    def test_mass_fraction_0_returns_min_radius(self):
+        radii = np.array([1.0, 5.0, 10.0])
+        masses = np.ones(3)
+        assert enclosed_mass_radius(radii, masses, 0.0) == 1.0
+
+    def test_mass_fraction_1_returns_max_radius(self):
+        radii = np.array([1.0, 5.0, 10.0])
+        masses = np.ones(3)
+        assert enclosed_mass_radius(radii, masses, 1.0) == 10.0
+
+    def test_mass_concentrated_at_large_radius(self):
+        # 99% of mass at r=100 → r98 ≈ 100
+        radii = np.array([1.0, 100.0])
+        masses = np.array([1.0, 99.0])
+        r98 = enclosed_mass_radius(radii, masses, 0.98)
+        assert np.isclose(r98, 100.0, atol=2.0)
+
+    def test_zero_total_mass(self):
+        radii = np.array([1.0, 2.0, 3.0])
+        masses = np.zeros(3)
+        assert enclosed_mass_radius(radii, masses, 0.5) == 0.0
+
+    def test_invalid_mass_fraction_raises(self):
+        radii = np.array([1.0, 2.0])
+        masses = np.ones(2)
+        with pytest.raises(ValueError, match="mass_fraction"):
+            enclosed_mass_radius(radii, masses, 1.5)
+        with pytest.raises(ValueError, match="mass_fraction"):
+            enclosed_mass_radius(radii, masses, -0.1)
+
+    def test_single_particle(self):
+        assert enclosed_mass_radius(np.array([5.0]), np.array([1.0]), 0.5) == 5.0
+
+
+class TestHalfMassRadius:
+    def test_uniform_sphere(self):
+        rng = np.random.default_rng(42)
+        pos = rng.normal(0, 5.0, (1000, 3))
+        masses = np.ones(1000)
+        center = np.zeros(3)
+        r50 = half_mass_radius(pos, masses, center)
+        assert r50 > 0
+        assert r50 < 10.0  # within 2σ of the gaussian
+
+    def test_two_equal_masses(self):
+        pos = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
+        masses = np.array([1.0, 1.0])
+        r50 = half_mass_radius(pos, masses, center=np.array([0.0, 0.0, 0.0]))
+        # radii = [0, 10], cum_mass = [0.5, 1.0], searchsorted(0.5) → 1,
+        # interpolation: r = 0 + (0.5-0.5)/(1.0-0.5)*(10-0) = 0
+        assert r50 == 0.0  # half-mass is at the inner particle
+
+    def test_single_particle(self):
+        pos = np.array([[3.0, 4.0, 5.0]])
+        masses = np.array([1.0])
+        r50 = half_mass_radius(pos, masses, center=np.array([3.0, 4.0, 5.0]))
+        assert r50 == 0.0  # at center
+
+
+class TestProjectedHalfMassRadius:
+    def test_sphere_vs_projected(self):
+        # for a spherical distribution, projected r50 < 3D r50
+        rng = np.random.default_rng(42)
+        pos = rng.normal(0, 3.0, (500, 3))
+        masses = np.ones(500)
+        center = np.zeros(3)
+        los = np.eye(3)  # identity rotation
+        r50_3d = half_mass_radius(pos, masses, center)
+        r50_2d = projected_half_mass_radius(pos, masses, center, los[np.newaxis])
+        assert r50_2d < r50_3d
+
+    def test_multiple_lines_of_sight(self):
+        rng = np.random.default_rng(42)
+        pos = rng.normal(0, 3.0, (300, 3))
+        masses = np.ones(300)
+        center = np.zeros(3)
+        los_matrices = np.array([np.eye(3), np.eye(3)])
+        result = projected_half_mass_radius(pos, masses, center, los_matrices)
+        assert result.shape == (2,)
+
+    def test_single_los_returns_scalar(self):
+        rng = np.random.default_rng(42)
+        pos = rng.normal(0, 3.0, (100, 3))
+        masses = np.ones(100)
+        center = np.zeros(3)
+        los = np.eye(3)[np.newaxis]
+        result = projected_half_mass_radius(pos, masses, center, los)
+        assert isinstance(result, (float, np.floating))
+
+    def test_different_los_different_radii(self):
+        rng = np.random.default_rng(42)
+        pos = rng.normal(0, 3.0, (500, 3))
+        masses = np.ones(500)
+        center = np.zeros(3)
+        # two different rotations
+        R1 = np.eye(3)
+        R2 = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])  # permute axes
+        los_matrices = np.array([R1, R2])
+        result = projected_half_mass_radius(pos, masses, center, los_matrices)
+        assert not np.isclose(result[0], result[1], atol=0.01)

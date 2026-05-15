@@ -69,3 +69,45 @@ def find_center(particle_positions, particle_velocities, particle_masses):
         particle_velocities[inner], axis=0, weights=particle_masses[inner],
     )
     return center_pos, center_vel
+
+
+def enclosed_mass_radius(radii, masses, mass_fraction):
+    if mass_fraction > 1 or mass_fraction < 0:
+        raise ValueError(
+            f"mass_fraction must be in [0, 1], got {mass_fraction}"
+        )
+    tot_mass = masses.sum()
+    if tot_mass <= 0.0:
+        return 0.0
+
+    idx_sort = np.argsort(radii)
+    radii_sorted = radii[idx_sort]
+    mass_sorted = masses[idx_sort]
+    cum_mass = np.cumsum(mass_sorted) / tot_mass
+
+    i = np.searchsorted(cum_mass, mass_fraction)
+
+    if i == 0:
+        return radii_sorted[0]
+    elif i >= len(radii_sorted):
+        return radii_sorted[-1]
+    else:
+        r_low, r_high = radii_sorted[i - 1], radii_sorted[i]
+        f_low, f_high = cum_mass[i - 1], cum_mass[i]
+        return r_low + (mass_fraction - f_low) / (f_high - f_low) * (r_high - r_low)
+
+
+def half_mass_radius(positions, masses, center, mass_fraction=0.5):
+    radii = np.sqrt(np.sum((positions - center) ** 2, axis=1))
+    return enclosed_mass_radius(radii, masses, mass_fraction)
+
+
+def projected_half_mass_radius(positions, masses, center, los_matrices, mass_fraction=0.5):
+    Nlos = los_matrices.shape[0]
+    centered = positions - center
+    result = np.empty(Nlos, dtype=np.float64)
+    for i in range(Nlos):
+        pos_rot = centered @ los_matrices[i].T
+        radii = np.sqrt(pos_rot[:, 0] ** 2 + pos_rot[:, 1] ** 2)
+        result[i] = enclosed_mass_radius(radii, masses, mass_fraction)
+    return result if Nlos > 1 else result[0]
