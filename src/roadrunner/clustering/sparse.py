@@ -99,15 +99,25 @@ class SparseCSC:
             column_values=col_val_list,
         )
 
-    def align(self, other):
-        new_rows = np.union1d(self.row_id, other.row_id).astype(np.int64)
-        new_cols = np.union1d(self.column_id, other.column_id).astype(np.int64)
+    def align(self, other, how="left"):
+        if how == "left":
+            new_rows = self.row_id.copy()
+            new_cols = self.column_id.copy()
+        elif how == "both":
+            new_rows = np.union1d(self.row_id, other.row_id).astype(np.int64)
+            new_cols = np.union1d(self.column_id, other.column_id).astype(np.int64)
+        else:
+            raise ValueError(f"how must be 'left' or 'both', got '{how}'")
 
         if new_rows.size == 0 or new_cols.size == 0:
             empty = SparseCSC([], [], column_id=np.array([], dtype=np.int64))
             return empty, empty
 
-        row_map = np.full(int(new_rows.max()) + 1, -1, dtype=np.int64)
+        max_id = max(
+            int(self.row_id.max()) if self.row_id.size > 0 else 0,
+            int(other.row_id.max()) if other.row_id.size > 0 else 0,
+        )
+        row_map = np.full(max_id + 1, -1, dtype=np.int64)
         row_map[new_rows] = np.arange(new_rows.size)
         new_cols_arr = new_cols.copy()
 
