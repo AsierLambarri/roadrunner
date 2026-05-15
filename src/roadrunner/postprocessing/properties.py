@@ -52,3 +52,20 @@ def rotation_matrix_from_los(los):
     ey = np.cross(ez, ex)
 
     return np.vstack((ex, ey, ez))
+
+
+def find_center(particle_positions, particle_velocities, particle_masses):
+    radii = np.linalg.norm(
+        particle_positions - np.median(particle_positions, axis=0),
+        axis=1,
+    )
+    quantile = np.quantile(radii, 0.95)
+    rc_scale = 0.5
+    inner = radii <= rc_scale * quantile
+    center_pos = np.average(
+        particle_positions[inner], axis=0, weights=particle_masses[inner],
+    )
+    center_vel = np.average(
+        particle_velocities[inner], axis=0, weights=particle_masses[inner],
+    )
+    return center_pos, center_vel

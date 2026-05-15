@@ -4,6 +4,7 @@ import pytest
 from roadrunner.postprocessing.properties import (
     random_lines_of_sight,
     rotation_matrix_from_los,
+    find_center,
 )
 
 
@@ -105,3 +106,58 @@ class TestRotationMatrixFromLos:
         rot1 = (R @ points.T).T
         rot2 = points @ R.T
         assert np.allclose(rot1, rot2, atol=1e-10)
+
+
+class TestCentering:
+    def test_known_center(self):
+        rng = np.random.default_rng(42)
+        pos = rng.normal(loc=[10.0, 20.0, 30.0], scale=2.0, size=(200, 3))
+        vel = rng.normal(loc=[0.0, 0.0, 0.0], scale=100, size=(200, 3))
+        masses = np.ones(200)
+        cpos, cvel = find_center(pos, vel, masses)
+        assert np.allclose(cpos, [10.0, 20.0, 30.0], atol=1.0)
+        assert np.allclose(cvel, [0.0, 0.0, 0.0], atol=10.0)
+
+    def test_mass_weighted_shift(self):
+        rng = np.random.default_rng(42)
+        # all particles near origin; massive ones are inside the 0.5×quantile cut
+        n_light, n_heavy = 200, 50
+        pos = np.vstack([
+            rng.normal(0, 1, (n_light, 3)),       # light, at origin
+            rng.normal(0.5, 0.3, (n_heavy, 3)),   # heavy, slightly offset
+        ])
+        masses = np.zeros(n_light + n_heavy)
+        masses[:n_light] = 1.0
+        masses[n_light:] = 10.0
+        vel = rng.normal(0, 100, (n_light + n_heavy, 3))
+        cpos, _ = find_center(pos, vel, masses)
+        # unweighted center would be near origin; mass weighting pulls toward heavy clump
+        unweighted = np.average(pos, axis=0)
+        assert np.linalg.norm(cpos - unweighted) > 0.01
+
+    def test_within_envelope(self):
+        rng = np.random.default_rng(42)
+        pos = rng.uniform(-10, 10, (100, 3))
+        vel = rng.uniform(-100, 100, (100, 3))
+        masses = np.ones(100)
+        cpos, _ = find_center(pos, vel, masses)
+        # center must be inside the data bounding box
+        assert np.all(cpos >= pos.min(axis=0) - 1.0)
+        assert np.all(cpos <= pos.max(axis=0) + 1.0)
+
+    def test_symmetric_distribution(self):
+        rng = np.random.default_rng(42)
+        pos = rng.normal(0, 3, (500, 3))
+        vel = rng.normal(0, 100, (500, 3))
+        masses = np.ones(500)
+        cpos, _ = find_center(pos, vel, masses)
+        # symmetric distribution → center near origin
+        assert np.allclose(cpos, 0.0, atol=1.0)
+
+    def test_single_particle(self):
+        pos = np.array([[5.0, 6.0, 7.0]])
+        vel = np.array([[10.0, 20.0, 30.0]])
+        masses = np.array([1.0])
+        cpos, cvel = find_center(pos, vel, masses)
+        assert np.allclose(cpos, [5.0, 6.0, 7.0])
+        assert np.allclose(cvel, [10.0, 20.0, 30.0])
