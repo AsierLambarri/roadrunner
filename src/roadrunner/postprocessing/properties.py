@@ -1,6 +1,10 @@
 import warnings
 
 import numpy as np
+import pandas as pd
+
+from roadrunner.physics.potentials import get_potential
+from roadrunner.physics.timescales import compute_tidal_radius
 
 
 def random_lines_of_sight(N, half_sphere=True, seed=None):
@@ -143,3 +147,115 @@ def line_of_sight_velocity_dispersion(positions, velocities, los_matrices, apert
             sigma_los[i] = np.std(v_los, ddof=1)
 
     return sigma_los
+
+
+def compute_galaxy_properties(
+    accretion_id,
+    particle_masses,
+    particle_coords,
+    galaxy_particles,
+    galaxy_table,
+    host_props,
+    n_los=11,
+    halo_model="kepler",
+):
+    columns = [
+        "Sub_tree_id", "mb_host_id",
+        "position_x", "position_y", "position_z",
+        "velocity_x", "velocity_y", "velocity_z",
+        "Mtot",
+        "r20", "rh", "r80",
+        "Rhp",
+        "sigma",
+        "sigma_los",
+        "r_t",
+    ]
+
+    los_vectors = random_lines_of_sight(n_los)
+    los_matrices = np.array([rotation_matrix_from_los(los) for los in los_vectors])
+
+    host_mass = host_props["mass"]
+    if halo_model.lower() == "kepler":
+        host_potential = get_potential(halo_model, M=host_mass)
+    else:
+        host_Rs = host_props["scale_radius"] / (1 + host_props["Redshift"])
+        host_c = host_props["virial_radius"] / host_props["scale_radius"]
+        host_potential = get_potential(halo_model, M=host_mass, Rs=host_Rs, c=host_c)
+
+    if -1 in galaxy_particles:
+        del galaxy_particles[-1]
+
+    records = []
+    for sid, indices in galaxy_particles.items():
+        if indices.size == 0:
+            continue
+
+        row = galaxy_table.loc[sid]
+        host_id = row["host_id"]
+        sat_mass = row["mass"]
+        distance = row["distance_to_acc_id"]
+
+        r_t = compute_tidal_radius(host_potential, sat_mass, distance)
+
+        gal_pos = particle_coords[indices, :3]
+        gal_vel = particle_coords[indices, 3:6]
+        gal_masses = particle_masses[indices]
+        Mtot = gal_masses.sum()
+        npart = indices.size
+
+        if npart <= 2:
+            records.append(dict(
+                Sub_tree_id=sid, mb_host_id=host_id,
+                position_x=np.nan, position_y=np.nan, position_z=np.nan,
+                velocity_x=np.nan, velocity_y=np.nan, velocity_z=np.nan,
+                Mtot=Mtot, r20=np.nan, rh=np.nan, r80=np.nan,
+                Rhp=np.nan, sigma=np.nan, sigma_los=np.nan, r_t=r_t,
+            ))
+            continue
+
+        center_pos, center_vel = find_center(gal_pos, gal_vel, gal_masses)
+
+        if npart < 30:
+            records.append(dict(
+                Sub_tree_id=sid, mb_host_id=host_id,
+                position_x=center_pos[0], position_y=center_pos[1],
+                position_z=center_pos[2],
+                velocity_x=center_vel[0], velocity_y=center_vel[1],
+                velocity_z=center_vel[2],
+                Mtot=Mtot, r20=np.nan, rh=np.nan, r80=np.nan,
+                Rhp=np.nan, sigma=np.nan, sigma_los=np.nan, r_t=r_t,
+            ))
+            continue
+
+        centered_pos = gal_pos - center_pos
+        centered_vel = gal_vel - center_vel
+
+        r20 = half_mass_radius(centered_pos, gal_masses, np.zeros(3), mass_fraction=0.2)
+        rh = half_mass_radius(centered_pos, gal_masses, np.zeros(3), mass_fraction=0.5)
+        r80 = half_mass_radius(centered_pos, gal_masses, np.zeros(3), mass_fraction=0.8)
+        sigma = velocity_dispersion(centered_vel)
+
+        Rhp = projected_half_mass_radius(
+            centered_pos, gal_masses, np.zeros(3), los_matrices, mass_fraction=0.5,
+        )
+        sigma_los_arr = line_of_sight_velocity_dispersion(
+            centered_pos, centered_vel, los_matrices, Rhp,
+        )
+
+        records.append(dict(
+            Sub_tree_id=sid, mb_host_id=host_id,
+            position_x=center_pos[0], position_y=center_pos[1],
+            position_z=center_pos[2],
+            velocity_x=center_vel[0], velocity_y=center_vel[1],
+            velocity_z=center_vel[2],
+            Mtot=Mtot,
+            r20=r20, rh=rh, r80=r80,
+            Rhp=np.nanmedian(Rhp) if isinstance(Rhp, np.ndarray) else Rhp,
+            sigma=sigma,
+            sigma_los=np.nanmedian(sigma_los_arr),
+            r_t=r_t,
+        ))
+
+    if not records:
+        return pd.DataFrame(columns=columns, dtype=np.float32)
+    return pd.DataFrame.from_records(records)[columns]

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from roadrunner.postprocessing.properties import (
@@ -10,6 +11,7 @@ from roadrunner.postprocessing.properties import (
     projected_half_mass_radius,
     velocity_dispersion,
     line_of_sight_velocity_dispersion,
+    compute_galaxy_properties,
 )
 
 
@@ -355,3 +357,177 @@ class TestLineOfSightVelocityDispersion:
         apertures = np.array([1.0, 2.0])  # 2 apertures, 1 LOS
         with pytest.raises(ValueError, match="match"):
             line_of_sight_velocity_dispersion(pos, vel, los, apertures)
+
+
+class TestComputeGalaxyProperties:
+    def test_output_columns(self):
+        rng = np.random.default_rng(42)
+        N = 200
+        masses = rng.uniform(0.1, 1.0, N)
+        coords = np.column_stack([
+            rng.normal(0, 10, N), rng.normal(0, 10, N), rng.normal(0, 10, N),
+            rng.normal(0, 50, N), rng.normal(0, 50, N), rng.normal(0, 50, N),
+        ])
+        galaxy_particles = {10: np.arange(0, 100), 20: np.arange(100, 200)}
+        galaxy_table = pd.DataFrame({
+            "host_id": [1, 1],
+            "mass": [5e10, 1e10],
+            "distance_to_acc_id": [50.0, 120.0],
+        }, index=pd.Index([10, 20], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": 1e12, "scale_radius": 10.0,
+            "virial_radius": 200.0, "Redshift": 0.1,
+        })
+        result = compute_galaxy_properties(
+            accretion_id=1,
+            particle_masses=masses,
+            particle_coords=coords,
+            galaxy_particles=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            n_los=3,
+        )
+        expected_cols = [
+            "Sub_tree_id", "mb_host_id",
+            "position_x", "position_y", "position_z",
+            "velocity_x", "velocity_y", "velocity_z",
+            "Mtot", "r20", "rh", "r80", "Rhp", "sigma", "sigma_los", "r_t",
+        ]
+        assert list(result.columns) == expected_cols
+        assert len(result) == 2
+        assert set(result["Sub_tree_id"]) == {10, 20}
+
+    def test_single_galaxy(self):
+        rng = np.random.default_rng(42)
+        N = 50
+        masses = rng.uniform(0.1, 1.0, N)
+        coords = np.column_stack([
+            rng.normal(0, 5, N), rng.normal(0, 5, N), rng.normal(0, 5, N),
+            rng.normal(0, 30, N), rng.normal(0, 30, N), rng.normal(0, 30, N),
+        ])
+        galaxy_particles = {42: np.arange(N)}
+        galaxy_table = pd.DataFrame({
+            "host_id": [1], "mass": [2e10],
+            "distance_to_acc_id": [80.0],
+        }, index=pd.Index([42], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": 1e12, "scale_radius": 10.0,
+            "virial_radius": 200.0, "Redshift": 0.1,
+        })
+        result = compute_galaxy_properties(
+            accretion_id=1,
+            particle_masses=masses,
+            particle_coords=coords,
+            galaxy_particles=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            n_los=3,
+        )
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["Sub_tree_id"] == 42
+        assert row["Mtot"] == pytest.approx(masses.sum())
+        assert row["r_t"] > 0
+        assert not np.isnan(row["rh"])
+        assert not np.isnan(row["sigma"])
+        assert not np.isnan(row["sigma_los"])
+
+    def test_few_particles_returns_nan_properties(self):
+        masses = np.array([1.0, 1.0, 1.0])
+        coords = np.array([[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0]])
+        galaxy_particles = {7: np.array([0, 1, 2])}
+        galaxy_table = pd.DataFrame({
+            "host_id": [1], "mass": [1e10],
+            "distance_to_acc_id": [100.0],
+        }, index=pd.Index([7], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": 1e12, "scale_radius": 10.0,
+            "virial_radius": 200.0, "Redshift": 0.1,
+        })
+        result = compute_galaxy_properties(
+            accretion_id=1,
+            particle_masses=masses,
+            particle_coords=coords,
+            galaxy_particles=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            n_los=3,
+        )
+        row = result.iloc[0]
+        assert row["rh"] is np.nan or np.isnan(row["rh"])
+        assert row["sigma"] is np.nan or np.isnan(row["sigma"])
+
+    def test_very_few_particles_returns_nan_all(self):
+        masses = np.array([1.0, 1.0])
+        coords = np.array([[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0]])
+        galaxy_particles = {7: np.array([0, 1])}
+        galaxy_table = pd.DataFrame({
+            "host_id": [1], "mass": [1e10],
+            "distance_to_acc_id": [100.0],
+        }, index=pd.Index([7], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": 1e12, "scale_radius": 10.0,
+            "virial_radius": 200.0, "Redshift": 0.1,
+        })
+        result = compute_galaxy_properties(
+            accretion_id=1,
+            particle_masses=masses,
+            particle_coords=coords,
+            galaxy_particles=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            n_los=3,
+        )
+        row = result.iloc[0]
+        assert np.isnan(row["position_x"])
+        assert np.isnan(row["sigma"])
+
+    def test_empty_galaxy_skipped(self):
+        galaxy_particles = {10: np.array([], dtype=int), 20: np.arange(30)}
+        masses = np.ones(30)
+        coords = np.column_stack([np.zeros(30), np.zeros(30), np.zeros(30),
+                                  np.zeros(30), np.zeros(30), np.zeros(30)])
+        galaxy_table = pd.DataFrame({
+            "host_id": [1, 1], "mass": [1e10, 2e10],
+            "distance_to_acc_id": [50.0, 100.0],
+        }, index=pd.Index([10, 20], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": 1e12, "scale_radius": 10.0,
+            "virial_radius": 200.0, "Redshift": 0.1,
+        })
+        result = compute_galaxy_properties(
+            accretion_id=1,
+            particle_masses=masses,
+            particle_coords=coords,
+            galaxy_particles=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            n_los=3,
+        )
+        assert len(result) == 1
+        assert result.iloc[0]["Sub_tree_id"] == 20
+
+    def test_minus_one_removed(self):
+        galaxy_particles = {-1: np.arange(20), 5: np.arange(20, 50)}
+        masses = np.ones(50)
+        coords = np.column_stack([np.zeros(50), np.zeros(50), np.zeros(50),
+                                  np.zeros(50), np.zeros(50), np.zeros(50)])
+        galaxy_table = pd.DataFrame({
+            "host_id": [1], "mass": [1e10],
+            "distance_to_acc_id": [100.0],
+        }, index=pd.Index([5], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": 1e12, "scale_radius": 10.0,
+            "virial_radius": 200.0, "Redshift": 0.1,
+        })
+        result = compute_galaxy_properties(
+            accretion_id=1,
+            particle_masses=masses,
+            particle_coords=coords,
+            galaxy_particles=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            n_los=3,
+        )
+        assert len(result) == 1
+        assert result.iloc[0]["Sub_tree_id"] == 5
