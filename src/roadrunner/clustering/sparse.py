@@ -99,37 +99,35 @@ class SparseCSC:
             column_values=col_val_list,
         )
 
-    def align(self, other, fill=True):
-        if fill:
-            new_rows = np.union1d(self.row_id, other.row_id).astype(np.int64)
-            new_cols = np.union1d(self.column_id, other.column_id).astype(np.int64)
-        else:
-            new_rows = np.intersect1d(self.row_id, other.row_id).astype(np.int64)
-            new_cols = np.intersect1d(self.column_id, other.column_id).astype(np.int64)
+    def align(self, other):
+        new_rows = np.union1d(self.row_id, other.row_id).astype(np.int64)
+        new_cols = np.union1d(self.column_id, other.column_id).astype(np.int64)
+
+        if new_rows.size == 0 or new_cols.size == 0:
+            empty = SparseCSC([], [], column_id=np.array([], dtype=np.int64))
+            return empty, empty
+
+        row_map = np.full(int(new_rows.max()) + 1, -1, dtype=np.int64)
+        row_map[new_rows] = np.arange(new_rows.size)
+        new_cols_arr = new_cols.copy()
 
         def _align_one(csc):
-            row_map = np.full(
-                int(new_rows.max()) + 1 if new_rows.size > 0 else 1,
-                -1, dtype=np.int64,
-            )
-            row_map[new_rows] = np.arange(new_rows.size)
-
+            col_map = {cid: i for i, cid in enumerate(csc.column_id)}
             new_idx, new_val = [], []
-            for cid in new_cols:
-                col_pos = np.where(csc.column_id == cid)[0]
-                if col_pos.size > 0:
-                    k = col_pos[0]
-                    old_idx = csc.column_indices[k]
-                    old_val = csc.column_values[k]
-                    mapped = row_map[old_idx]
-                    valid = mapped >= 0
-                    new_idx.append(old_idx[valid])
-                    new_val.append(old_val[valid])
-                else:
+            for cid in new_cols_arr:
+                k = col_map.get(cid)
+                if k is None:
                     new_idx.append(np.array([], dtype=np.int64))
                     new_val.append(np.array([], dtype=np.float32))
+                    continue
+                old_idx = csc.column_indices[k]
+                old_val = csc.column_values[k]
+                mapped = row_map[old_idx]
+                valid = mapped >= 0
+                new_idx.append(old_idx[valid])
+                new_val.append(old_val[valid])
 
-            result = SparseCSC(new_idx, new_val, column_id=new_cols.copy())
+            result = SparseCSC(new_idx, new_val, column_id=new_cols_arr)
             result.row_id = new_rows.copy()
             return result
 
