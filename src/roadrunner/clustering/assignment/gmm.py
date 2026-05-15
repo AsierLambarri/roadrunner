@@ -163,7 +163,7 @@ class GMMAssigner:
         coords *= scalings
 
         prior, w_init, m_init, c_init, cov_t = self._estimate_initial_params(
-            coords, group_subtrees, gp_idx, csc_b
+            coords, csc_b
         )
         nonz = (prior > 0).astype(np.uint8)
         n_comp = len(group_subtrees)
@@ -215,9 +215,7 @@ class GMMAssigner:
 
         return post_prob, nonz
 
-    def _estimate_initial_params(
-        self, coords, subtrees, true_indices, csc_b
-    ):
+    def _estimate_initial_params(self, coords, csc_b):
         n_samples = coords.shape[0]
         n_components = len(csc_b.column_indices)
 
@@ -226,44 +224,22 @@ class GMMAssigner:
         ).astype(np.float32, copy=False)
 
         if self.previous_resp:
-            bound_dense = csc_b.to_dense()
+            _, aligned_p = csc_b.align(self.previous_resp, how="left")
+            prev_dense = aligned_p.to_dense()
 
-            idx_map = np.full(int(true_indices.max()) + 1, -1, dtype=np.int64)
-            idx_map[true_indices] = np.arange(true_indices.size)
+            newborn_1d = np.isin(csc_b.row_id, self.newborn_indices)
+            _merge_resp_kernel(prev_dense, prior, n_components, newborn_1d)
 
-            prev_dense = np.zeros((n_samples, n_components), dtype=np.float32)
-            for k, sub_id in enumerate(subtrees):
-                pids, vals = self.previous_resp.get(
-                    sub_id,
-                    (np.array([], dtype=np.uint64), np.array([], dtype=np.float32)),
-                )
-                if pids.size > 0:
-                    rows = idx_map[pids]
-                    valid = rows >= 0
-                    prev_dense[rows[valid], k] = vals[valid]
-
-            newborn_1d = np.isin(true_indices, self.newborn_indices)
-            _merge_resp_kernel(prev_dense, bound_dense, n_components, newborn_1d)
-            raw = prev_dense
-
-            resp = stitch_zero_rows(prior, raw)
-            row_sums = resp.sum(axis=1, keepdims=True)
-            zero_rows = np.where(row_sums.flatten() == 0)[0]
-            if zero_rows.size > 0:
-                warnings.warn(f"{zero_rows.size} rows have zero sum.")
-            row_sums[row_sums == 0.0] = 1.0
-            resp /= row_sums
+            resp = stitch_zero_rows(prior, prev_dense)
+            resp = row_l1_normalize(resp)
             if self.prior_type.lower() == "temporal-log-lik":
                 prior = resp
         else:
             resp = prior
 
         nk, means_init, covs_init = _estimate_gaussian_parameters(
-            coords,
-            resp,
-            np.ones(n_samples, dtype=np.float32),
-            self.cov_type,
-            reg_covar=self.reg_covar,
+            coords, resp, np.ones(n_samples, dtype=np.float32),
+            self.cov_type, reg_covar=self.reg_covar,
         )
         weights_init = nk / nk.sum()
 
