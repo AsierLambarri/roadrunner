@@ -156,11 +156,9 @@ class GMMAssigner:
         return post_prob, nonz
 
     def _fit_resolved(self, gp_idx, group_subtrees, csc_b):
-        coords = self.particle_coords[gp_idx]
-        mean_offset = np.mean(coords, axis=0)
-        coords -= mean_offset
-        scalings = 10.0 / (coords.max(axis=0) - coords.min(axis=0))
-        coords *= scalings
+        from roadrunner.physics.scaler import StandardScaler
+        scaler = StandardScaler()
+        coords = scaler.fit_transform(self.particle_coords[gp_idx].astype(np.float64, copy=False))
 
         prior, w_init, m_init, c_init, cov_t = self._estimate_initial_params(
             coords, csc_b
@@ -203,7 +201,7 @@ class GMMAssigner:
             "covariances": {int(sid): gmm.covariances_[i] for i, sid in enumerate(group_subtrees)},
             "cov_type": gmm.cov_type,
         }
-        natural = self.get_parameters_natural(scaled, mean_offset, scalings)
+        natural = self.get_parameters_natural(scaled, scaler)
 
         for sid in group_subtrees:
             sid = int(sid)
@@ -247,8 +245,8 @@ class GMMAssigner:
         return prior, weights_init, means_init, covs_init, self.cov_type
 
     @staticmethod
-    def get_parameters_natural(stored, mean_offset, scalings):
-        inv_s = 1.0 / scalings
+    def get_parameters_natural(stored, scaler):
+        inv_s = 1.0 / scaler.scale_
         means, weights, covariances = {}, {}, {}
         cov_t = stored.get("cov_type", "full")
 
@@ -264,7 +262,7 @@ class GMMAssigner:
             else:
                 scaling_matrix = np.outer(inv_s, inv_s)
 
-            means[sid] = mean_s * inv_s + mean_offset
+            means[sid] = mean_s * inv_s + scaler.mean_
             weights[sid] = float(w)
             covariances[sid] = cov_s * scaling_matrix
 
