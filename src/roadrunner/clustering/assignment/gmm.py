@@ -198,14 +198,15 @@ class GMMAssigner:
         post_prob = np.exp(log_prob)
 
         scaled = {
-            "means": gmm.means_,
-            "weights": gmm.weights_,
-            "covariances": gmm.covariances_,
+            "means": {int(sid): gmm.means_[i] for i, sid in enumerate(group_subtrees)},
+            "weights": {int(sid): gmm.weights_[i] for i, sid in enumerate(group_subtrees)},
+            "covariances": {int(sid): gmm.covariances_[i] for i, sid in enumerate(group_subtrees)},
             "cov_type": gmm.cov_type,
         }
         natural = self.get_parameters_natural(scaled, mean_offset, scalings)
 
         for sid in group_subtrees:
+            sid = int(sid)
             if sid in natural["means"]:
                 self.parameters[sid] = {
                     "mean": natural["means"][sid],
