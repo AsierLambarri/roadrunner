@@ -36,5 +36,8 @@ class TestConstantsExist:
             "DYN_TIME_FACTOR",
             "SOFTENING_KEPLER",
             "SOFTENING_NFW",
+            "RILEY_BOUND_THRESHOLD",
+            "RILEY_SVM_SLOPE",
+            "RILEY_SVM_INTERCEPT",
         ]
         assert C.__all__ == expected
