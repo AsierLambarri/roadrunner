@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Generate a mock galaxy snapshot for testing the roadrunner pipeline.
 
-Produces:
-  test_data/mock_snap/merger_tree.csv
-  test_data/mock_snap/equivalence.csv
-  test_data/mock_snap/particles.hdf5  (or .npy)
+All output units: kpc, km/s, Msun.
 
 Usage:
-  python scripts/generate_mock.py --n-galaxies 30 --n-groups 3 \\
-      --max-particles 2000 --mm-max 10 --seed 42
+  python scripts/generate_mock.py --n-galaxies 40 --n-groups 3 \\
+      --box-size 1000 --max-particles 40000 --seed 42
 """
 
 import argparse
@@ -24,9 +21,14 @@ os.environ["LIMEY_SUPPRESS_WARNINGS"] = "1"
 import limepy
 
 
+# limepy default G = 0.004302 (km/s)^2 pc / Msun
+# Output positions are in pc → divide by 1000 for kpc
+_PC_TO_KPC = 1.0 / 1000.0
+
+
 def default_radial_cdf(u, group_radius):
-    """Linear CDF: P(r < R) = (R / R_max)^3 (uniform in volume)."""
-    return group_radius * u ** (1.0 / 3.0)
+    """CDF: P(r < R) = sqrt(10 * u), concentrated toward center."""
+    return group_radius * np.sqrt(10.0 * u) / np.sqrt(10.0)
 
 
 def sample_galaxy_masses(n_galaxies, mm_max, rng):
@@ -37,7 +39,6 @@ def sample_galaxy_masses(n_galaxies, mm_max, rng):
 
 
 def create_mock_snapshot(
-    n_particles=100,
     n_galaxies=20,
     n_groups=3,
     radial_cdf=None,
@@ -45,11 +46,12 @@ def create_mock_snapshot(
     max_particles=1000,
     box_size=500.0,
     group_radius=80.0,
-    phi0=6.0,
-    g=1.5,
+    phi0=0.01,
+    g=3.49,
+    limepy_rh_pc=3000,  # half-mass radius in pc (= 3 kpc)
     seed=42,
     output_dir="test_data/mock_snap",
-    limepy_mass_scale=1e5,
+    limepy_mass_scale=1e10,
 ):
     rng = np.random.default_rng(seed)
     if radial_cdf is None:
@@ -62,7 +64,6 @@ def create_mock_snapshot(
 
     # Assign to groups
     group_assignments = rng.choice(n_groups, size=n_galaxies, replace=True)
-    group_ids = np.arange(n_groups)
 
     # Assign position within each group
     galaxy_positions = np.zeros((n_galaxies, 3))
@@ -76,7 +77,6 @@ def create_mock_snapshot(
         if n_in_group == 0:
             continue
 
-        # Choose the most massive galaxy in this group
         most_massive = idx[np.argmax(galaxy_masses[idx])]
 
         for i in idx:
@@ -86,7 +86,9 @@ def create_mock_snapshot(
                 u = rng.random()
                 frac_distance = radial_cdf(u, group_radius)
                 direction = rng.uniform(-1, 1, 3)
-                direction /= np.linalg.norm(direction)
+                norm = np.linalg.norm(direction)
+                if norm > 0:
+                    direction /= norm
                 galaxy_positions[i] = group_centers[g] + direction * frac_distance
 
         galaxy_velocities[idx] = rng.normal(0, 10, (n_in_group, 3))
@@ -99,8 +101,9 @@ def create_mock_snapshot(
         n_particles_per_galaxy[i] = max(3, int(max_particles * fraction))
 
     total_particles = n_particles_per_galaxy.sum()
+    print(f"Total particles: {total_particles}")
+    print(f"Building {n_galaxies} limepy models with phi0={phi0}, g={g}...")
 
-    # Pre-allocate particle arrays
     all_pos = np.empty((total_particles, 3), dtype=np.float64)
     all_vel = np.empty((total_particles, 3), dtype=np.float64)
     all_masses = np.empty(total_particles, dtype=np.float64)
@@ -108,47 +111,39 @@ def create_mock_snapshot(
 
     offset = 0
     limepy_models = []
-    limepy_samples = []
 
     for i in range(n_galaxies):
         ni = n_particles_per_galaxy[i]
-        # Scale the limepy mass to get the desired number of particles
-        model_mass = limepy_mass_scale
-        model = limepy.limepy(phi0=phi0, g=g, M=model_mass)
-        sample = limepy.sample(model, N=ni * 10, seed=seed + i)
-        # Pick a random subset
+        model = limepy.limepy(phi0=phi0, g=g, M=limepy_mass_scale, rh=limepy_rh_pc)
+        # Sample extra and pick a random subset
+        sample = limepy.sample(model, N=ni * 5, seed=seed + i)
         pick = rng.choice(sample.N, size=ni, replace=False)
-        # Offset to galaxy position/velocity
-        all_pos[offset : offset + ni, 0] = sample.x[pick] + galaxy_positions[i, 0]
-        all_pos[offset : offset + ni, 1] = sample.y[pick] + galaxy_positions[i, 1]
-        all_pos[offset : offset + ni, 2] = sample.z[pick] + galaxy_positions[i, 2]
+
+        # Convert pc → kpc, offset to galaxy position/velocity
+        all_pos[offset : offset + ni, 0] = sample.x[pick] * _PC_TO_KPC + galaxy_positions[i, 0]
+        all_pos[offset : offset + ni, 1] = sample.y[pick] * _PC_TO_KPC + galaxy_positions[i, 1]
+        all_pos[offset : offset + ni, 2] = sample.z[pick] * _PC_TO_KPC + galaxy_positions[i, 2]
         all_vel[offset : offset + ni, 0] = sample.vx[pick] + galaxy_velocities[i, 0]
         all_vel[offset : offset + ni, 1] = sample.vy[pick] + galaxy_velocities[i, 1]
         all_vel[offset : offset + ni, 2] = sample.vz[pick] + galaxy_velocities[i, 2]
-        # Each particle has exactly mass = 1e4 Msun
-        all_masses[offset : offset + ni] = 1e4
-        all_galaxy_ids[offset : offset + ni] = i + 1  # 1-indexed Sub_tree_id
+        all_masses[offset : offset + ni] = 1e4  # Msun per particle
+        all_galaxy_ids[offset : offset + ni] = i + 1
 
         limepy_models.append(model)
-        limepy_samples.append(sample)
         offset += ni
 
     assert offset == total_particles
 
     # ── Step 3: Build merger tree CSV ────────────────────────────────────
-    # Using 1-indexed Sub_tree_id for readability
     subtree_ids = np.arange(1, n_galaxies + 1)
+    virial_radii = np.array([m.rt for m in limepy_models]) * _PC_TO_KPC
+    scale_radii = np.array([m.rh for m in limepy_models]) * _PC_TO_KPC
 
-    # Estimate virial radius from limepy model
-    virial_radii = np.array([m.rt for m in limepy_models])
-    scale_radii = np.array([m.rh for m in limepy_models])
-
-    # No host_id or distance for now (isolated groups)
     merger_tree = pd.DataFrame({
         "Snapshot": np.full(n_galaxies, 0, dtype=int),
         "Sub_tree_id": subtree_ids,
-        "mass": galaxy_masses * 1e11,
-        "virial_radius": virial_radii,
+        "mass": limepy_mass_scale * np.ones(n_galaxies),
+        "virial_radius": np.where(virial_radii > 0, virial_radii, 0.1),
         "scale_radius": np.where(scale_radii > 0, scale_radii, virial_radii / 10.0),
         "position_x": galaxy_positions[:, 0],
         "position_y": galaxy_positions[:, 1],
@@ -175,10 +170,8 @@ def create_mock_snapshot(
     print(f"Wrote {equiv_path}")
 
     # ── Step 5: Save particle data ────────────────────────────────────────
-    particle_coords = np.column_stack([
-        all_pos,
-        all_vel,
-    ])
+    # coords = [pos_x, pos_y, pos_z, vel_x, vel_y, vel_z]  (kpc, km/s)
+    particle_coords = np.column_stack([all_pos, all_vel])
     particle_data = {
         "indices": np.arange(total_particles, dtype=np.uint64),
         "masses": all_masses,
@@ -206,16 +199,12 @@ def create_mock_snapshot(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate a mock galaxy snapshot for testing"
+        description="Generate a mock galaxy snapshot"
     )
-    parser.add_argument("--n-particles", type=int, default=100,
-                        help="Total number of particles (approximate)")
     parser.add_argument("--n-galaxies", type=int, default=20,
                         help="Number of galaxies")
     parser.add_argument("--n-groups", type=int, default=3,
                         help="Number of overlapping groups")
-    parser.add_argument("--radial-cdf", type=str, default=None,
-                        help="Not implemented: pass a callable for radial distribution")
     parser.add_argument("--mm-max", type=float, default=10,
                         help="Max mass ratio between most and 2nd most massive in group")
     parser.add_argument("--max-particles", type=int, default=1000,
@@ -231,7 +220,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     create_mock_snapshot(
-        n_particles=args.n_particles,
         n_galaxies=args.n_galaxies,
         n_groups=args.n_groups,
         mm_max=args.mm_max,
