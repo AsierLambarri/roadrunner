@@ -2,7 +2,8 @@
 """Plot mock snapshot: ground truth vs pipeline assignment side by side.
 
 Usage:
-  python scripts/plot_mock_comparison.py -o figures/mock_comparison.png
+  python scripts/plot_mock_comparison.py test_data/mock_snap -o figures/mock_comparison.png
+  python scripts/plot_mock_comparison.py test_data/mock_snap_tight -o figures/mock_comparison_tight.png
 """
 
 import argparse
@@ -13,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 
-def plot_comparison(data_dir="test_data/mock_snap", output="figures/mock_comparison.png"):
+def plot_comparison(data_dir, output="figures/mock_comparison.png"):
     particles = np.load(os.path.join(data_dir, "particles.npz"))
     assignment = pd.read_csv(os.path.join(data_dir, "assignment.csv"))
 
@@ -26,23 +27,18 @@ def plot_comparison(data_dir="test_data/mock_snap", output="figures/mock_compari
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 14))
 
-    titles = [
-        ("XY — Ground truth", "XY — Pipeline assignment"),
-        ("VX/VY — Ground truth", "VX/VY — Pipeline assignment"),
-    ]
-
     datasets = [
-        # (coords_x, coords_y, label_x, label_y)
         (coords[:, 0], coords[:, 1], "x [kpc]", "y [kpc]"),
         (coords[:, 3], coords[:, 4], "vx [km/s]", "vy [km/s]"),
     ]
 
-    for row, (true_ax, pred_ax) in enumerate([(axes[0, 0], axes[0, 1]),
-                                               (axes[1, 0], axes[1, 1])]):
+    for row, (true_ax, pred_ax) in enumerate([
+        (axes[0, 0], axes[0, 1]),
+        (axes[1, 0], axes[1, 1]),
+    ]):
         x_data, y_data, xlabel, ylabel = datasets[row]
 
-        # Ground truth
-        for i, gid in enumerate(unique_ids):
+        for i, gid in enumerate(np.unique(true_id)):
             mask = true_id == gid
             true_ax.scatter(
                 x_data[mask], y_data[mask],
@@ -50,12 +46,10 @@ def plot_comparison(data_dir="test_data/mock_snap", output="figures/mock_compari
             )
         true_ax.set_xlabel(xlabel)
         true_ax.set_ylabel(ylabel)
-        true_ax.set_title(titles[row][0])
+        true_ax.set_title(["XY — Ground truth", "VX/VY — Ground truth"][row])
         true_ax.set_aspect("equal")
 
-        # Pipeline assignment
-        pred_unique = np.unique(pred_id)
-        for i, pid in enumerate(pred_unique):
+        for i, pid in enumerate(np.unique(pred_id)):
             mask = pred_id == pid
             pred_ax.scatter(
                 x_data[mask], y_data[mask],
@@ -63,7 +57,7 @@ def plot_comparison(data_dir="test_data/mock_snap", output="figures/mock_compari
             )
         pred_ax.set_xlabel(xlabel)
         pred_ax.set_ylabel(ylabel)
-        pred_ax.set_title(titles[row][1])
+        pred_ax.set_title(["XY — Pipeline assignment", "VX/VY — Pipeline assignment"][row])
         pred_ax.set_aspect("equal")
 
     fig.suptitle(
@@ -79,7 +73,7 @@ def plot_comparison(data_dir="test_data/mock_snap", output="figures/mock_compari
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot mock comparison")
+    parser = argparse.ArgumentParser()
     parser.add_argument("data_dir", nargs="?", default="test_data/mock_snap")
     parser.add_argument("--output", "-o", default="figures/mock_comparison.png")
     args = parser.parse_args()

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Run the roadrunner assignment pipeline on mock data.
 
-Reads:  test_data/mock_snap/merger_tree.csv
-        test_data/mock_snap/particles.npz
-Output: test_data/mock_snap/assignment.csv
-        (columns: array_index, Sub_tree_id)
+Usage:
+  python scripts/run_mock_pipeline.py --data-dir test_data/mock_snap --cov-type diagonal
 """
 
+import argparse
 import os
 import sys
 import warnings
@@ -26,15 +25,24 @@ from roadrunner.clustering.assignment.gmm import GMMAssigner
 
 
 def main():
-    data_dir = "test_data/mock_snap"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", default="test_data/mock_snap")
+    parser.add_argument("--cov-type", default="diagonal", choices=["diagonal", "full"])
+    parser.add_argument("--tol", type=float, default=5e-2)
+    parser.add_argument("--search-factor", type=float, default=2.0)
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    data_dir = args.data_dir
+    print(f"Data dir: {data_dir}")
+    print(f"cov_type={args.cov_type}, tol={args.tol}, search_factor={args.search_factor}")
 
     print("Loading merger tree...")
     tree = pd.read_csv(os.path.join(data_dir, "merger_tree.csv"))
 
     print("Loading particles...")
     particles = np.load(os.path.join(data_dir, "particles.npz"))
-    coords = particles["coords"]  # (N, 6) = [pos_x, pos_y, pos_z, vel_x, vel_y, vel_z]
-    masses = particles["masses"]
+    coords = particles["coords"]
     N = coords.shape[0]
     print(f"  {N} particles")
 
@@ -46,7 +54,7 @@ def main():
     print(f"  {len(halos)} halos")
 
     print("Computing boundness...")
-    halos = compute_halo_bound_particles(halos, coords, search_factor=2.0)
+    halos = compute_halo_bound_particles(halos, coords, search_factor=args.search_factor)
 
     print("Building ensemble...")
     ensemble = HaloEnsemble(halos)
@@ -74,27 +82,24 @@ def main():
         print(f"Saved {out_path}")
         return
 
-    # Remap group indices from populated-halo space to full halo space
     groups_sorted = sorted(
         [pop_idx[g] for g in seg.pruned_groups],
         key=len, reverse=True,
     )
     print(f"  {len(groups_sorted)} groups")
 
-    print("Assigning particles (diagonal covariances)...")
+    print(f"Assigning particles ({args.cov_type} covariances)...")
     assigner = GMMAssigner(
-        cov_type="diagonal",
+        cov_type=args.cov_type,
         max_iter=10,
-        tol=5e-2,
+        tol=args.tol,
         min_particles=10,
         reg_covar=1e-6,
         prior_type="",
         verbose=1,
     )
     newborn = np.arange(N, dtype=np.uint64)
-    result = assigner.assign(
-        halos, coords, newborn, groups_sorted,
-    )
+    result = assigner.assign(halos, coords, newborn, groups_sorted)
 
     out_path = os.path.join(data_dir, "assignment.csv")
     result.particle_df.to_csv(out_path, index=False)
