@@ -50,6 +50,8 @@ def create_mock_snapshot(
     phi0=0.01,
     g=3.49,
     limepy_rh_pc=3000,  # half-mass radius in pc (= 3 kpc)
+    intra_vel_disp=250,
+    inter_vel_disp=500,
     seed=42,
     output_dir="test_data/mock_snap",
     limepy_mass_scale=1e10,
@@ -70,8 +72,7 @@ def create_mock_snapshot(
     galaxy_positions = np.zeros((n_galaxies, 3))
     galaxy_velocities = np.zeros((n_galaxies, 3))
     group_centers = rng.uniform(-box_size, box_size, (n_groups, 3))
-    # Bulk motion per group: ~500 km/s separation between groups
-    group_bulk = rng.normal(0, 500, (n_groups, 3))
+    group_bulk = rng.normal(0, inter_vel_disp, (n_groups, 3))
 
     for g in range(n_groups):
         mask = group_assignments == g
@@ -94,9 +95,7 @@ def create_mock_snapshot(
                     direction /= norm
                 galaxy_positions[i] = group_centers[g] + direction * frac_distance
 
-        # Intra-group velocity dispersion: ~250 km/s
-        # Superimposed on group bulk motion (~500 km/s between groups)
-        galaxy_velocities[idx] = rng.normal(0, 250, (n_in_group, 3)) + group_bulk[g]
+        galaxy_velocities[idx] = rng.normal(0, intra_vel_disp, (n_in_group, 3)) + group_bulk[g]
 
     # ── Step 2: Build limepy galaxy for each galaxy ─────────────────────
     n_particles_per_galaxy = np.zeros(n_galaxies, dtype=int)
@@ -218,6 +217,10 @@ if __name__ == "__main__":
                         help="Simulation box size (kpc)")
     parser.add_argument("--group-radius", type=float, default=80.0,
                         help="Group virial-like radius (kpc)")
+    parser.add_argument("--intra-vel-disp", type=float, default=250,
+                        help="Intra-group velocity dispersion (km/s)")
+    parser.add_argument("--inter-vel-disp", type=float, default=500,
+                        help="Inter-group bulk velocity dispersion (km/s)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
     parser.add_argument("--output-dir", type=str, default="test_data/mock_snap",
@@ -231,6 +234,8 @@ if __name__ == "__main__":
         max_particles=args.max_particles,
         box_size=args.box_size,
         group_radius=args.group_radius,
+        intra_vel_disp=args.intra_vel_disp,
+        inter_vel_disp=args.inter_vel_disp,
         seed=args.seed,
         output_dir=args.output_dir,
     )

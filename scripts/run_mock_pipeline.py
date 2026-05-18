@@ -27,7 +27,7 @@ from roadrunner.clustering.assignment.gmm import GMMAssigner
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="test_data/mock_snap")
-    parser.add_argument("--cov-type", default="diagonal", choices=["diagonal", "full"])
+    parser.add_argument("--cov-type", default="diagonal", choices=["diagonal", "full", "spherical"])
     parser.add_argument("--tol", type=float, default=5e-2)
     parser.add_argument("--search-factor", type=float, default=2.0)
     parser.add_argument("--seed", type=int, default=42)
