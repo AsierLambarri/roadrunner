@@ -20,3 +20,7 @@ class ConvergenceError(RoadrunnerError):
 
 class RestartError(RoadrunnerError):
     pass
+
+
+class CycleError(RoadrunnerError):
+    pass
