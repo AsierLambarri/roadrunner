@@ -32,9 +32,10 @@ def default_radial_cdf(u, group_radius):
 
 
 def sample_galaxy_masses(n_galaxies, mm_max, rng):
-    """Assign masses following a power law, with mm_max constraint."""
-    masses = rng.uniform(0.1, 1.0, n_galaxies)
-    masses = masses / masses.sum()
+    """Assign masses with a steep drop: one dominant + exponential falloff."""
+    raw = np.sort(rng.exponential(scale=0.15, size=n_galaxies))[::-1]
+    raw[0] = max(raw[0], 5.0 * raw[1])  # dominant first galaxy
+    masses = raw / raw.sum()
     return masses
 
 
