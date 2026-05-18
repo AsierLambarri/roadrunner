@@ -3,6 +3,7 @@ import pytest
 from roadrunner._exceptions import (
     ConfigurationError,
     ConvergenceError,
+    CycleError,
     NoBoundParticlesError,
     RestartError,
     RoadrunnerError,
@@ -30,6 +31,9 @@ class TestExceptionHierarchy:
     def test_restart_error_inherits(self):
         assert issubclass(RestartError, RoadrunnerError)
 
+    def test_cycle_error_inherits(self):
+        assert issubclass(CycleError, RoadrunnerError)
+
 
 class TestExceptionMessages:
     def test_configuration_error_message(self):
@@ -52,6 +56,10 @@ class TestExceptionMessages:
         with pytest.raises(RestartError, match="corrupted"):
             raise RestartError("corrupted state")
 
+    def test_cycle_error_message(self):
+        with pytest.raises(CycleError, match="Cycle"):
+            raise CycleError("Cycle detected")
+
 
 class TestIsInstance:
     def test_subclass_isinstance_base(self):
@@ -60,3 +68,4 @@ class TestIsInstance:
         assert isinstance(NoBoundParticlesError("x"), RoadrunnerError)
         assert isinstance(ConvergenceError("x"), RoadrunnerError)
         assert isinstance(RestartError("x"), RoadrunnerError)
+        assert isinstance(CycleError("x"), RoadrunnerError)
