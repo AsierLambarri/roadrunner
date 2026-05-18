@@ -70,6 +70,8 @@ def create_mock_snapshot(
     galaxy_positions = np.zeros((n_galaxies, 3))
     galaxy_velocities = np.zeros((n_galaxies, 3))
     group_centers = rng.uniform(-box_size, box_size, (n_groups, 3))
+    # Bulk motion per group: ~500 km/s separation between groups
+    group_bulk = rng.normal(0, 500, (n_groups, 3))
 
     for g in range(n_groups):
         mask = group_assignments == g
@@ -92,7 +94,9 @@ def create_mock_snapshot(
                     direction /= norm
                 galaxy_positions[i] = group_centers[g] + direction * frac_distance
 
-        galaxy_velocities[idx] = rng.normal(0, 10, (n_in_group, 3))
+        # Intra-group velocity dispersion: ~250 km/s
+        # Superimposed on group bulk motion (~500 km/s between groups)
+        galaxy_velocities[idx] = rng.normal(0, 250, (n_in_group, 3)) + group_bulk[g]
 
     # ── Step 2: Build limepy galaxy for each galaxy ─────────────────────
     n_particles_per_galaxy = np.zeros(n_galaxies, dtype=int)
