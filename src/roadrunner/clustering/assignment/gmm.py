@@ -1,5 +1,4 @@
 import warnings
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -7,6 +6,7 @@ from numba import njit, prange
 from scipy.stats import rankdata
 
 from roadrunner._mcf_types import AssignmentResult
+from roadrunner.clustering.assignment.statistics import GMMAssignerStatistics
 from roadrunner.clustering.sparse import stitch_zero_rows
 from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.mixture.weighted_gmm import (
@@ -74,6 +74,7 @@ class GMMAssigner:
         self.reg_covar = reg_covar
         self.prior_type = prior_type
         self.verbose = verbose
+        self.statistics = GMMAssignerStatistics()
 
     def assign(
         self, halos, particle_coords, newborn_indices, groups, **kwargs
@@ -100,51 +101,15 @@ class GMMAssigner:
             self._process_group(group)
 
         self.particles_df.reset_index(inplace=True)
-
-        # ── Assignment metrics ──────────────────────────────────────
-        N = len(self.particles_df)
-        unassigned = int((self.particles_df["Sub_tree_id"] == -1).sum())
-
-        # Fragments: galaxies with < 10 assigned particles
-        counts = self.particles_df["Sub_tree_id"].value_counts()
-        fragments = int((counts[counts.index != -1] < 10).sum()) if len(counts) > 0 else 0
-
-        # Soft metrics from resp_map
-        if self.resp_map:
-            per_particle_max = defaultdict(float)
-            per_particle_resps = defaultdict(list)
-            for _, (indices, vals) in self.resp_map.items():
-                for pid, v in zip(indices, vals):
-                    if v > per_particle_max[pid]:
-                        per_particle_max[pid] = v
-                    per_particle_resps[pid].append(v)
-
-            avg_conf = float(np.mean(list(per_particle_max.values()))) if per_particle_max else 0.0
-
-            entropies = []
-            for pid, rvals in per_particle_resps.items():
-                K = len(rvals)
-                if K <= 1:
-                    entropies.append(0.0)
-                else:
-                    arr = np.array(rvals, dtype=np.float64)
-                    arr /= arr.sum()
-                    H = -np.sum(arr * np.log(np.maximum(arr, 1e-30))) / np.log(K)
-                    entropies.append(H)
-            avg_entropy = float(np.mean(entropies)) if entropies else 0.0
-        else:
-            avg_conf = float("nan")
-            avg_entropy = float("nan")
-
+        self.statistics.compute(
+            self.particles_df, self.resp_map, self.parameters,
+        )
         return AssignmentResult(
             self.particles_df, self.resp_map, self.parameters, {
                 "groups": len(groups),
                 "halos_in_groups": sum(len(g) for g in groups),
                 "bound_particles": self.ensemble.nstars,
-                "unassigned": unassigned,
-                "fragments": fragments,
-                "avg_conf": avg_conf,
-                "avg_entropy": avg_entropy,
+                **self.statistics.values,
         })
 
     def _process_group(self, group):

@@ -1,4 +1,4 @@
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -91,3 +91,9 @@ class PotentialModel(Protocol):
     def potential(self, r: np.ndarray) -> np.ndarray: ...
     def dynamical_time(self, x: np.ndarray) -> np.ndarray: ...
     def tidal_denominator(self, r: np.ndarray) -> np.ndarray: ...
+
+
+@runtime_checkable
+class AssignmentStatistics(Protocol):
+    @property
+    def values(self) -> dict[str, Any]: ...

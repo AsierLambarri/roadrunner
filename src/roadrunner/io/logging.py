@@ -43,6 +43,7 @@ class RunLogger:
             ("unassigned", "UNASSIGNED", 10, ">10d"),
             ("avg_conf", "AVG_CONF", 10, ">10.4f"),
             ("avg_entropy", "AVG_ENTROPY", 12, ">12.4f"),
+            ("avg_cond", "AVG_COND", 10, ">10.2f"),
         ]
 
         # Build header
