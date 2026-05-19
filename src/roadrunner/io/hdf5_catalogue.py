@@ -35,9 +35,9 @@ class HDF5CatalogueWriter:
             rec_merger = merger_tree_df.to_records(index=False)
             hdr.create_dataset("merger_tree", data=rec_merger,
                                compression="gzip")
-            rec_equiv = equivalence_df.to_records(index=False)
-            hdr.create_dataset("equivalence", data=rec_equiv,
-                               compression="gzip")
+            equiv_json = equivalence_df.to_json(orient="records")
+            hdr.create_dataset("equivalence", data=equiv_json,
+                               dtype=h5py.string_dtype())
 
             hdr.create_dataset("last_snapshot", data=-1, dtype=np.int32)
 
