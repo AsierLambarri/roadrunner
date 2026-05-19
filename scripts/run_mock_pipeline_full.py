@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""End-to-end pipeline on a mock dataset: boundness → segment → GMM assign
-→ catalogue I/O → logging → checkpoint save/restart.
+"""End-to-end pipeline on a mock dataset with checkpoint+restart.
+
+Flow per snapshot:
+  1. Save checkpoint (BEFORE processing)
+  2. Boundness → segment → GMM assign → I/O
+  3. On crash, restart re-does the failed snapshot.
 
 Usage:
-  python scripts/run_mock_pipeline_full.py
-  python scripts/run_mock_pipeline_full.py --resume  (restart from checkpoint)
+  python scripts/run_mock_pipeline_full.py                     # fresh run
+  python scripts/run_mock_pipeline_full.py --resume            # resume
+  python scripts/run_mock_pipeline_full.py --fail-on 1         # simulate crash
 """
 
 import argparse
 import os
+import shutil
 import sys
 import time
 import warnings
@@ -16,11 +22,12 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from roadrunner.clustering.sparse import SparseCSC
+
 warnings.filterwarnings("ignore")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from roadrunner._mcf_types import SnapshotData
 from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.halo_ensemble import HaloEnsemble
@@ -33,31 +40,34 @@ from roadrunner.io.serialization import save_checkpoint, load_checkpoint
 from roadrunner.io.logging import RunLogger, format_runtime
 from roadrunner._exceptions import RestartError
 
-
 DATA_DIR = "test_data/mock_snap_tight"
 OUTPUT_DIR = os.path.join(DATA_DIR, "output")
 CHECKPOINT_PATH = os.path.join(OUTPUT_DIR, "checkpoint.zst")
 LOG_PATH = os.path.join(OUTPUT_DIR, "run.log")
 
+# ── Config ─────────────────────────────────────────────────────
+N_SNAPSHOTS = 2
+FAIL_ON_SNAPSHOT = None   # set via --fail-on
 
-def load_mock_data(data_dir):
+
+def load_mock_snapshot(data_dir, snapshot_index):
+    """Load the same data for both snapshots (duplicate)."""
     tree = pd.read_csv(os.path.join(data_dir, "merger_tree.csv"))
     particles = np.load(os.path.join(data_dir, "particles.npz"))
     return tree, particles
 
 
 def build_halos(tree):
-    halos = []
-    for _, row in tree.iterrows():
-        h = HaloModel.from_snapshot_row(row, model="kepler", comoving=False)
-        halos.append(h)
-    return halos
+    return [
+        HaloModel.from_snapshot_row(row, model="kepler", comoving=False)
+        for _, row in tree.iterrows()
+    ]
 
 
 def build_snapshot_data(coords, masses):
-    N = coords.shape[0]
+    from roadrunner._mcf_types import SnapshotData
     return SnapshotData(
-        indices=np.arange(N, dtype=np.uint64),
+        indices=np.arange(coords.shape[0], dtype=np.uint64),
         masses=masses,
         positions=coords[:, :3],
         velocities=coords[:, 3:6],
@@ -66,17 +76,117 @@ def build_snapshot_data(coords, masses):
     )
 
 
-def run_pipeline(resume=False):
+def process_snapshot(snapshot_id, tree, coords, masses, cat_writer,
+                     part_writer, assign_writer, logger, previous_resp,
+                     t_start):
+    """Run boundness → segment → assign → I/O for one snapshot.
+    Returns updated previous_resp.
+    """
+    t_snap = time.time()
+    halos = build_halos(tree)
+    halos = compute_halo_bound_particles(halos, coords, search_factor=2.0)
+    ensemble = HaloEnsemble(halos)
+    csc_b, _ = ensemble.get_particles()
+    pop_idx = ensemble.populated_indices()
+    candidates = [csc_b.column_indices[i] for i in pop_idx]
+    process_time = time.time() - t_snap
+
+    seg = HaloSegmenter(
+        ensemble.positions[pop_idx],
+        ensemble.virial_radii[pop_idx],
+    )
+    seg.overlap_groups().prune(candidates, min_particles=10, discard=False)
+    groups_sorted = sorted(
+        [pop_idx[g] for g in seg.pruned_groups],
+        key=len, reverse=True,
+    ) if seg.pruned_groups else []
+
+    assigner = GMMAssigner(
+        cov_type="full", max_iter=10, tol=1e-2,
+        min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
+    )
+    newborn = np.arange(coords.shape[0], dtype=np.uint64)
+    result = assigner.assign(
+        halos, coords, newborn, groups_sorted,
+        previous_resp=previous_resp,
+    )
+    assign_time = time.time() - t_snap
+
+    # ── Catalogue ───
+    snap_data = build_snapshot_data(coords, masses)
+    cat_writer.write_snapshot(
+        snapshot_id=snapshot_id, time=13.8,
+        properties_df=pd.DataFrame(),
+        dynstate_df=pd.DataFrame(),
+        satellites_map={},
+    )
+    part_writer.write_snapshot(
+        snapshot_id, 13.8, 0.0, snap_data,
+    )
+    assign_writer.write_snapshot(
+        snapshot_id, 13.8, result, csc_b,
+    )
+    io_time = time.time() - t_snap
+
+    # ── Log ───
+    total_elapsed = time.time() - t_start
+    stats = {
+        "snap": snapshot_id,
+        "runtime": format_runtime(total_elapsed),
+        "z": 0.0,
+        "load": 0.0,
+        "process": assign_time,
+        "reduction": 0.0,
+        "bound": ensemble.nstars,
+        "groups": len(groups_sorted),
+    }
+    stats.update(result.statistics)
+    logger.write_snapshot(stats)
+
+    print(f"  Snapshot {snapshot_id}: "
+          f"unassigned={stats.get('unassigned','?')}, "
+          f"conf={stats.get('avg_conf','?'):.4f}, "
+          f"cond={stats.get('avg_cond','?'):.1f}, "
+          f"time={format_runtime(total_elapsed)}")
+
+    # Convert resp_map dict → SparseCSC for use as previous_resp
+    col_idx = [idx for idx, _ in result.responsibilities.values()]
+    col_val = [val for _, val in result.responsibilities.values()]
+    col_id = np.array(list(result.responsibilities.keys()), dtype=np.int64)
+    return SparseCSC(col_idx, col_val, column_id=col_id)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--fail-on", type=int, default=None,
+                        help="Simulate crash on this snapshot")
+    args = parser.parse_args()
+    fail_on = args.fail_on
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Clean up any previous run files (except when resuming)
-    if not resume:
-        for f in os.listdir(OUTPUT_DIR):
-            fp = os.path.join(OUTPUT_DIR, f)
-            if os.path.isfile(fp):
-                os.remove(fp)
+    # ── Determine starting point ─────────────────────────────────
+    resume = args.resume
+    start_snapshot = 0
 
-    # ── Initialise writers and logger ──────────────────────────────
+    if resume:
+        try:
+            ckpt = load_checkpoint(CHECKPOINT_PATH)
+            start_snapshot = ckpt["last_snapshot"]  # re-do this snapshot
+            print(f"Resumed from checkpoint. Re-processing snapshot {start_snapshot}")
+        except RestartError:
+            print("No valid checkpoint, starting fresh.")
+            resume = False
+
+    # ── Clean output dir on fresh run or resume ──────────────────
+    # Both cases: we rebuild output files from scratch.
+    for f in os.listdir(OUTPUT_DIR):
+        fp = os.path.join(OUTPUT_DIR, f)
+        if os.path.isfile(fp):
+            os.remove(fp)
+
+    # ── Init writers ─────────────────────────────────────────────
     cat_writer = HDF5CatalogueWriter(OUTPUT_DIR, mode="w-")
     part_writer = HDF5ParticleWriter(OUTPUT_DIR, mode="w-", float_atol=1e-4)
     assign_writer = HDF5AssignmentWriter(OUTPUT_DIR, mode="w-", float_atol=1e-4)
@@ -87,143 +197,48 @@ def run_pipeline(resume=False):
         "cov_type": "full",
     })
 
-    previous_resp = None
-    start_snapshot = 0
-
-    # ── Resume from checkpoint ─────────────────────────────────────
-    if resume:
-        try:
-            ckpt = load_checkpoint(CHECKPOINT_PATH)
-            previous_resp = ckpt.get("previous_resp")
-            start_snapshot = ckpt.get("last_snapshot", 0) + 1
-            cat_writer = HDF5CatalogueWriter(OUTPUT_DIR, mode="r+")
-            assign_writer = HDF5AssignmentWriter(OUTPUT_DIR, mode="r+",
-                                                  float_atol=1e-4)
-            print(f"Resumed from checkpoint. Starting at snapshot {start_snapshot}")
-        except RestartError as e:
-            print(f"No valid checkpoint found, starting fresh: {e}")
-            start_snapshot = 0
-
-    # ── Load data ──────────────────────────────────────────────────
-    t0 = time.time()
-    tree, particles = load_mock_data(DATA_DIR)
+    # ── Load data (same for both snapshots) ──────────────────────
+    tree, particles = load_mock_snapshot(DATA_DIR, 0)
     coords = particles["coords"]
     masses = particles["masses"]
-    N = coords.shape[0]
-    snap_data = build_snapshot_data(coords, masses)
 
-    # Write header once (only on fresh run)
-    if not resume:
-        cat_writer.write_header(
-            accretion_id=1,
-            snapshots=[0],
-            config_dict={"halo_model": "kepler", "cov_type": "full"},
-            merger_tree_df=tree,
-            equivalence_df=pd.read_csv(os.path.join(DATA_DIR, "equivalence.csv")),
+    # ── Write header once ────────────────────────────────────────
+    cat_writer.write_header(
+        accretion_id=1,
+        snapshots=list(range(N_SNAPSHOTS)),
+        config_dict={"halo_model": "kepler", "cov_type": "full"},
+        merger_tree_df=tree,
+        equivalence_df=pd.read_csv(os.path.join(DATA_DIR, "equivalence.csv")),
+    )
+
+    # ── Snapshot loop ────────────────────────────────────────────
+    t_start = time.time()
+    previous_resp = None
+
+    for snap_id in range(start_snapshot, N_SNAPSHOTS):
+        # Save checkpoint BEFORE processing
+        ckpt = {"last_snapshot": snap_id, "previous_resp": previous_resp}
+        save_checkpoint(CHECKPOINT_PATH, ckpt)
+
+        print(f"Processing snapshot {snap_id}...")
+
+        # Simulate crash (for testing restart)
+        if fail_on is not None and snap_id >= fail_on:
+            raise RuntimeError(f"Simulated crash on snapshot {snap_id}")
+
+        previous_resp = process_snapshot(
+            snap_id, tree, coords, masses,
+            cat_writer, part_writer, assign_writer, logger,
+            previous_resp, t_start,
         )
-    load_time = time.time() - t0
 
-    # ── Pipeline per snapshot ──────────────────────────────────────
-    # Single snapshot: snapshot_id = 0
-    snapshot_id = 0
-    if snapshot_id < start_snapshot:
-        print(f"Snapshot {snapshot_id} already processed, skipping.")
-        return
-
-    t_snap = time.time()
-
-    # 1. Build halos
-    halos = build_halos(tree)
-    print(f"Built {len(halos)} halos")
-
-    # 2. Boundness
-    halos = compute_halo_bound_particles(halos, coords, search_factor=2.0)
-    bound_time = time.time() - t_snap
-
-    # 3. Ensemble
-    ensemble = HaloEnsemble(halos)
-    pop_idx = ensemble.populated_indices()
-    csc_b, _ = ensemble.get_particles()
-    candidates = [csc_b.column_indices[i] for i in pop_idx]
-    print(f"  Populated halos: {len(pop_idx)}")
-
-    # 4. Segmentation
-    seg = HaloSegmenter(
-        ensemble.positions[pop_idx],
-        ensemble.virial_radii[pop_idx],
-    )
-    seg.overlap_groups().prune(candidates, min_particles=10, discard=False)
-    if seg.pruned_groups and len(seg.pruned_groups) > 0:
-        groups_sorted = sorted(
-            [pop_idx[g] for g in seg.pruned_groups],
-            key=len, reverse=True,
-        )
-    else:
-        groups_sorted = []
-    print(f"  Groups: {len(groups_sorted)}")
-    seg_time = time.time() - t_snap
-
-    # 5. GMM Assignment
-    assigner = GMMAssigner(
-        cov_type="full", max_iter=10, tol=1e-2,
-        min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
-    )
-    newborn = np.arange(N, dtype=np.uint64)
-    result = assigner.assign(
-        halos, coords, newborn, groups_sorted,
-        previous_resp=previous_resp,
-    )
-    assign_time = time.time() - t_snap
-
-    # 6. Write outputs
-    cat_writer.write_snapshot(
-        snapshot_id=snapshot_id,
-        time=13.8,
-        properties_df=pd.DataFrame(),
-        dynstate_df=pd.DataFrame(),
-        satellites_map={},
-    )
-    part_writer.write_snapshot(snapshot_id, 13.8, 0.0, snap_data)
-    assign_writer.write_snapshot(
-        snapshot_id, 13.8, result, csc_b,
-    )
-
-    # 7. Log snapshot
-    stats = {
-        "snap": snapshot_id,
-        "runtime": format_runtime(time.time() - t0),
-        "z": 0.0,
-        "load": load_time,
-        "process": assign_time - bound_time,
-        "reduction": 0.0,
-        "bound": ensemble.nstars,
-        "groups": len(groups_sorted),
-        **result.statistics,
-    }
-    logger.write_snapshot(stats)
-    io_time = time.time() - t_snap
-
-    total = time.time() - t0
-    print(f"  Runtime: {format_runtime(total)}")
-    print(f"  Unassigned: {result.statistics.get('unassigned', '?')}")
-    print(f"  Avg conf:   {result.statistics.get('avg_conf', '?'):.4f}")
-    print(f"  Avg entropy:{result.statistics.get('avg_entropy', '?'):.4f}")
-    print(f"  Avg cond:   {result.statistics.get('avg_cond', '?'):.2f}")
-
-    # 8. Save checkpoint (for restart demonstration)
-    ckpt = {
-        "last_snapshot": snapshot_id,
-        "previous_resp": result.responsibilities,
-    }
-    save_checkpoint(CHECKPOINT_PATH, ckpt)
-    print(f"Checkpoint saved to {CHECKPOINT_PATH}")
-
+    # ── Finalize ─────────────────────────────────────────────────
+    births = pd.DataFrame({"particle_index": [], "birth_id": []})
+    assembly = pd.DataFrame({"particle_index": [], "galaxy_id": []})
+    cat_writer.write_finalize(births, assembly)
     logger.write_summary()
-    print("Pipeline complete.")
+    print(f"Pipeline complete in {format_runtime(time.time() - t_start)}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
-    args = parser.parse_args()
-    run_pipeline(resume=args.resume)
+    main()
