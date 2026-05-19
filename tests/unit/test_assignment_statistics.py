@@ -67,10 +67,7 @@ class TestGMMAssignerStatistics:
         resp_map = {
             1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
         }
-        # diagonal cov: condition number = max / min (read from stored cond)
-        params = {
-            1: {"covariance_condition": 1000.0},
-        }
+        params = {1: {"covariance_condition": 1000.0}}
         s = GMMAssignerStatistics().compute(df, resp_map, params)
         assert np.isclose(s.avg_cond, 1000.0, atol=1.0)
 
@@ -82,9 +79,9 @@ class TestGMMAssignerStatistics:
         resp_map = {
             1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
         }
-        params = {1: {"covariance_condition": 10.0}}
+        params = {1: {"covariance_condition": 10.0}, 2: {"covariance_condition": 15.0}}
         s = GMMAssignerStatistics().compute(df, resp_map, params)
-        assert np.isclose(s.avg_cond, 10.0, atol=0.5)
+        assert np.isclose(s.avg_cond, 12.5, atol=0.5)  # mean(10, 15) = 12.5
 
     def test_avg_retention(self):
         rng = np.random.default_rng(42)

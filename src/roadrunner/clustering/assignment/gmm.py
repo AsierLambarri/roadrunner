@@ -215,12 +215,8 @@ class GMMAssigner:
             sid = int(sid)
             if sid in natural["means"]:
                 cov_scaled = gmm.covariances_[i]
-                if cov_scaled.ndim == 2:
-                    vals = np.linalg.eigvalsh(cov_scaled)
-                else:
-                    vals = cov_scaled
+                vals = np.linalg.eigvalsh(cov_scaled) if cov_scaled.ndim == 2 else cov_scaled
                 cond = float(vals.max() / max(vals.min(), 1e-30))
-
                 self.parameters[sid] = {
                     "mean": natural["means"][sid],
                     "weight": natural["weights"][sid],
