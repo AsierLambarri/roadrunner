@@ -67,12 +67,11 @@ class TestGMMAssignerStatistics:
         resp_map = {
             1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
         }
-        # diagonal cov: condition number = max / min
+        # diagonal cov: condition number = max / min (read from stored cond)
         params = {
-            1: {"covariance": np.array([10.0, 0.1, 1.0, 0.01, 5.0, 0.5])},
+            1: {"covariance_condition": 1000.0},
         }
         s = GMMAssignerStatistics().compute(df, resp_map, params)
-        # vals = [10.0, 0.1, 1.0, 0.01, 5.0, 0.5], max=10.0, min=0.01, cond=1000
         assert np.isclose(s.avg_cond, 1000.0, atol=1.0)
 
     def test_avg_cond_from_full_cov(self):
@@ -83,12 +82,27 @@ class TestGMMAssignerStatistics:
         resp_map = {
             1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
         }
-        # 6x6 full covariance with eigenvalues [10, 1, 1, 1, 1, 1] → cond ≈ 10
-        cov = np.eye(6) * 1.0
-        cov[0, 0] = 10.0
-        params = {1: {"covariance": cov}}
+        params = {1: {"covariance_condition": 10.0}}
         s = GMMAssignerStatistics().compute(df, resp_map, params)
         assert np.isclose(s.avg_cond, 10.0, atol=0.5)
+
+    def test_avg_retention(self):
+        rng = np.random.default_rng(42)
+        N = 100
+        df = pd.DataFrame({
+            "array_index": np.arange(N),
+            "Sub_tree_id": np.where(rng.random(N) < 0.5, 1, 2),
+        })
+        resp_map = {1: (np.array([], dtype=np.uint64), np.array([], dtype=np.float32))}
+        # boundness_csc: galaxy 1 has bound indices [0..49]
+        from roadrunner.clustering.sparse import SparseCSC
+        bound_csc = SparseCSC(
+            [np.arange(50, dtype=np.uint64), np.arange(50, 100, dtype=np.uint64)],
+            [np.ones(50, dtype=np.float32), np.ones(50, dtype=np.float32)],
+            column_id=np.array([1, 2], dtype=np.int64),
+        )
+        s = GMMAssignerStatistics().compute(df, resp_map, {}, boundness_csc=bound_csc)
+        assert not np.isnan(s.avg_retention)
 
     def test_values_property(self):
         s = GMMAssignerStatistics()

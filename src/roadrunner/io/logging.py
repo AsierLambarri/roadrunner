@@ -28,40 +28,59 @@ class RunLogger:
             f.write(f"-cov_type: {config.get('cov_type', 'N/A')}\n")
             f.write("\n\n")
 
+    def _col_width(self, label, fmt_spec):
+        """Column width = max(label length, expected data width from fmt)."""
+        # Estimate render width from format spec
+        if fmt_spec == "s":
+            data_w = 12  # runtime string
+        elif fmt_spec == "d":
+            data_w = 10  # generous for integers up to 1e9
+        else:
+            # e.g. ".3f" → 1 digit + dot + 3 decimals = 5
+            # e.g. ".4f" → 1 + 1 + 4 = 6
+            decimal = int(fmt_spec.lstrip(".").rstrip("f"))
+            data_w = decimal + 2  # at least "0.xxx"
+        return max(len(label), data_w)
+
     def write_snapshot(self, stats):
-        # Column definitions: (key, label, width, format_str)
-        cols = [
-            ("runtime", "RUNTIME", 10, ">10s"),
-            ("snap", "SNAP", 6, ">6d"),
-            ("z", "REDSHIFT", 10, ">10.3f"),
-            ("load", "LOAD", 10, ">10.3f"),
-            ("process", "PROCESS", 10, ">10.3f"),
-            ("reduction", "REDUCTION", 10, ">10.3f"),
-            ("bound", "BOUND", 10, ">10d"),
-            ("groups", "GROUPS", 8, ">8d"),
-            ("fragments", "FRAGS", 7, ">7d"),
-            ("unassigned", "UNASSIGNED", 10, ">10d"),
-            ("avg_conf", "AVG_CONF", 10, ">10.4f"),
-            ("avg_entropy", "AVG_ENTROPY", 12, ">12.4f"),
-            ("avg_cond", "AVG_COND", 10, ">10.2f"),
+        col_defs = [
+            ("runtime",    "RUNTIME",    "s"),
+            ("snap",       "SNAP",       "d"),
+            ("z",          "REDSHIFT",   ".3f"),
+            ("load",       "LOAD",       ".3f"),
+            ("process",    "PROCESS",    ".3f"),
+            ("reduction",  "REDUCTION",  ".3f"),
+            ("bound",      "BOUND",      "d"),
+            ("groups",     "GROUPS",     "d"),
+            ("fragments",  "FRAGS",      "d"),
+            ("unassigned", "UNASSIGNED", "d"),
+            ("avg_conf",   "AVG_CONF",   ".4f"),
+            ("avg_entropy","AVG_ENTROPY",".4f"),
+            ("avg_cond",   "AVG_COND",   ".2f"),
+            ("avg_retention","AVG_RET",  ".4f"),
         ]
 
-        # Build header
-        header = "  ".join(label for _, label, _, _ in cols)
+        # Build columns with widths computed from label + format
+        cols = []
+        for key, label, fmt_spec in col_defs:
+            w = self._col_width(label, fmt_spec)
+            cols.append((key, label, w, fmt_spec))
+
+        # Header
+        header_parts = [f"{label:>{w}}" for _, label, w, _ in cols]
+        header = " ".join(header_parts)
         total_width = len(header)
 
-        # Build data row
-        cells = []
-        for key, _, width, fmt in cols:
+        # Data row
+        cell_parts = []
+        for key, _, w, fmt_spec in cols:
             raw = stats.get(key)
-            if raw is None:
-                cells.append(f"{'--':>{width}}")
-            elif key in ("avg_conf", "avg_entropy") and (raw is None or (isinstance(raw, float) and np.isnan(raw))):
-                cells.append(f"{'--':>{width}}")
+            if raw is None or (isinstance(raw, float) and np.isnan(raw)):
+                cell_parts.append(f"{'--':>{w}}")
             else:
-                cells.append(f"{raw:{fmt}}")
-
-        row = "  ".join(cells)
+                fstr = f">{w}{fmt_spec}" if fmt_spec != "s" else f">{w}s"
+                cell_parts.append(f"{raw:{fstr}}")
+        row = " ".join(cell_parts)
 
         with open(self._log_path, "a") as f:
             if not hasattr(self, "_header_written") or not self._header_written:

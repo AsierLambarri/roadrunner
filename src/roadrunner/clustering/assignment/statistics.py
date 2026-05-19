@@ -10,8 +10,9 @@ class GMMAssignerStatistics:
         self.avg_conf = float("nan")
         self.avg_entropy = float("nan")
         self.avg_cond = float("nan")
+        self.avg_retention = float("nan")
 
-    def compute(self, particle_df, resp_map, fitted_parameters):
+    def compute(self, particle_df, resp_map, fitted_parameters, boundness_csc=None):
         N = len(particle_df)
         self.unassigned = int((particle_df["Sub_tree_id"] == -1).sum())
 
@@ -23,6 +24,7 @@ class GMMAssignerStatistics:
         if not resp_map:
             return self
 
+        # ── Soft metrics (avg_conf, avg_entropy) ──────────────────
         per_particle_max = defaultdict(float)
         per_particle_resps = defaultdict(list)
         for _, (indices, vals) in resp_map.items():
@@ -45,14 +47,43 @@ class GMMAssignerStatistics:
                 entropies.append(H)
         self.avg_entropy = float(np.mean(entropies))
 
+        # ── Condition number (from scaled covariances) ────────────
         conds = []
         for _, params in fitted_parameters.items():
-            cov = params.get("covariance")
-            if cov is not None and np.size(cov) > 1:
-                c = np.asarray(cov, dtype=np.float64)
-                vals = np.linalg.eigvalsh(c) if c.ndim == 2 else c
-                conds.append(float(vals.max() / max(vals.min(), 1e-30)))
+            cond = params.get("covariance_condition")
+            if cond is not None and np.isfinite(cond):
+                conds.append(float(cond))
         self.avg_cond = float(np.mean(conds)) if conds else float("nan")
+
+        # ── Avg retention (normalised bound-to-tagged overlap) ────
+        if boundness_csc is not None:
+            retentions = []
+            sid_to_idx = {
+                sid: i for i, sid in enumerate(boundness_csc.column_id)
+            }
+            for gid in resp_map:
+                col = sid_to_idx.get(gid)
+                if col is None:
+                    continue
+                bound_idx = boundness_csc.column_indices[col]
+                n_bound = bound_idx.size
+                if n_bound == 0:
+                    continue
+
+                tagged = particle_df.loc[
+                    particle_df["Sub_tree_id"] == gid, "array_index"
+                ].values
+                n_tagged = len(tagged)
+                if n_tagged == 0:
+                    continue
+
+                overlap = np.intersect1d(bound_idx, tagged)
+                n_overlap = len(overlap)
+                retention_obs = n_overlap / n_bound
+                expected_frac = n_tagged / max(N, 1)
+                retentions.append(retention_obs / max(expected_frac, 1e-30))
+
+            self.avg_retention = float(np.mean(retentions)) if retentions else float("nan")
 
         return self
 
@@ -64,4 +95,5 @@ class GMMAssignerStatistics:
             "avg_conf": self.avg_conf,
             "avg_entropy": self.avg_entropy,
             "avg_cond": self.avg_cond,
+            "avg_retention": self.avg_retention,
         }

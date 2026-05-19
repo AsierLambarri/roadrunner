@@ -101,8 +101,10 @@ class GMMAssigner:
             self._process_group(group)
 
         self.particles_df.reset_index(inplace=True)
+        csc_b, _ = self.ensemble.get_particles()
         self.statistics.compute(
             self.particles_df, self.resp_map, self.parameters,
+            boundness_csc=csc_b,
         )
         return AssignmentResult(
             self.particles_df, self.resp_map, self.parameters, {
@@ -209,13 +211,21 @@ class GMMAssigner:
         }
         natural = self.get_parameters_natural(scaled, scaler)
 
-        for sid in group_subtrees:
+        for i, sid in enumerate(group_subtrees):
             sid = int(sid)
             if sid in natural["means"]:
+                cov_scaled = gmm.covariances_[i]
+                if cov_scaled.ndim == 2:
+                    vals = np.linalg.eigvalsh(cov_scaled)
+                else:
+                    vals = cov_scaled
+                cond = float(vals.max() / max(vals.min(), 1e-30))
+
                 self.parameters[sid] = {
                     "mean": natural["means"][sid],
                     "weight": natural["weights"][sid],
                     "covariance": natural["covariances"][sid],
+                    "covariance_condition": cond,
                 }
 
         return post_prob, nonz
