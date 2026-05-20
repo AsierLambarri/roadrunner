@@ -95,10 +95,11 @@ class HDF5AssignmentWriter:
                 if cov is not None:
                     cov_arr = np.asarray(cov)
                     cov_dtype = self._pick_float_dtype(cov_arr)
+                    kw = {} if cov_arr.ndim == 0 else {"compression": "gzip"}
                     grp.create_dataset(
                         "covariance",
                         data=cov_arr.astype(cov_dtype, copy=False),
-                        compression="gzip",
+                        **kw,
                     )
 
             # Hard assignment

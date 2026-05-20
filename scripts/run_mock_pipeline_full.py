@@ -68,7 +68,7 @@ def build_snapshot_data(coords, masses):
 
 def process_snapshot(snapshot_id, tree, coords, masses, cat_writer,
                      part_writer, assign_writer, logger, previous_resp,
-                     t_start):
+                     t_start, cov_type="full"):
     """Run boundness → segment → assign → I/O for one snapshot.
     Returns updated previous_resp.
     """
@@ -92,7 +92,7 @@ def process_snapshot(snapshot_id, tree, coords, masses, cat_writer,
     ) if seg.pruned_groups else []
 
     assigner = GMMAssigner(
-        cov_type="full", max_iter=10, tol=1e-2,
+        cov_type=cov_type, max_iter=10, tol=1e-2,
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
     )
     newborn = np.arange(coords.shape[0], dtype=np.uint64)
@@ -155,6 +155,9 @@ def main():
                         help="Simulate crash on this snapshot")
     parser.add_argument("--n-snapshots", type=int, default=2,
                         help="Number of snapshots to process")
+    parser.add_argument("--cov-type", default="full",
+                        choices=["full", "diagonal", "spherical"],
+                        help="GMM covariance type")
     args = parser.parse_args()
 
     DATA_DIR = args.data_dir
@@ -195,7 +198,7 @@ def main():
     logger.write_header({
         "output_dir": OUTPUT_DIR,
         "halo_model": "kepler",
-        "cov_type": "full",
+        "cov_type": args.cov_type,
     })
 
     # ── Load data (same for both snapshots) ──────────────────────
@@ -207,7 +210,7 @@ def main():
     cat_writer.write_header(
         accretion_id=1,
         snapshots=list(range(N_SNAPSHOTS)),
-        config_dict={"halo_model": "kepler", "cov_type": "full"},
+        config_dict={"halo_model": "kepler", "cov_type": args.cov_type},
         merger_tree_df=tree,
         equivalence_df=pd.read_csv(os.path.join(DATA_DIR, "equivalence.csv")),
     )
@@ -230,7 +233,7 @@ def main():
         previous_resp = process_snapshot(
             snap_id, tree, coords, masses,
             cat_writer, part_writer, assign_writer, logger,
-            previous_resp, t_start,
+            previous_resp, t_start, cov_type=args.cov_type,
         )
 
     # ── Finalize ─────────────────────────────────────────────────
