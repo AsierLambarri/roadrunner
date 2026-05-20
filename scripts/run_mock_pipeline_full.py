@@ -40,16 +40,6 @@ from roadrunner.io.serialization import save_checkpoint, load_checkpoint
 from roadrunner.io.logging import RunLogger, format_runtime
 from roadrunner._exceptions import RestartError
 
-DATA_DIR = "test_data/mock_snap_tight"
-OUTPUT_DIR = os.path.join(DATA_DIR, "output")
-CHECKPOINT_PATH = os.path.join(OUTPUT_DIR, "checkpoint.zst")
-LOG_PATH = os.path.join(OUTPUT_DIR, "run.log")
-
-# ── Config ─────────────────────────────────────────────────────
-N_SNAPSHOTS = 2
-FAIL_ON_SNAPSHOT = None   # set via --fail-on
-
-
 def load_mock_snapshot(data_dir, snapshot_index):
     """Load the same data for both snapshots (duplicate)."""
     tree = pd.read_csv(os.path.join(data_dir, "merger_tree.csv"))
@@ -158,11 +148,22 @@ def process_snapshot(snapshot_id, tree, coords, masses, cat_writer,
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", default="test_data/mock_snap_tight",
+                        help="Path to mock dataset directory")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--fail-on", type=int, default=None,
                         help="Simulate crash on this snapshot")
+    parser.add_argument("--n-snapshots", type=int, default=2,
+                        help="Number of snapshots to process")
     args = parser.parse_args()
+
+    DATA_DIR = args.data_dir
+    N_SNAPSHOTS = args.n_snapshots
     fail_on = args.fail_on
+
+    OUTPUT_DIR = os.path.join(DATA_DIR, "output")
+    CHECKPOINT_PATH = os.path.join(OUTPUT_DIR, "checkpoint.zst")
+    LOG_PATH = os.path.join(OUTPUT_DIR, "run.log")
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 

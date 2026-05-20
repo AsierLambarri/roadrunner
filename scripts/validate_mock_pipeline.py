@@ -22,7 +22,7 @@ from scipy.optimize import linear_sum_assignment
 
 warnings.filterwarnings("ignore")
 
-DATA_DIR = "test_data/mock_snap"
+import argparse
 
 # Import what we need for ground-truth property computation
 from roadrunner.postprocessing.properties import (
@@ -38,13 +38,19 @@ from roadrunner.clustering.assignment.gmm import GMMAssigner
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", default="test_data/mock_snap",
+                        help="Path to mock dataset directory")
+    args = parser.parse_args()
+    data_dir = args.data_dir
+
     print("=" * 60)
-    print("Mock Pipeline Validation")
+    print(f"Mock Pipeline Validation — {data_dir}")
     print("=" * 60)
 
     print("\n1. Loading data...")
-    tree = pd.read_csv(os.path.join(DATA_DIR, "merger_tree.csv"))
-    particles = np.load(os.path.join(DATA_DIR, "particles.npz"))
+    tree = pd.read_csv(os.path.join(data_dir, "merger_tree.csv"))
+    particles = np.load(os.path.join(data_dir, "particles.npz"))
     coords = particles["coords"]
     masses = particles["masses"]
     true_id = particles["galaxy_id"]
