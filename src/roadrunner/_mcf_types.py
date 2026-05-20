@@ -37,6 +37,17 @@ class SnapshotData:
         self.metallicity = metallicity
         self.redshift = redshift
         self.time = time
+        self._index_sorter: np.ndarray | None = None
+
+    def array_index(self, sim_ids: np.ndarray) -> np.ndarray:
+        if self._index_sorter is None:
+            self._index_sorter = np.argsort(self.indices)
+        sorted_ids = self.indices[self._index_sorter]
+        pos = np.clip(np.searchsorted(sorted_ids, sim_ids), 0, len(sorted_ids) - 1)
+        found = sorted_ids[pos] == sim_ids
+        result = np.full(len(sim_ids), -1, dtype=np.int64)
+        result[found] = self._index_sorter[pos[found]]
+        return result
 
 
 class BoundnessResult:

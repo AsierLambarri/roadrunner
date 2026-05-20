@@ -241,3 +241,93 @@ class TestSparseCSCAlignLeft:
         #   row 0 = 0 (no particle 0 in b col 10)
         #   row 1 = 3.0 (particle 1)
         assert list(db[:, 0]) == [0.0, 3.0]
+
+
+class TestSparseCSCFillValue:
+    def test_default_fill_zero(self):
+        csc = SparseCSC(
+            [np.array([0], dtype=np.int64)],
+            [np.array([1.0], dtype=np.float32)],
+            column_id=np.array([10], dtype=np.int64),
+        )
+        dense = csc.to_dense(fill_value=0.0)
+        assert dense[0, 0] == 1.0  # row 0 has value
+        # Add a second column with no row 0 to test fill
+        csc2 = SparseCSC(
+            [np.array([0], dtype=np.int64), np.array([1], dtype=np.int64)],
+            [np.array([1.0], dtype=np.float32), np.array([2.0], dtype=np.float32)],
+            column_id=np.array([10, 20], dtype=np.int64),
+        )
+        dense2 = csc2.to_dense(columns=[20], fill_value=0.0)
+        assert dense2[0, 0] == 0.0  # row 0 not in col 20 → fill
+        assert dense2[1, 0] == 2.0  # row 1 is in col 20
+
+    def test_fill_neg_inf(self):
+        csc = SparseCSC(
+            [np.array([0], dtype=np.int64), np.array([1], dtype=np.int64)],
+            [np.array([-1.0], dtype=np.float32), np.array([-2.0], dtype=np.float32)],
+            column_id=np.array([10, 20], dtype=np.int64),
+        )
+        dense = csc.to_dense(columns=[20], fill_value=-np.inf)
+        assert np.isneginf(dense[0, 0])  # row 0 not in col 20 → -inf
+        assert dense[1, 0] == -2.0       # row 1 is in col 20
+
+    def test_fill_with_column_subset(self):
+        csc = SparseCSC(
+            [np.array([0], dtype=np.int64), np.array([1], dtype=np.int64)],
+            [np.array([1.0], dtype=np.float32), np.array([2.0], dtype=np.float32)],
+            column_id=np.array([10, 20], dtype=np.int64),
+        )
+        dense = csc.to_dense(columns=[20], fill_value=-99.0)
+        assert dense[0, 0] == -99.0  # row 0 not in col 20
+        assert dense[1, 0] == 2.0
+
+
+class TestSparseCSCRemapRows:
+    def test_remap_simple(self):
+        csc = SparseCSC(
+            [np.array([10, 20, 30], dtype=np.int64)],
+            [np.array([1.0, 2.0, 3.0], dtype=np.float32)],
+            column_id=np.array([1], dtype=np.int64),
+        )
+        src = np.array([10, 20, 30], dtype=np.int64)
+        dst = np.array([0, 1, 2], dtype=np.int64)
+        remapped = csc.remap_rows(src, dst)
+        assert np.array_equal(remapped.column_indices[0], [0, 1, 2])
+        assert np.array_equal(remapped.column_values[0], [1.0, 2.0, 3.0])
+
+    def test_remap_drops_nonexistent(self):
+        csc = SparseCSC(
+            [np.array([10, 20, 99], dtype=np.int64)],
+            [np.array([1.0, 2.0, 3.0], dtype=np.float32)],
+            column_id=np.array([1], dtype=np.int64),
+        )
+        src = np.array([10, 20], dtype=np.int64)
+        dst = np.array([100, 200], dtype=np.int64)
+        remapped = csc.remap_rows(src, dst)
+        assert np.array_equal(remapped.column_indices[0], [100, 200])
+        assert np.array_equal(remapped.column_values[0], [1.0, 2.0])
+
+    def test_remap_empty_column(self):
+        csc = SparseCSC(
+            [np.array([], dtype=np.int64), np.array([5], dtype=np.int64)],
+            [np.array([], dtype=np.float32), np.array([9.0], dtype=np.float32)],
+            column_id=np.array([1, 2], dtype=np.int64),
+        )
+        src = np.array([5], dtype=np.int64)
+        dst = np.array([50], dtype=np.int64)
+        remapped = csc.remap_rows(src, dst)
+        assert len(remapped.column_indices[0]) == 0  # empty column stays empty
+        assert remapped.column_indices[1][0] == 50
+        assert remapped.column_values[1][0] == 9.0
+
+    def test_remap_preserves_column_id(self):
+        csc = SparseCSC(
+            [np.array([0, 1], dtype=np.int64)],
+            [np.array([1.0, 2.0], dtype=np.float32)],
+            column_id=np.array([42], dtype=np.int64),
+        )
+        src = np.array([0, 1], dtype=np.int64)
+        dst = np.array([10, 20], dtype=np.int64)
+        remapped = csc.remap_rows(src, dst)
+        assert remapped.column_id[0] == 42

@@ -147,3 +147,41 @@ class TestPotentialModelProtocol:
         assert np.all(model.potential(r) < 0)
         assert np.all(model.dynamical_time(r) > 0)
         assert np.all(model.tidal_denominator(r) > 0)
+
+
+class TestSnapshotDataArrayIndex:
+    def test_contiguous_indices(self):
+        sd = SnapshotData(
+            indices=np.arange(100, dtype=np.uint64),
+            masses=np.ones(100),
+            positions=np.zeros((100, 3)),
+            velocities=np.zeros((100, 3)),
+            redshift=0.0, time=13.8,
+        )
+        result = sd.array_index(np.array([0, 50, 99], dtype=np.uint64))
+        assert np.array_equal(result, [0, 50, 99])
+
+    def test_sparse_indices(self):
+        ids = np.array([1000, 2000, 3000, 4000], dtype=np.uint64)
+        sd = SnapshotData(
+            indices=ids,
+            masses=np.ones(4),
+            positions=np.zeros((4, 3)),
+            velocities=np.zeros((4, 3)),
+            redshift=0.0, time=13.8,
+        )
+        result = sd.array_index(np.array([2000, 999, 4000], dtype=np.uint64))
+        assert result[0] == 1   # 2000 at position 1
+        assert result[1] == -1  # 999 not present
+        assert result[2] == 3   # 4000 at position 3
+
+    def test_empty_query(self):
+        sd = SnapshotData(
+            indices=np.arange(10, dtype=np.uint64),
+            masses=np.ones(10),
+            positions=np.zeros((10, 3)),
+            velocities=np.zeros((10, 3)),
+            redshift=0.0, time=13.8,
+        )
+        result = sd.array_index(np.array([], dtype=np.uint64))
+        assert result.size == 0
