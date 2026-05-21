@@ -139,11 +139,8 @@ def process_snapshot(snapshot_id, tree, coords, masses, cat_writer,
           f"cond={stats.get('avg_cond','?'):.1f}, "
           f"time={format_runtime(total_elapsed)}")
 
-    # Convert resp_map dict → SparseCSC for use as previous_resp
-    col_idx = [idx for idx, _ in result.responsibilities.values()]
-    col_val = [val for _, val in result.responsibilities.values()]
-    col_id = np.array(list(result.responsibilities.keys()), dtype=np.int64)
-    return SparseCSC(col_idx, col_val, column_id=col_id)
+    # result.responsibilities is already a SparseCSC — use directly
+    return result.responsibilities
 
 
 def main():
