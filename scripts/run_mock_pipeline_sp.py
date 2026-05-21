@@ -29,6 +29,8 @@ from roadrunner.io.hdf5_particles import HDF5ParticleWriter
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner.io.logging import RunLogger
 from roadrunner.pipeline.snapshot_processor import SnapshotProcessor
+from roadrunner.postprocessing.properties import compute_galaxy_properties, find_center
+from roadrunner.postprocessing.mixing import compute_riley_criterion
 
 
 def main():
@@ -100,20 +102,71 @@ def main():
         halo_model="kepler",
         accretion_id=args.accretion_id,
         n_los=3,
-        cat_writer=cat_w,
-        part_writer=part_w,
-        assign_writer=assign_w,
     )
 
     t0 = time.time()
     newborn = np.arange(N, dtype=np.uint64)
 
-    halos, ensemble, result = processor.process(
-        tree, coords, masses, newborn,
+    ensemble, result = processor.process(
+        tree, snap_data, newborn,
     )
-    properties, dynstate = processor.reduce(
-        tree, snap_data, ensemble, result, {},
+
+    # ── Inline reduction (processor.reduce was removed in Part 1) ─
+    particle_coords = np.column_stack([snap_data.positions, snap_data.velocities])
+    df = result.particle_df
+
+    galaxy_particles = {}
+    for sid in df["Sub_tree_id"].unique():
+        if sid == -1:
+            continue
+        mask = df["Sub_tree_id"] == sid
+        galaxy_particles[int(sid)] = df.loc[mask, "array_index"].values
+
+    galaxy_table = tree[["Sub_tree_id", "host_id", "mass",
+                         "distance_to_acc_id"]].copy()
+    galaxy_table.set_index("Sub_tree_id", inplace=True)
+    host_row = tree[tree["Sub_tree_id"] == args.accretion_id]
+    host_props = host_row.iloc[0] if not host_row.empty else tree.iloc[0]
+
+    galaxy_centers = {}
+    for sid, params in result.fitted_parameters.items():
+        mean = params.get("mean")
+        if mean is not None:
+            galaxy_centers[int(sid)] = np.asarray(mean)
+
+    properties = compute_galaxy_properties(
+        accretion_id=args.accretion_id,
+        particle_masses=masses,
+        particle_coords=particle_coords,
+        galaxy_particles=galaxy_particles,
+        galaxy_table=galaxy_table,
+        host_props=host_props,
+        halo_model="kepler",
+        n_los=3,
+        galaxy_centers=galaxy_centers if galaxy_centers else None,
     )
+
+    bound_csc, _ = ensemble.get_particles()
+    galaxy_bound = {}
+    bound_sid_to_idx = {sid: i for i, sid in enumerate(bound_csc.column_id)}
+    for j, gid in enumerate(result.responsibilities.column_id):
+        col = bound_sid_to_idx.get(gid)
+        if col is not None:
+            galaxy_bound[int(gid)] = bound_csc.column_indices[col]
+
+    dynstate = compute_riley_criterion(
+        main_id=args.accretion_id,
+        particle_masses=masses,
+        particle_coords=particle_coords,
+        galaxy_allowed=galaxy_particles,
+        galaxy_bound=galaxy_bound,
+        redshift=0.0,
+    )
+
+    # ── I/O ──────────────────────────────────────────────────────
+    cat_w.write_snapshot(0, 13.8, properties, dynstate, {})
+    part_w.write_snapshot(0, 13.8, 0.0, snap_data)
+    assign_w.write_snapshot(0, 13.8, result, bound_csc)
 
     total = time.time() - t0
 

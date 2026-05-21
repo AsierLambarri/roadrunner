@@ -121,8 +121,8 @@ class TestAccretionPipeline:
             redshift=0.0, time=13.8,
         )
         newborn = np.arange(coords.shape[0], dtype=np.uint64)
-        halos, ensemble, result = pipeline.processor.process(
-            snap_df, coords, particles["masses"], newborn,
+        ensemble, result = pipeline.processor.process(
+            snap_df, snap_data, newborn,
         )
         csc_sim = pipeline._to_sim_space(result.responsibilities, snap_data)
         assert csc_sim is not None
@@ -181,8 +181,8 @@ class TestAccretionPipeline:
             redshift=0.0, time=13.8,
         )
         newborn = np.arange(coords.shape[0], dtype=np.uint64)
-        halos, ensemble, result = pipeline.processor.process(
-            snap_df, coords, masses, newborn,
+        ensemble, result = pipeline.processor.process(
+            snap_df, snap_data, newborn,
         )
         csc_sim = pipeline._to_sim_space(result.responsibilities, snap_data)
 

@@ -29,6 +29,8 @@ class AccretionPipeline:
         part_writer: HDF5ParticleWriter | None,
         assign_writer: HDF5AssignmentWriter | None,
         logger: RunLogger,
+        birth_tracker=None,
+        assembly_tracker=None,
     ):
         self.merger_handler = merger_handler
         self.snapshot_reader = snapshot_reader
@@ -38,10 +40,8 @@ class AccretionPipeline:
         self.part_writer = part_writer
         self.assign_writer = assign_writer
         self.logger = logger
-        # Propagate writers to processor so reduce() writes per-snapshot data
-        self.processor.cat_writer = cat_writer
-        self.processor.part_writer = part_writer
-        self.processor.assign_writer = assign_writer
+        self.birth_tracker = birth_tracker
+        self.assembly_tracker = assembly_tracker
 
     # ── ID translation helpers ────────────────────────────────────
 
@@ -182,19 +182,32 @@ class AccretionPipeline:
                     snap_df,
                 )
 
-                # Process + reduce
-                halos, ensemble, result = self.processor.process(
-                    snap_df, coords, masses, newborn,
+                # Process (boundness → segment → assign → timescales)
+                ensemble, result = self.processor.process(
+                    snap_df, snap_data, newborn,
                     previous_resp=previous_resp,
-                )
-                self.processor.reduce(
-                    snap_df, snap_data, ensemble, result, satellites,
                 )
 
                 # Convert for next snapshot: array_index → sim ID
                 previous_resp_sim = self._to_sim_space(
                     result.responsibilities, snap_data,
                 )
+
+                # I/O (temporary until Part 2 refactors this into _write_snapshot_output)
+                if self.cat_writer:
+                    self.cat_writer.write_snapshot(
+                        snap_id, snap_data.time,
+                        pd.DataFrame(), pd.DataFrame(), {},
+                    )
+                if self.part_writer:
+                    self.part_writer.write_snapshot(
+                        snap_id, snap_data.time, snap_data.redshift, snap_data,
+                    )
+                if self.assign_writer:
+                    bound_csc, _ = ensemble.get_particles()
+                    self.assign_writer.write_snapshot(
+                        snap_id, snap_data.time, result, bound_csc,
+                    )
 
                 # Log
                 elapsed = time.time() - t_start
@@ -213,8 +226,8 @@ class AccretionPipeline:
 
         # ── Post-loop: finalize ───────────────────────────────────
         print("\nFinalizing...")
-        bt = self.processor.birth_tracker
-        at = self.processor.assembly_tracker
+        bt = self.birth_tracker
+        at = self.assembly_tracker
 
         if bt is not None:
             birth_df = bt.finalize()
