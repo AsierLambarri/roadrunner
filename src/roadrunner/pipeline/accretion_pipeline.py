@@ -124,10 +124,12 @@ class AccretionPipeline:
             sim_arr = np.array(list(sim_set), dtype=np.uint64)
             allowed_idx = snap_data.array_index(sim_arr)
             allowed_idx = allowed_idx[allowed_idx >= 0]
-            intersection = np.intersect1d(allowed_idx, bound_idx)
+            intersection = np.intersect1d(
+                allowed_idx.astype(np.int64), bound_idx.astype(np.int64),
+            )
             if len(intersection) > 0:
                 galaxy_particles[int(gid)] = intersection
-                galaxy_bound[int(gid)] = bound_idx
+                galaxy_bound[int(gid)] = bound_idx.astype(np.int64)
 
         galaxy_table = snap_df[["Sub_tree_id", "host_id", "mass",
                                 "distance_to_acc_id"]].copy()

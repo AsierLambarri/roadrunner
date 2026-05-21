@@ -83,7 +83,9 @@ def compute_riley_criterion(
         bound_idx = galaxy_bound.get(sid, empty)
         mstar = particle_masses[allowed_idx].sum()
         if mstar > 0:
-            bound_overlap = np.intersect1d(allowed_idx, bound_idx)
+            bound_overlap = np.intersect1d(
+                allowed_idx.astype(np.int64), bound_idx.astype(np.int64),
+            )
             f_bound = particle_masses[bound_overlap].sum() / mstar
         else:
             f_bound = 0.0

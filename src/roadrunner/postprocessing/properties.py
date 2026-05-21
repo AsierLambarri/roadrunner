@@ -198,9 +198,10 @@ def compute_galaxy_properties(
 
         r_t = compute_tidal_radius(host_potential, sat_mass, distance)
 
-        gal_pos = particle_coords[indices, :3]
-        gal_vel = particle_coords[indices, 3:6]
-        gal_masses = particle_masses[indices]
+        indices_int = np.asarray(indices, dtype=np.intp)
+        gal_pos = particle_coords[indices_int, :3]
+        gal_vel = particle_coords[indices_int, 3:6]
+        gal_masses = particle_masses[indices_int]
         Mtot = gal_masses.sum()
         npart = indices.size
 
