@@ -15,6 +15,8 @@ from roadrunner.io.logging import RunLogger, format_runtime
 from roadrunner.readers.snapshot import SnapshotReader
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.physics.merger_tree import MergerTreeHandlerCSV
+from roadrunner.postprocessing.properties import compute_galaxy_properties
+from roadrunner.postprocessing.mixing import compute_riley_criterion
 from roadrunner.pipeline.snapshot_processor import SnapshotProcessor
 
 
@@ -75,6 +77,94 @@ class AccretionPipeline:
         stats.update(result.statistics)
         stats.update(extra)
         self.logger.write_snapshot(stats)
+
+    # ── Tracker helpers ──────────────────────────────────────────
+
+    def _update_trackers(self, snap_id, snap_data, result, satellites,
+                         birth_tracker, assembly_tracker):
+        if birth_tracker is not None:
+            df = result.particle_df
+            arr_idx = df["array_index"].values
+            sim_ids = snap_data.indices[arr_idx]
+            birth_tracker.update(
+                t_snap=snap_data.time, snapshot_id=snap_id,
+                particle_ids=sim_ids,
+                host_ids=df["Sub_tree_id"].values,
+                timescales=df.get("timescale", np.full(len(df), 0.1)).values,
+            )
+        if assembly_tracker is not None:
+            assignment_map = {}
+            for sid, group in result.particle_df.groupby("Sub_tree_id"):
+                arr_idx = group["array_index"].values
+                assignment_map[int(sid)] = set(
+                    snap_data.indices[arr_idx].tolist(),
+                )
+            birth_map = (
+                birth_tracker.current_birth_map()
+                if birth_tracker else {}
+            )
+            assembly_tracker.update(
+                snap_id, assignment_map, birth_map, satellites,
+            )
+
+    def _track_and_reduce(self, snap_df, snap_data, ensemble, result,
+                          assembly_tracker):
+        bound_csc, _ = ensemble.get_particles()
+        coords = np.column_stack([snap_data.positions, snap_data.velocities])
+
+        assembly_map = assembly_tracker.current()
+        galaxy_particles = {}
+        galaxy_bound = {}
+        sid_to_col = {sid: i for i, sid in enumerate(bound_csc.column_id)}
+        for gid, sim_set in assembly_map.items():
+            col = sid_to_col.get(gid)
+            if col is None:
+                continue
+            bound_idx = bound_csc.column_indices[col]
+            sim_arr = np.array(list(sim_set), dtype=np.uint64)
+            allowed_idx = snap_data.array_index(sim_arr)
+            allowed_idx = allowed_idx[allowed_idx >= 0]
+            intersection = np.intersect1d(allowed_idx, bound_idx)
+            if len(intersection) > 0:
+                galaxy_particles[int(gid)] = intersection
+                galaxy_bound[int(gid)] = bound_idx
+
+        galaxy_table = snap_df[["Sub_tree_id", "host_id", "mass",
+                                "distance_to_acc_id"]].copy()
+        galaxy_table.set_index("Sub_tree_id", inplace=True)
+        host_row = snap_df[
+            snap_df["Sub_tree_id"] == self.processor.accretion_id
+        ]
+        host_props = host_row.iloc[0] if not host_row.empty else snap_df.iloc[0]
+
+        galaxy_centers = {}
+        for sid, params in result.fitted_parameters.items():
+            mean = params.get("mean")
+            if mean is not None:
+                galaxy_centers[int(sid)] = np.asarray(mean)
+
+        properties = compute_galaxy_properties(
+            accretion_id=self.processor.accretion_id,
+            particle_masses=snap_data.masses,
+            particle_coords=coords,
+            galaxy_particles=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            halo_model=self.processor.halo_model,
+            n_los=self.processor.n_los,
+            galaxy_centers=galaxy_centers if galaxy_centers else None,
+        )
+
+        dynstate = compute_riley_criterion(
+            main_id=self.processor.accretion_id,
+            particle_masses=snap_data.masses,
+            particle_coords=coords,
+            galaxy_allowed=galaxy_particles,
+            galaxy_bound=galaxy_bound,
+            redshift=snap_data.redshift,
+        )
+
+        return properties, dynstate
 
     # ── Run ───────────────────────────────────────────────────────
 
@@ -188,16 +278,30 @@ class AccretionPipeline:
                     previous_resp=previous_resp,
                 )
 
+                # Trackers (persistent sim ID space)
+                self._update_trackers(
+                    snap_id, snap_data, result, satellites,
+                    self.birth_tracker, self.assembly_tracker,
+                )
+
+                # Track + reduce (sim ID → array index for bound ∩ allowed)
+                properties, dynstate = self._track_and_reduce(
+                    snap_df, snap_data, ensemble, result,
+                    self.assembly_tracker,
+                ) if self.assembly_tracker is not None else (
+                    pd.DataFrame(), pd.DataFrame(),
+                )
+
                 # Convert for next snapshot: array_index → sim ID
                 previous_resp_sim = self._to_sim_space(
                     result.responsibilities, snap_data,
                 )
 
-                # I/O (temporary until Part 2 refactors this into _write_snapshot_output)
+                # I/O
                 if self.cat_writer:
                     self.cat_writer.write_snapshot(
                         snap_id, snap_data.time,
-                        pd.DataFrame(), pd.DataFrame(), {},
+                        properties, dynstate, satellites,
                     )
                 if self.part_writer:
                     self.part_writer.write_snapshot(
