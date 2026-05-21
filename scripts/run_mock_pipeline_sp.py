@@ -71,9 +71,9 @@ def main():
         tree["distance_to_acc_id"] = 0.0
 
     # ── I/O writers ──────────────────────────────────────────────
-    cat_w = HDF5CatalogueWriter(output_dir, mode="w-")
-    part_w = HDF5ParticleWriter(output_dir, mode="w-", float_atol=1e-4)
-    assign_w = HDF5AssignmentWriter(output_dir, mode="w-", float_atol=1e-4)
+    cat_w = HDF5CatalogueWriter(output_dir)
+    part_w = HDF5ParticleWriter(output_dir, float_atol=1e-4)
+    assign_w = HDF5AssignmentWriter(output_dir, float_atol=1e-4)
     logger = RunLogger(os.path.join(output_dir, "run.log"))
 
     # ── Header ───────────────────────────────────────────────────

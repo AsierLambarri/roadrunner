@@ -8,17 +8,13 @@ from roadrunner.physics.scaler import StandardScaler
 
 
 class HDF5ParticleWriter:
-    def __init__(self, output_dir, mode="w-", float_atol=1e-4):
+    def __init__(self, output_dir, float_atol=1e-4):
         os.makedirs(output_dir, exist_ok=True)
         self._path = os.path.join(output_dir, "particles.hdf5")
-        self._mode = mode
         self._float_atol = float_atol
-        self._first = True
 
     def write_snapshot(self, snapshot_id, time, redshift, snapshot_data):
-        mode = self._mode if self._first else "a"
-        self._first = False
-        with h5py.File(self._path, mode) as hf:
+        with h5py.File(self._path, "a") as hf:
             snap_grp = hf.require_group(f"/snapshots/{snapshot_id}")
             snap_grp.attrs["time"] = float(time)
             snap_grp.attrs["redshift"] = float(redshift)

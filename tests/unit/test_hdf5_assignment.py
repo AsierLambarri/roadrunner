@@ -61,7 +61,7 @@ class TestHDF5AssignmentWriter:
 
     def test_write_snapshot_galaxy_groups(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5AssignmentWriter(tmp_dir, mode="w")
+        w = HDF5AssignmentWriter(tmp_dir)
         result, csc = _make_assignment_result()
         w.write_snapshot(0, 13.0, result, csc)
 
@@ -82,7 +82,7 @@ class TestHDF5AssignmentWriter:
 
     def test_timescales(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5AssignmentWriter(tmp_dir, mode="w")
+        w = HDF5AssignmentWriter(tmp_dir)
         result, csc = _make_assignment_result()
         w.write_snapshot(0, 13.0, result, csc)
         ts = np.full(100, 0.5, dtype=np.float32)
@@ -94,7 +94,7 @@ class TestHDF5AssignmentWriter:
 
     def test_empty_assignment(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5AssignmentWriter(tmp_dir, mode="w")
+        w = HDF5AssignmentWriter(tmp_dir)
         df = pd.DataFrame({"array_index": pd.array([], dtype=np.uint64),
                            "Sub_tree_id": pd.array([], dtype=np.int64)})
         empty_csc = SparseCSC(

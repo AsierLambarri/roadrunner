@@ -188,9 +188,9 @@ def main():
             os.remove(fp)
 
     # ── Init writers ─────────────────────────────────────────────
-    cat_writer = HDF5CatalogueWriter(OUTPUT_DIR, mode="w-")
-    part_writer = HDF5ParticleWriter(OUTPUT_DIR, mode="w-", float_atol=1e-4)
-    assign_writer = HDF5AssignmentWriter(OUTPUT_DIR, mode="w-", float_atol=1e-4)
+    cat_writer = HDF5CatalogueWriter(OUTPUT_DIR)
+    part_writer = HDF5ParticleWriter(OUTPUT_DIR, float_atol=1e-4)
+    assign_writer = HDF5AssignmentWriter(OUTPUT_DIR, float_atol=1e-4)
     logger = RunLogger(LOG_PATH)
     logger.write_header({
         "output_dir": OUTPUT_DIR,

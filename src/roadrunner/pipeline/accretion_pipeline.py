@@ -114,15 +114,6 @@ class AccretionPipeline:
                 print(f"Resume failed, starting fresh: {e}")
                 resume = False
 
-        # ── Resume cleanup: remove per-snapshot output files ─────
-        # Keep catalogue.hdf5 (header + previously written snapshots)
-        # and checkpoint.zst. Recreate particles + assignment.
-        if resume:
-            for f in ("particles.hdf5", "assignment.hdf5"):
-                fp = os.path.join(output_dir, f)
-                if os.path.isfile(fp):
-                    os.remove(fp)
-
         # ── Pre-loop (once, skipped on resume) ────────────────────
         if not resume:
             self.merger_handler.compute_scale_radii()

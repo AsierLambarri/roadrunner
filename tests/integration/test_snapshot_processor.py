@@ -148,9 +148,9 @@ class TestSnapshotProcessor:
         from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
         from roadrunner.io.hdf5_reader import HDF5CatalogueReader
 
-        cat_w = HDF5CatalogueWriter(str(tmp_path), mode="w-")
-        part_w = HDF5ParticleWriter(str(tmp_path), mode="w-", float_atol=1e-4)
-        assign_w = HDF5AssignmentWriter(str(tmp_path), mode="w-", float_atol=1e-4)
+        cat_w = HDF5CatalogueWriter(str(tmp_path))
+        part_w = HDF5ParticleWriter(str(tmp_path), float_atol=1e-4)
+        assign_w = HDF5AssignmentWriter(str(tmp_path), float_atol=1e-4)
 
         sp = SnapshotProcessor(
             assigner=assigner,

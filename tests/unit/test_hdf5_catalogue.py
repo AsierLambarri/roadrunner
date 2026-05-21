@@ -15,7 +15,7 @@ class TestHDF5CatalogueWriter:
 
     def test_write_and_read_header(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5CatalogueWriter(tmp_dir, mode="w")
+        w = HDF5CatalogueWriter(tmp_dir)
         merger = pd.DataFrame({"Sub_tree_id": [1], "mass": [1e10]})
         equiv = pd.DataFrame({"snapshot": [0], "time": [13.8]})
         w.write_header(
@@ -34,7 +34,7 @@ class TestHDF5CatalogueWriter:
 
     def test_write_snapshot_properties(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5CatalogueWriter(tmp_dir, mode="w")
+        w = HDF5CatalogueWriter(tmp_dir)
         merger = pd.DataFrame({"Sub_tree_id": [1], "mass": [1e10]})
         equiv = pd.DataFrame({"snapshot": [0], "time": [13.8]})
         w.write_header(1, [0], {}, merger, equiv)
@@ -55,7 +55,7 @@ class TestHDF5CatalogueWriter:
 
     def test_finalize(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5CatalogueWriter(tmp_dir, mode="w")
+        w = HDF5CatalogueWriter(tmp_dir)
         merger = pd.DataFrame({"Sub_tree_id": [1], "mass": [1e10]})
         equiv = pd.DataFrame({"snapshot": [0], "time": [13.8]})
         w.write_header(1, [0], {}, merger, equiv)
@@ -70,7 +70,7 @@ class TestHDF5CatalogueWriter:
 
     def test_empty_finalize(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5CatalogueWriter(tmp_dir, mode="w")
+        w = HDF5CatalogueWriter(tmp_dir)
         merger = pd.DataFrame({"Sub_tree_id": [1], "mass": [1e10]})
         equiv = pd.DataFrame({"snapshot": [0], "time": [13.8]})
         w.write_header(1, [0], {}, merger, equiv)

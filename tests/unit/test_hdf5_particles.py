@@ -27,7 +27,7 @@ class TestHDF5ParticleWriter:
 
     def test_write_snapshot_creates_datasets(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5ParticleWriter(tmp_dir, mode="w")
+        w = HDF5ParticleWriter(tmp_dir)
         snap = self._make_snap_data()
         w.write_snapshot(0, 13.0, 0.1, snap)
         path = os.path.join(tmp_dir, "particles.hdf5")
@@ -45,7 +45,7 @@ class TestHDF5ParticleWriter:
 
     def test_scaler_round_trip(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5ParticleWriter(tmp_dir, mode="w")
+        w = HDF5ParticleWriter(tmp_dir)
         snap = self._make_snap_data()
         w.write_snapshot(0, 13.0, 0.1, snap)
         path = os.path.join(tmp_dir, "particles.hdf5")
@@ -66,7 +66,7 @@ class TestHDF5ParticleWriter:
 
     def test_multiple_snapshots(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
-        w = HDF5ParticleWriter(tmp_dir, mode="w")
+        w = HDF5ParticleWriter(tmp_dir)
         w.write_snapshot(0, 13.0, 0.1, self._make_snap_data(30))
         w.write_snapshot(1, 12.0, 0.2, self._make_snap_data(40))
         path = os.path.join(tmp_dir, "particles.hdf5")

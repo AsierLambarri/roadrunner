@@ -7,17 +7,10 @@ from roadrunner.helpers import select_float_dtype, select_uint_dtype
 
 
 class HDF5AssignmentWriter:
-    def __init__(self, output_dir, mode="w-", float_atol=1e-4):
+    def __init__(self, output_dir, float_atol=1e-4):
         os.makedirs(output_dir, exist_ok=True)
         self._path = os.path.join(output_dir, "assignment.hdf5")
-        self._mode = mode
         self._float_atol = float_atol
-        self._first = True
-
-    def _mode_for_write(self):
-        mode = self._mode if self._first else "a"
-        self._first = False
-        return mode
 
     def _gal_uint_dtype(self, gids):
         return select_uint_dtype(int(max(gids)) if len(gids) > 0 else 1)
@@ -28,7 +21,7 @@ class HDF5AssignmentWriter:
 
     def write_snapshot(self, snapshot_id, time,
                        assignment_result, boundness_csc):
-        with h5py.File(self._path, self._mode_for_write()) as hf:
+        with h5py.File(self._path, "a") as hf:
             snap_grp = hf.require_group(f"/snapshots/{snapshot_id}")
             snap_grp.attrs["time"] = float(time)
 

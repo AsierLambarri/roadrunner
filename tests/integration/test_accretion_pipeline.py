@@ -53,9 +53,9 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2):
         accretion_id=1,
         n_los=3,
     )
-    cat_w = HDF5CatalogueWriter(str(tmp_path), mode="w-")
-    part_w = HDF5ParticleWriter(str(tmp_path), mode="w-", float_atol=1e-4)
-    assign_w = HDF5AssignmentWriter(str(tmp_path), mode="w-", float_atol=1e-4)
+    cat_w = HDF5CatalogueWriter(str(tmp_path))
+    part_w = HDF5ParticleWriter(str(tmp_path), float_atol=1e-4)
+    assign_w = HDF5AssignmentWriter(str(tmp_path), float_atol=1e-4)
     logger = RunLogger(os.path.join(str(tmp_path), "run.log"))
 
     # Snapshot reader that returns mock data from npz
