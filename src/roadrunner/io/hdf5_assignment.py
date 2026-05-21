@@ -34,15 +34,18 @@ class HDF5AssignmentWriter:
 
             galaxies_grp = snap_grp.require_group("galaxies")
 
-            all_gids = list(assignment_result.responsibilities.keys())
+            resp_csc = assignment_result.responsibilities
+            all_gids = list(resp_csc.column_id)
             uint_dtype = self._gal_uint_dtype(all_gids) if all_gids else np.uint32
-            float_dtype = self._pick_float_dtype(
-                np.concatenate([v for _, v in assignment_result.responsibilities.values()])
-                if assignment_result.responsibilities else np.array([1.0])
-            )
+            if all_gids:
+                all_vals = np.concatenate(resp_csc.column_values)
+                float_dtype = self._pick_float_dtype(all_vals)
+            else:
+                float_dtype = np.float32
 
-            for gid in all_gids:
-                resp_idx, resp_vals = assignment_result.responsibilities[gid]
+            for j, gid in enumerate(all_gids):
+                resp_idx = resp_csc.column_indices[j]
+                resp_vals = resp_csc.column_values[j]
 
                 col_mask = boundness_csc.column_id == gid
                 col_pos = np.where(col_mask)[0]

@@ -96,14 +96,12 @@ class TestSnapshotProcessor:
         # First snapshot
         halos, ensemble, r1 = sp.process(tree, coords, masses, newborn)
 
-        # Convert resp_map to SparseCSC for previous_resp
-        from roadrunner.clustering.sparse import SparseCSC
-        col_idx = [idx for idx, _ in r1.responsibilities.values()]
-        col_val = [val for _, val in r1.responsibilities.values()]
-        col_id = np.array(list(r1.responsibilities.keys()), dtype=np.int64)
-        prev_csc = SparseCSC(col_idx, col_val, column_id=col_id)
+        # r1.responsibilities is already a SparseCSC — use directly
+        # (No conversion needed; remap_rows would be used for cross-snapshot
+        #  translation in the real pipeline.)
+        prev_csc = r1.responsibilities
 
-        # Second snapshot (same data)
+        # Second snapshot (same data — uses sim_id space directly as array_index)
         halos, ensemble, r2 = sp.process(
             tree, coords, masses, newborn, previous_resp=prev_csc,
         )

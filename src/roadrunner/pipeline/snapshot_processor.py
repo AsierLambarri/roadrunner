@@ -149,11 +149,11 @@ class SnapshotProcessor:
         # ── Build preprocessing for Riley criterion ───────────────
         bound_csc, _ = ensemble.get_particles()
         galaxy_bound = {}
-        sid_to_idx = {
+        bound_sid_to_idx = {
             sid: i for i, sid in enumerate(bound_csc.column_id)
         }
-        for gid, (idx, _) in assignment_result.responsibilities.items():
-            col = sid_to_idx.get(gid)
+        for j, gid in enumerate(assignment_result.responsibilities.column_id):
+            col = bound_sid_to_idx.get(gid)
             if col is not None:
                 galaxy_bound[int(gid)] = bound_csc.column_indices[col]
 

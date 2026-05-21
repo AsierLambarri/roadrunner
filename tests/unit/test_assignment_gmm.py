@@ -129,7 +129,7 @@ class TestGMMAssigner:
         assigner = GMMAssigner(verbose=0)
         result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
         assert result.particle_df is not None
-        assert isinstance(result.responsibilities, dict)
+        assert isinstance(result.responsibilities, SparseCSC)
 
     def test_two_halos_assigned(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
@@ -145,12 +145,12 @@ class TestGMMAssigner:
         groups = [[0], [1]]
         assigner = GMMAssigner(verbose=0)
         result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
-        assert isinstance(result.responsibilities, dict)
-        for key, val in result.responsibilities.items():
-            assert isinstance(key, (int, np.integer))
-            assert len(val) == 2
-            assert isinstance(val[0], np.ndarray)
-            assert isinstance(val[1], np.ndarray)
+        assert isinstance(result.responsibilities, SparseCSC)
+        assert len(result.responsibilities.column_id) > 0
+        for j in range(len(result.responsibilities)):
+            assert isinstance(result.responsibilities.column_id[j], (int, np.integer))
+            assert isinstance(result.responsibilities.column_indices[j], np.ndarray)
+            assert isinstance(result.responsibilities.column_values[j], np.ndarray)
 
     def test_newborn_handled(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)

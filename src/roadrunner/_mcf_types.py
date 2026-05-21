@@ -1,13 +1,13 @@
-from typing import Any, Protocol, runtime_checkable
+from __future__ import annotations
+from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-ParticleArray = NDArray[np.floating]
-HaloID = int
-SnapshotID = int
-CSCResp = tuple[list[list[int]], list[list[float]]]
+if TYPE_CHECKING:
+    from roadrunner.clustering.sparse import SparseCSC
+
 RespMap = dict[int, tuple[np.ndarray, np.ndarray]]
 
 
@@ -49,6 +49,13 @@ class SnapshotData:
         result[found] = self._index_sorter[pos[found]]
         return result
 
+    def index_to_id_map(self) -> tuple[np.ndarray, np.ndarray]:
+        idx = np.arange(len(self.indices), dtype=np.int64)
+        return idx, self.indices.astype(np.int64, copy=False)
+
+    def id_to_index_map(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.indices.astype(np.int64, copy=False), np.arange(len(self.indices), dtype=np.int64)
+
 
 class BoundnessResult:
     candidate_indices: NDArray[np.integer]
@@ -68,14 +75,14 @@ class BoundnessResult:
 
 class AssignmentResult:
     particle_df: pd.DataFrame
-    responsibilities: CSCResp
+    responsibilities: object  # SparseCSC at runtime
     fitted_parameters: dict
     statistics: dict
 
     def __init__(
         self,
         particle_df: pd.DataFrame,
-        responsibilities: CSCResp,
+        responsibilities: object,
         fitted_parameters: dict,
         statistics: dict,
     ) -> None:

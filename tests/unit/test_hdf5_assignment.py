@@ -16,16 +16,21 @@ def _make_assignment_result(n_particles=100, n_galaxies=5):
     subtree_ids = rng.integers(1, n_galaxies + 1, n_particles)
     df = pd.DataFrame({"array_index": indices, "Sub_tree_id": subtree_ids})
 
-    resp_map = {}
     col_idx_list = []
     col_val_list = []
+    gid_list = []
     for gid in range(1, n_galaxies + 1):
         mask = subtree_ids == gid
         pid = indices[mask]
         vals = rng.uniform(-1, 0, len(pid)).astype(np.float32)
-        resp_map[gid] = (pid, vals)
         col_idx_list.append(pid)
         col_val_list.append(vals)
+        gid_list.append(gid)
+
+    resp_csc = SparseCSC(
+        col_idx_list, col_val_list,
+        column_id=np.array(gid_list, dtype=np.int64),
+    )
 
     fitted = {}
     for gid in range(1, n_galaxies + 1):
@@ -37,14 +42,16 @@ def _make_assignment_result(n_particles=100, n_galaxies=5):
 
     result = AssignmentResult(
         particle_df=df,
-        responsibilities=resp_map,
+        responsibilities=resp_csc,
         fitted_parameters=fitted,
         statistics={"groups": 1},
     )
     # Build matching boundness CSC
-    csc = SparseCSC(col_idx_list, col_val_list,
-                    column_id=np.arange(1, n_galaxies + 1, dtype=np.int64))
-    return result, csc
+    bound_csc = SparseCSC(
+        col_idx_list, col_val_list,
+        column_id=np.arange(1, n_galaxies + 1, dtype=np.int64),
+    )
+    return result, bound_csc
 
 
 class TestHDF5AssignmentWriter:
@@ -90,17 +97,21 @@ class TestHDF5AssignmentWriter:
         w = HDF5AssignmentWriter(tmp_dir, mode="w")
         df = pd.DataFrame({"array_index": pd.array([], dtype=np.uint64),
                            "Sub_tree_id": pd.array([], dtype=np.int64)})
+        empty_csc = SparseCSC(
+            [np.array([], dtype=np.int64)],
+            [np.array([], dtype=np.float32)],
+            column_id=np.array([], dtype=np.int64),
+        )
         result = AssignmentResult(
             particle_df=df,
-            responsibilities={},
+            responsibilities=empty_csc,
             fitted_parameters={},
             statistics={},
         )
-        # SparseCSC requires at least one non-empty column
-        csc = SparseCSC([np.array([], dtype=np.int64)],
-                        [np.array([], dtype=np.float32)],
-                        column_id=np.array([1], dtype=np.int64))
-        w.write_snapshot(0, 13.0, result, csc)
+        bound_csc = SparseCSC([np.array([], dtype=np.int64)],
+                              [np.array([], dtype=np.float32)],
+                              column_id=np.array([1], dtype=np.int64))
+        w.write_snapshot(0, 13.0, result, bound_csc)
         path = os.path.join(tmp_dir, "assignment.hdf5")
         with h5py.File(path, "r") as hf:
             assert "/snapshots/0/hard_assignment" in hf

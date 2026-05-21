@@ -7,7 +7,7 @@ from scipy.stats import rankdata
 
 from roadrunner._mcf_types import AssignmentResult
 from roadrunner.clustering.assignment.statistics import GMMAssignerStatistics
-from roadrunner.clustering.sparse import stitch_zero_rows
+from roadrunner.clustering.sparse import SparseCSC, stitch_zero_rows
 from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
@@ -106,8 +106,15 @@ class GMMAssigner:
             self.particles_df, self.resp_map, self.parameters,
             boundness_csc=csc_b,
         )
+
+        gids = np.array(sorted(self.resp_map.keys()), dtype=np.int64)
+        resp_csc = SparseCSC(
+            [self.resp_map[g][0] for g in gids],
+            [self.resp_map[g][1] for g in gids],
+            column_id=gids,
+        )
         return AssignmentResult(
-            self.particles_df, self.resp_map, self.parameters, {
+            self.particles_df, resp_csc, self.parameters, {
                 "groups": len(groups),
                 "halos_in_groups": sum(len(g) for g in groups),
                 "bound_particles": self.ensemble.nstars,
