@@ -25,14 +25,14 @@ class RunConfig:
     max_iter: int = 10
     tol: float = 1e-2
     reg_covar: float = 1e-6
-    n_los: int = 11
-    search_factor: float = 2.0
+    n_los: int = 15
+    search_factor: float = 1.0
     min_particles: int = 10
 
     birth_window_factor: float = 5.0
-    enforce_initial_hosts: bool = False
+    enforce_initial_hosts: bool = True
 
     output_dir: str = "./output"
-    save_particles: bool = False
+    save_particles: bool = True
     save_assignment: bool = True
     float_atol: float = 1e-4
