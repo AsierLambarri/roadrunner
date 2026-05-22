@@ -58,6 +58,17 @@ def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotD
 def build_reduction_input(snap_data: SnapshotData, ensemble, assembly_tracker) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
     bound_csc, _ = ensemble.get_particles()
     sid_to_col = {int(sid): i for i, sid in enumerate(bound_csc.column_id)}
+
+    if assembly_tracker is None:
+        galaxy_particles = {}
+        galaxy_bound = {}
+        for i, sid in enumerate(bound_csc.column_id):
+            idx = bound_csc.column_indices[i]
+            if len(idx) > 0:
+                galaxy_particles[int(sid)] = idx.astype(np.int64)
+                galaxy_bound[int(sid)] = idx.astype(np.int64)
+        return galaxy_particles, galaxy_bound
+
     assembly_map = assembly_tracker.current()
 
     galaxy_particles = {}

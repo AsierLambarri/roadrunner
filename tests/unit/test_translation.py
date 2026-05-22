@@ -317,3 +317,31 @@ class TestBuildReductionInput:
         galaxy_particles, galaxy_bound = build_reduction_input(snap, ensemble, at)
 
         assert 10 not in galaxy_particles
+
+    def test_none_tracker_returns_all_bound(self):
+        n = 20
+        snap = _make_snap_data(n=n, start_id=0)
+        h1 = _halo(sid=10, n_bound=5)
+        h2 = _halo(sid=20, n_bound=3)
+        ensemble = HaloEnsemble([h1, h2])
+
+        galaxy_particles, galaxy_bound = build_reduction_input(snap, ensemble, None)
+
+        assert 10 in galaxy_particles
+        assert 20 in galaxy_particles
+        np.testing.assert_array_equal(sorted(galaxy_particles[10].tolist()), [0, 1, 2, 3, 4])
+        np.testing.assert_array_equal(sorted(galaxy_particles[20].tolist()), [0, 1, 2])
+        np.testing.assert_array_equal(sorted(galaxy_bound[10].tolist()), [0, 1, 2, 3, 4])
+        np.testing.assert_array_equal(sorted(galaxy_bound[20].tolist()), [0, 1, 2])
+
+    def test_none_tracker_empty_halo_skipped(self):
+        n = 20
+        snap = _make_snap_data(n=n, start_id=0)
+        h1 = _halo(sid=10, n_bound=0)
+        h2 = _halo(sid=20, n_bound=3)
+        ensemble = HaloEnsemble([h1, h2])
+
+        galaxy_particles, galaxy_bound = build_reduction_input(snap, ensemble, None)
+
+        assert 10 not in galaxy_particles
+        assert 20 in galaxy_particles
