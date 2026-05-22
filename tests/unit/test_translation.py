@@ -274,8 +274,24 @@ class TestBuildReductionInput:
 
         assert 10 in galaxy_particles
         assert 20 in galaxy_particles
+        np.testing.assert_array_equal(sorted(galaxy_particles[10].tolist()), [0, 1, 2, 3, 4])
+        np.testing.assert_array_equal(sorted(galaxy_particles[20].tolist()), [0, 1, 2])
         np.testing.assert_array_equal(sorted(galaxy_bound[10].tolist()), [0, 1, 2, 3, 4])
         np.testing.assert_array_equal(sorted(galaxy_bound[20].tolist()), [0, 1, 2])
+
+    def test_particles_not_in_bound(self):
+        n = 20
+        snap = _make_snap_data(n=n, start_id=0)
+        h1 = _halo(sid=10, n_bound=3)
+        ensemble = HaloEnsemble([h1])
+        at = AssemblyTracker(n_sat_history=2)
+        at._infall_lists = {10: {0, 1, 5, 6}}
+
+        galaxy_particles, galaxy_bound = build_reduction_input(snap, ensemble, at)
+
+        assert 10 in galaxy_particles
+        np.testing.assert_array_equal(sorted(galaxy_particles[10].tolist()), [0, 1, 5, 6])
+        np.testing.assert_array_equal(sorted(galaxy_bound[10].tolist()), [0, 1])
 
     def test_unknown_galaxy_skipped(self):
         n = 20
@@ -290,7 +306,7 @@ class TestBuildReductionInput:
         assert 10 in galaxy_particles
         assert 99 not in galaxy_particles
 
-    def test_empty_intersection_skipped(self):
+    def test_no_allowed_particles_skipped(self):
         n = 20
         snap = _make_snap_data(n=n, start_id=0)
         h1 = _halo(sid=10, n_bound=3)

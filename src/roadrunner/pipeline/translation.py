@@ -74,8 +74,8 @@ def build_reduction_input(snap_data: SnapshotData, ensemble, assembly_tracker) -
         intersection = np.intersect1d(
             allowed_idx.astype(np.int64), bound_idx.astype(np.int64),
         )
-        if len(intersection) > 0:
-            galaxy_particles[int(gid)] = intersection
-            galaxy_bound[int(gid)] = bound_idx.astype(np.int64)
+        if len(allowed_idx) > 0:
+            galaxy_particles[int(gid)] = allowed_idx
+            galaxy_bound[int(gid)] = intersection
 
     return galaxy_particles, galaxy_bound
