@@ -40,10 +40,10 @@ def main():
     n_colors = max(len(unique_true), len(unique_pred))
     colors = plt.cm.tab20(np.linspace(0, 1, n_colors))
 
-    id_to_center_x = {int(row["Sub_tree_id"]): row["position_x"] for row in gp}
-    id_to_center_y = {int(row["Sub_tree_id"]): row["position_y"] for row in gp}
-    id_to_center_vx = {int(row["Sub_tree_id"]): row["velocity_x"] for row in gp}
-    id_to_center_vy = {int(row["Sub_tree_id"]): row["velocity_y"] for row in gp}
+    id_to_pos_x = {int(row["Sub_tree_id"]): row["position_x"] for row in gp}
+    id_to_pos_y = {int(row["Sub_tree_id"]): row["position_y"] for row in gp}
+    id_to_vel_x = {int(row["Sub_tree_id"]): row["velocity_x"] for row in gp}
+    id_to_vel_y = {int(row["Sub_tree_id"]): row["velocity_y"] for row in gp}
     id_to_rh = {int(row["Sub_tree_id"]): row["rh"] for row in gp}
     id_to_sigma = {int(row["Sub_tree_id"]): row["sigma"] for row in gp}
 
@@ -80,10 +80,16 @@ def main():
 
         for sid in unique_pred:
             sid_int = int(sid)
-            if sid_int not in id_to_center_x:
+            if sid_int not in id_to_pos_x:
                 continue
-            cx = id_to_center_x[sid_int]
-            cy = id_to_center_y[sid_int]
+
+            if row == 0:
+                cx = id_to_pos_x[sid_int]
+                cy = id_to_pos_y[sid_int]
+            else:
+                cx = id_to_vel_x[sid_int]
+                cy = id_to_vel_y[sid_int]
+
             pred_ax.plot(cx, cy, "k+", markersize=8, markeredgewidth=1.5, zorder=5)
 
             if row == 0:
