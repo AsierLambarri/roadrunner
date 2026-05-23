@@ -7,9 +7,9 @@ Flow per snapshot:
   3. On crash, restart re-does the failed snapshot.
 
 Usage:
-  python scripts/run_mock_pipeline_full.py                     # fresh run
-  python scripts/run_mock_pipeline_full.py --resume            # resume
-  python scripts/run_mock_pipeline_full.py --fail-on 1         # simulate crash
+  python test_scripts/run_mock_pipeline_full.py                     # fresh run
+  python test_scripts/run_mock_pipeline_full.py --resume            # resume
+  python test_scripts/run_mock_pipeline_full.py --fail-on 1         # simulate crash
 """
 
 import argparse
@@ -147,6 +147,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="test_data/mock_snap_tight",
                         help="Path to mock dataset directory")
+    parser.add_argument("--output-dir", default=None,
+                        help="Output directory (default: test_output/run_mock_pipeline_full)")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--fail-on", type=int, default=None,
                         help="Simulate crash on this snapshot")
@@ -161,7 +163,7 @@ def main():
     N_SNAPSHOTS = args.n_snapshots
     fail_on = args.fail_on
 
-    OUTPUT_DIR = os.path.join(DATA_DIR, "output")
+    OUTPUT_DIR = args.output_dir or os.path.join("test_output", "run_mock_pipeline_full")
     CHECKPOINT_PATH = os.path.join(OUTPUT_DIR, "checkpoint.zst")
     LOG_PATH = os.path.join(OUTPUT_DIR, "run.log")
 

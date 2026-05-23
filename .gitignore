@@ -36,8 +36,8 @@ src/roadrunner/_accme/
 # Test data (potentially large files)
 test_data/
 
-# Generated comparison output
-test_scripts/mock_tight_comparison/
+# Test script output
+test_output/
 
 # Planning documents (not part of source code)
 planning/

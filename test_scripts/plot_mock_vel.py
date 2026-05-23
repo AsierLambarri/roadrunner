@@ -2,7 +2,7 @@
 """Plot vx, vy of a mock snapshot dataset.
 
 Usage:
-  python scripts/plot_mock_vel.py test_data/mock_snap -o figures/mock_vel.png
+  python test_scripts/plot_mock_vel.py test_data/mock_snap -o figures/mock_vel.png
 """
 
 import argparse

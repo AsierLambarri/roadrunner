@@ -36,7 +36,7 @@ from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "..", "test_data", "mock_snap_tight")
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "mock_tight_comparison")
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "..", "test_output", "run_mock_orchestrator")
 
 N_SNAPSHOTS = 2
 ACCRETION_ID = 1
@@ -193,9 +193,12 @@ def main():
     print(f"\nPipeline complete in {elapsed:.1f}s")
     print(f"Output written to {OUTPUT_DIR}")
 
-    # ── Compare with reference ──────────────────────────────────────
+    # ── Compare with reference (if available) ──────────────────────
     ref_dir = os.path.join(DATA_DIR, "output")
-    compare_results(OUTPUT_DIR, ref_dir)
+    if os.path.isdir(ref_dir):
+        compare_results(OUTPUT_DIR, ref_dir)
+    else:
+        print(f"\nNo reference output found at {ref_dir}, skipping comparison.")
 
 
 def compare_results(new_dir, ref_dir):
@@ -280,8 +283,7 @@ def compare_results(new_dir, ref_dir):
     report = "\n".join(report_lines)
     print(report)
 
-    report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "mock_tight_comparison", "comparison_report.txt")
+    report_path = os.path.join(OUTPUT_DIR, "comparison_report.txt")
     with open(report_path, "w") as f:
         f.write(report)
     print(f"\nReport saved to {report_path}")

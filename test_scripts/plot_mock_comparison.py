@@ -2,8 +2,8 @@
 """Plot mock snapshot: ground truth vs pipeline assignment side by side.
 
 Usage:
-  python scripts/plot_mock_comparison.py test_data/mock_snap -o figures/mock_comparison.png
-  python scripts/plot_mock_comparison.py test_data/mock_snap_tight -o figures/mock_comparison_tight.png
+  python test_scripts/plot_mock_comparison.py test_data/mock_snap -o figures/mock_comparison.png
+  python test_scripts/plot_mock_comparison.py test_data/mock_snap_tight -o figures/mock_comparison_tight.png
 """
 
 import argparse

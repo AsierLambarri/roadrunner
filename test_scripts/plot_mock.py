@@ -2,7 +2,7 @@
 """Plot XY positions of a mock snapshot dataset.
 
 Usage:
-  python scripts/plot_mock.py test_data/mock_snap -o figures/mock_xy.png
+  python test_scripts/plot_mock.py test_data/mock_snap -o figures/mock_xy.png
 """
 
 import argparse

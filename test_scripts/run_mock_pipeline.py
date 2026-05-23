@@ -2,7 +2,7 @@
 """Run the roadrunner assignment pipeline on mock data.
 
 Usage:
-  python scripts/run_mock_pipeline.py --data-dir test_data/mock_snap --cov-type diagonal
+  python test_scripts/run_mock_pipeline.py --data-dir test_data/mock_snap --cov-type diagonal
 """
 
 import argparse
