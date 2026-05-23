@@ -105,8 +105,8 @@ def main():
     # Physics
     parser.add_argument("--halo-model", type=str, default="kepler",
                         choices=["kepler", "nfw"])
-    parser.add_argument("--n-los", type=int, default=11)
-    parser.add_argument("--search-factor", type=float, default=2.0)
+    parser.add_argument("--n-los", type=int, default=15)
+    parser.add_argument("--search-factor", type=float, default=1.0)
 
     # Tracking
     parser.add_argument("--birth-window", type=float, default=5.0)
