@@ -102,3 +102,12 @@ class TestProperties:
     def test_max_snapshot(self, sample_df):
         eq = EquivalenceTable(sample_df)
         assert eq.max_snapshot == 200
+
+    def test_dataframe_property(self, sample_df):
+        eq = EquivalenceTable(sample_df)
+        df = eq.dataframe
+        assert isinstance(df, pd.DataFrame)
+        assert "snapshot" in df.columns
+        assert "snapname" in df.columns
+        assert "time" in df.columns
+        assert "redshift" in df.columns

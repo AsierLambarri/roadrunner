@@ -39,6 +39,10 @@ class EquivalenceTable:
         return sorted(self._df["snapshot"].unique().tolist())
 
     @property
+    def dataframe(self) -> pd.DataFrame:
+        return self._df
+
+    @property
     def min_snapshot(self) -> int:
         return int(self._df["snapshot"].min())
 
