@@ -14,7 +14,7 @@ from roadrunner.postprocessing.properties import compute_galaxy_properties
 class ReductionConfig:
     accretion_id: int
     halo_model: str = "kepler"
-    n_los: int = 11
+    n_los: int = 15
 
 
 def reduce_snapshot(

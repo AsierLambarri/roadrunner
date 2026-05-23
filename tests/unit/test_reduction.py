@@ -95,7 +95,7 @@ class TestReductionConfig:
         cfg = ReductionConfig(accretion_id=100)
         assert cfg.accretion_id == 100
         assert cfg.halo_model == "kepler"
-        assert cfg.n_los == 11
+        assert cfg.n_los == 15
 
     def test_custom(self):
         cfg = ReductionConfig(accretion_id=42, halo_model="nfw", n_los=15)
