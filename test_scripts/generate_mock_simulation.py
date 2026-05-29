@@ -23,6 +23,7 @@ import os
 
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
 
 
 def _age_to_redshift(t, H0_Gyr, omega_m, omega_lambda):
@@ -88,17 +89,15 @@ def main():
     base_halo_pos = base_tree[["position_x", "position_y", "position_z"]].values.astype(np.float64)
     base_halo_vel = base_tree[["velocity_x", "velocity_y", "velocity_z"]].values.astype(np.float64)
 
-    # ── Per-galaxy statistics (for newborn generation) ────────────
-    print("Computing per-galaxy statistics...")
+    # ── Per-galaxy KD-trees for velocity interpolation ────────────
+    print("Building per-galaxy KD-trees for newborn velocity assignment...")
     gal_centers = base_halo_pos.copy()
-    gal_velocities = base_halo_vel.copy()
-
-    gal_pos_std = np.zeros((n_halos, 3), dtype=np.float64)
-    gal_vel_std = np.zeros((n_halos, 3), dtype=np.float64)
+    gal_trees = []
+    gal_base_vels = []
     for i, hid in enumerate(halos):
         mask = base_galaxy_id == hid
-        gal_pos_std[i] = base_coords[mask, :3].std(axis=0)
-        gal_vel_std[i] = base_coords[mask, 3:6].std(axis=0)
+        gal_trees.append(cKDTree(base_coords[mask, :3]))
+        gal_base_vels.append(base_coords[mask, 3:6])
 
     median_mass = np.median(base_masses)
 
@@ -136,8 +135,16 @@ def main():
             # ── Add newborn particles ─────────────────────────────
             halo_assignments = np.arange(n_newborn) % n_halos
             newborn_gid = halos[halo_assignments]
-            newborn_pos = gal_centers[halo_assignments] + rng.normal(0, 1, (n_newborn, 3)) * gal_pos_std[halo_assignments]
-            newborn_vel = gal_velocities[halo_assignments] + rng.normal(0, 1, (n_newborn, 3)) * gal_vel_std[halo_assignments]
+
+            newborn_pos = np.zeros((n_newborn, 3), dtype=np.float64)
+            newborn_vel = np.zeros((n_newborn, 3), dtype=np.float64)
+
+            for j in range(n_newborn):
+                hi = int(halo_assignments[j])
+                newborn_pos[j] = gal_centers[hi] + rng.normal(0, 2, 3)
+                # 4 nearest base particles → mean velocity
+                _, idxs = gal_trees[hi].query(newborn_pos[j], k=min(4, gal_trees[hi].data.shape[0]))
+                newborn_vel[j] = gal_base_vels[hi][idxs].mean(axis=0)
 
             newborn_pos = np.nan_to_num(newborn_pos, nan=0.0)
             newborn_vel = np.nan_to_num(newborn_vel, nan=0.0)
