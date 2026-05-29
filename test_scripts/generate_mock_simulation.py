@@ -155,7 +155,12 @@ def main():
             cum_galaxy_id = np.hstack([cum_galaxy_id, newborn_gid])
             cum_born = np.hstack([cum_born, newborn_born])
 
-        n_curr = len(cum_masses)
+        # Save with comoving positions (kpccm) and v_sys added to velocities
+        save_coords = cum_coords.copy()
+        save_coords[:, :3] *= (1.0 + z[snap_k])   # physical → comoving
+        save_coords[:, 3:6] += v_sys               # add bulk flow to velocities
+
+        n_curr = len(save_coords)
         snap_indices = np.arange(n_curr, dtype=np.uint64)
 
         snap_path = os.path.join(output_dir, f"particles_{snap_k:03d}.npz")
@@ -163,7 +168,7 @@ def main():
             snap_path,
             indices=snap_indices,
             masses=cum_masses,
-            coords=cum_coords,
+            coords=save_coords,
             galaxy_id=cum_galaxy_id,
             born_snap=cum_born,
         )
@@ -172,17 +177,20 @@ def main():
               f"{n_curr} particles, {n_newborn if snap_k > 0 else 0} newborn, "
               f"disp_phys={v_sys * t_k}")
 
-    # ── Write merger tree (positions in comoving kpc) ─────────────
+    # ── Write merger tree (comoving kpc, km/s) ─────────────────────
     print("Writing merger tree...")
     frames = []
     for snap_k in range(n_snap):
         dup = base_tree.copy()
         dup["Snapshot"] = snap_k
         dup["Redshift"] = z[snap_k]
+        factor = 1.0 + z[snap_k]
         displ = v_sys * raw_cumulative[snap_k]
-        dup["position_x"] = base_halo_pos[:, 0] + displ[0]
-        dup["position_y"] = base_halo_pos[:, 1] + displ[1]
-        dup["position_z"] = base_halo_pos[:, 2] + displ[2]
+        for i, col in enumerate(["position_x", "position_y", "position_z"]):
+            dup[col] = (base_halo_pos[:, i] + displ[i]) * factor
+        for i, col in enumerate(["velocity_x", "velocity_y", "velocity_z"]):
+            dup[col] = base_halo_vel[:, i] + v_sys[i]
+        dup["virial_radius"] *= factor
         frames.append(dup)
     tree_all = pd.concat(frames, ignore_index=True)
     tree_all["host_id"] = -1
