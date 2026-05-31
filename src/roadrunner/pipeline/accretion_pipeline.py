@@ -136,18 +136,23 @@ class AccretionPipeline:
 
     def _process_snapshot(self, snap_id, idx, total, previous_resp_sim, t_start):
         try:
+            t0 = time.time()
             snap_df = self.merger_handler.select_snapshots(snap_id)
             if snap_df.empty:
                 raise RuntimeError(f"Empty merger tree for snapshot {snap_id}")
 
             file_path = self.equiv_table.snapshot_path(snap_id)
             snap_data = self.snapshot_reader.load(file_path)
+            t1 = time.time()
 
             satellites = self.merger_handler.compute_satellites(snap_df)
 
             snap_result = self.orchestrator.process(
                 snap_id, snap_df, snap_data, satellites, previous_resp_sim,
             )
+            t2 = time.time()
+
+            time_stats = {"load": t1 - t0, "process": t2 - t1}
 
             if self.cat_writer:
                 self.cat_writer.write_snapshot(
@@ -165,7 +170,7 @@ class AccretionPipeline:
                 )
 
             elapsed = time.time() - t_start
-            self._log_snapshot(snap_id, elapsed, snap_result)
+            self._log_snapshot(snap_id, elapsed, snap_result, snap_data, time_stats)
 
             return snap_result
 
@@ -206,19 +211,17 @@ class AccretionPipeline:
         self.logger.write_summary()
         print(f"Pipeline complete in {format_runtime(time.time() - t_start)}")
 
-    def _log_snapshot(self, snap_id, elapsed, snap_result, **extra):
+    def _log_snapshot(self, snap_id, elapsed, snap_result, snap_data, time_stats):
         stats = {
             "snap": snap_id,
             "runtime": format_runtime(elapsed),
-            "z": 0.0,
-            "load": 0.0,
-            "process": elapsed,
-            "reduction": 0.0,
+            "z": snap_data.redshift,
+            "load": time_stats["load"],
+            "process": time_stats["process"],
             "bound": snap_result.ensemble.nstars,
             "groups": snap_result.result.statistics.get("groups", 0),
         }
         stats.update(snap_result.result.statistics)
-        stats.update(extra)
         self.logger.write_snapshot(stats)
 
     def _log_error(self, snap_id, exc):
