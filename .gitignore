@@ -27,17 +27,14 @@ scripts_results/
 htmlcov/
 .ruff_cache/
 
-# Output
-figures/
-
-# Reference subpackage (untracked, will be deleted after migration)
-src/roadrunner/_accme/
-
 # Test data (potentially large files)
 test_data/
 
 # Test script output
 test_output/
+
+# Scripts (development-only, not distributed)
+scripts/
 
 # Planning documents (not part of source code)
 planning/
