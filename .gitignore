@@ -35,6 +35,7 @@ test_output/
 
 # Scripts (development-only, not distributed)
 scripts/
+!scripts/run_pipeline.py
 
 # Planning documents (not part of source code)
 planning/
