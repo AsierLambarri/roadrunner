@@ -38,3 +38,20 @@ class RunConfig:
     save_particles: bool = True
     save_assignment: bool = True
     float_atol: float = 1e-4
+
+    def __post_init__(self):
+        for field_name in (
+            "accretion_id", "max_iter", "n_los", "min_particles",
+            "start_snapshot", "end_snapshot",
+        ):
+            val = getattr(self, field_name, None)
+            if val is not None:
+                object.__setattr__(self, field_name, int(val))
+
+        for field_name in (
+            "tol", "reg_covar", "search_factor",
+            "birth_window_factor", "float_atol",
+        ):
+            val = getattr(self, field_name, None)
+            if val is not None:
+                object.__setattr__(self, field_name, float(val))
