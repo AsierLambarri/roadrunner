@@ -65,9 +65,10 @@ class SnapshotOrchestrator:
             update_birth_tracker(self.birth_tracker, snap_id, snap_data, result)
 
         if self.assembly_tracker is not None:
+            pop_ids = set(ensemble.sub_tree_ids[ensemble.populated_indices()])
             update_assembly_tracker(
                 self.assembly_tracker, snap_id, snap_data, result,
-                satellites, self.birth_tracker,
+                satellites, self.birth_tracker, pop_ids=pop_ids,
             )
 
         galaxy_particles, galaxy_bound = build_reduction_input(
