@@ -19,6 +19,9 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
     def compute_scale_radii(self):
         self._df["scale_radius"] = self._df.apply(self._compute_rs_row, axis=1)
 
+    def set_constant_column(self, name: str, value):
+        self._df[name] = value
+
     def compute_most_bound_satellite(self, rvir_factor: float = 1.0):
         self._df["host_id"] = -1
         for snap in tqdm(

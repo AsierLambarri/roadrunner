@@ -117,6 +117,9 @@ class AccretionPipeline:
         self.merger_handler.compute_scale_radii()
         self.merger_handler.compute_most_bound_satellite()
         self.merger_handler.compute_distance_to_host()
+        acc_id = self.orchestrator.reduction_config.accretion_id
+        self.merger_handler.set_constant_column("acc_id", acc_id)
+        self.merger_handler.compute_distance_to_host(column="acc_id")
         self.logger.write_header({
             "output_dir": os.path.dirname(self._log_path) or ".",
             "halo_model": self.orchestrator.processing_config.halo_model,
