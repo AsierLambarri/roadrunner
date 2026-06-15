@@ -112,8 +112,12 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             dist = np.linalg.norm(r_vec, axis=1)
             v_rel = velocities[idx_candidates] - vel_i
             v_rel2 = np.sum(v_rel**2, axis=1)
-            v_esc2 = 2 * G_KM * mass_i / dist
-            E_bind = v_rel2 - v_esc2
+            non_zero = dist > 1e-10
+            if not np.any(non_zero):
+                continue
+            idx_candidates = idx_candidates[non_zero]
+            v_esc2 = 2 * G_KM * mass_i / dist[non_zero]
+            E_bind = v_rel2[non_zero] - v_esc2
 
             bound_mask = E_bind < 0
             if not np.any(bound_mask):
@@ -174,8 +178,12 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             v_rel = velocities[idx_candidates] - vel_i
             v_rel2 = np.sum(v_rel**2, axis=1)
 
-            v_esc2 = 2 * G_KM * mass_i / dist
-            E_bind = v_rel2 - v_esc2
+            non_zero = dist > 1e-10
+            if not np.any(non_zero):
+                continue
+            idx_candidates = idx_candidates[non_zero]
+            v_esc2 = 2 * G_KM * mass_i / dist[non_zero]
+            E_bind = v_rel2[non_zero] - v_esc2
 
             bound_mask = E_bind < 0
             if not np.any(bound_mask):
