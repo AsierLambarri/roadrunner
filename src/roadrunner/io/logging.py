@@ -1,5 +1,7 @@
 import numpy as np
 
+from roadrunner._defaults import COL_WIDTH_RUNTIME, COL_WIDTH_INT, COL_WIDTH_FLOAT
+
 
 def format_runtime(seconds):
     hours, rem = divmod(seconds, 3600)
@@ -30,11 +32,11 @@ class RunLogger:
 
     def _col_width(self, label, fmt_spec):
         if fmt_spec == "s":
-            data_w = 12
+            data_w = COL_WIDTH_RUNTIME
         elif fmt_spec == "d":
-            data_w = 10
+            data_w = COL_WIDTH_INT
         else:
-            data_w = 9
+            data_w = COL_WIDTH_FLOAT
         return max(len(label), data_w)
 
     def write_snapshot(self, stats):

@@ -2,6 +2,7 @@ import numpy as np
 import yt
 
 from roadrunner._mcf_types import SnapshotData
+from roadrunner.readers._defaults import METALLICITY_COEFF0, METALLICITY_COEFF1, SOLAR_METALLICITY
 
 
 class SnapshotReader:
@@ -96,9 +97,9 @@ class SnapshotReader:
             ds.add_field(
                 (self.ptype, "particle_metallicity"),
                 function=lambda field, data: (
-                    2.09 * data[self.ptype, "particle_metallicity0"]
-                    + 1.06 * data[self.ptype, "particle_metallicity1"]
-                ) / 0.02,
+                    METALLICITY_COEFF0 * data[self.ptype, "particle_metallicity0"]
+                    + METALLICITY_COEFF1 * data[self.ptype, "particle_metallicity1"]
+                ) / SOLAR_METALLICITY,
                 sampling_type="particle",
                 units="",
             )

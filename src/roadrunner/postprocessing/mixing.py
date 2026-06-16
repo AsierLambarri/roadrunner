@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 
+from roadrunner._defaults import NN_FRACTION
 from roadrunner.physics.constants import (
     RILEY_BOUND_THRESHOLD,
     RILEY_SVM_SLOPE,
@@ -11,7 +12,7 @@ from roadrunner.physics.constants import (
 
 def _local_velocity_dispersion(pos, vel, nmin=10):
     N = pos.shape[0]
-    n = int(max(0.01 * N, nmin))
+    n = int(max(NN_FRACTION * N, nmin))
     if N <= nmin + 1:
         return np.full(N, np.nan)
 

@@ -2,13 +2,14 @@ import pickle
 import os
 
 import zstandard as zstd
-
 from roadrunner._exceptions import RestartError
+from roadrunner._defaults import ZSTD_COMPRESSION_LEVEL
+
 
 _VERSION = 2
 
 
-def save_checkpoint(path, data, level=3):
+def save_checkpoint(path, data, level=ZSTD_COMPRESSION_LEVEL):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {"version": _VERSION, "data": data}
     pickled = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)

@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.cluster import KMeans
 
 from ._math import logsumexp
+from roadrunner._defaults import KMEANS_MAX_ITER, KMEANS_PP_MAX_ITER
 
 
 def _nonpositive_definite(covariances, cov_type):
@@ -119,9 +120,9 @@ class BaseMixture(abc.ABC):
         resp = np.zeros((n_samples, self.n_components), dtype=X.dtype)
 
         if self.init_params == "kmeans":
-            max_iters = 300
+            max_iters = KMEANS_MAX_ITER
         elif self.init_params == "kmeans++":
-            max_iters = 1
+            max_iters = KMEANS_PP_MAX_ITER
         else:
             raise ValueError("provided ini_params is not valid.")
 

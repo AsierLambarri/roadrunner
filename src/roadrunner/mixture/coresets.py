@@ -4,6 +4,7 @@ from sklearn.cluster import kmeans_plusplus
 
 from ._math import logsumexp
 from .weighted_gmm import _estimate_log_gaussian_prob
+from roadrunner._defaults import CORESET_ALPHA_BASE, CORESET_ALPHA_OFFSET
 
 
 def _estimate_mahalanobis_squared(X, means, covs, cov_type):
@@ -170,7 +171,7 @@ class GaussianCoreset:
         self.cov_type     = cov_type
         self.random_state = random_state if isinstance(random_state, np.random.RandomState) else np.random.RandomState(random_state)
         
-        self.alpha        = 16 * (np.log2(self.n_components) + 2)
+        self.alpha        = CORESET_ALPHA_BASE * (np.log2(self.n_components) + CORESET_ALPHA_OFFSET)
 
         self.cast_dtype = cast_dtype
 

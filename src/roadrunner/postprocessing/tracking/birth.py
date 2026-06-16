@@ -4,6 +4,8 @@ from collections import Counter, defaultdict
 import numpy as np
 import pandas as pd
 
+from roadrunner._defaults import BIRTH_GAUSSIAN_WIDTH
+
 
 def _exp_window(x):
     return np.exp(-x)
@@ -14,7 +16,7 @@ def _cauchy_window(x):
 
 
 def _gaussian_window(x):
-    return np.exp(-0.3 * x ** 2)
+    return np.exp(-BIRTH_GAUSSIAN_WIDTH * x ** 2)
 
 
 _WINDOWS = {

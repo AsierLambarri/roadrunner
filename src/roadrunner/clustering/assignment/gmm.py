@@ -13,6 +13,7 @@ from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
     _estimate_gaussian_parameters,
 )
+from roadrunner._defaults import UNRESOLVED_GROUP_RATIO
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 
 
@@ -61,7 +62,7 @@ class GMMAssigner:
         self,
         cov_type="full",
         max_iter=10,
-        tol=5e-2,
+        tol=1e-2,
         min_particles=10,
         reg_covar=1e-6,
         prior_type="",
@@ -137,7 +138,7 @@ class GMMAssigner:
 
         if n_comp == 1:
             post_prob, nonz = self._fit_single(gp_idx)
-        elif gp_idx.size < 10 * n_comp:
+        elif gp_idx.size < UNRESOLVED_GROUP_RATIO * n_comp:
             warnings.warn(
                 f"WARNING: {n_comp} galaxies are unresolved inside a group!"
             )

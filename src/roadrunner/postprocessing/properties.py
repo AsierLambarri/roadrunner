@@ -3,6 +3,10 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from roadrunner._defaults import (
+    CENTER_QUANTILE, CENTER_SCALE,
+    MIN_PARTICLES_STRUCTURAL,
+)
 from roadrunner.physics.potentials import get_potential
 from roadrunner.physics.timescales import compute_tidal_radius
 
@@ -63,8 +67,8 @@ def find_center(particle_positions, particle_velocities, particle_masses):
         particle_positions - np.median(particle_positions, axis=0),
         axis=1,
     )
-    quantile = np.quantile(radii, 0.95)
-    rc_scale = 0.5
+    quantile = np.quantile(radii, CENTER_QUANTILE)
+    rc_scale = CENTER_SCALE
     inner = radii <= rc_scale * quantile
     center_pos = np.average(
         particle_positions[inner], axis=0, weights=particle_masses[inner],
@@ -157,7 +161,7 @@ def compute_galaxy_properties(
     galaxy_table,
     host_props,
     halo_model,
-    n_los=11,
+    n_los=15,
     galaxy_centers=None,
 ):
     columns = [
@@ -222,7 +226,7 @@ def compute_galaxy_properties(
         else:
             center_pos, center_vel = find_center(gal_pos, gal_vel, gal_masses)
 
-        if npart < 30:
+        if npart < MIN_PARTICLES_STRUCTURAL:
             records.append(dict(
                 Sub_tree_id=sid, mb_host_id=host_id,
                 position_x=center_pos[0], position_y=center_pos[1],
