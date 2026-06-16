@@ -38,6 +38,7 @@ class RunConfig:
     min_particles_structural: int = 30
     ssc_nmin: int = 30
     ssc_alpha: float = 0.9
+    dynstate_snapshots: int | list[int] | str | None = field(default_factory=lambda: [-2, -1])
 
     output_dir: str = "./output"
     save_particles: bool = True

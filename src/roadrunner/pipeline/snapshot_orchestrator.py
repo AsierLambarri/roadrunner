@@ -53,6 +53,7 @@ class SnapshotOrchestrator:
         snap_data: SnapshotData,
         satellites: dict,
         previous_resp_sim: SparseCSC | None = None,
+        compute_dynstate: bool = True,
     ) -> SnapshotResult:
         previous_resp = responsibilities_from_sim(previous_resp_sim, snap_data)
         newborn = detect_newborns(previous_resp, snap_data.positions.shape[0])
@@ -83,6 +84,7 @@ class SnapshotOrchestrator:
             snap_data, snap_df, result,
             galaxy_particles, galaxy_bound,
             self.reduction_config,
+            compute_dynstate=compute_dynstate,
         )
 
         previous_resp_sim_out = responsibilities_to_sim(result.responsibilities, snap_data)

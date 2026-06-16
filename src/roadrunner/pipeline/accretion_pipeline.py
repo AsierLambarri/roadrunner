@@ -52,6 +52,11 @@ class AccretionPipeline:
         self._log_path = self.logger._log_path
         self._error_log_path = os.path.join(output_dir, "error.log")
 
+        dyn_snaps = self._resolve_snap_indices(
+            self.orchestrator.reduction_config.dynstate_snapshots,
+            snapshot_ids,
+        )
+
         if resume:
             previous_resp_sim, start_idx = self._try_resume(snapshot_ids)
         else:
@@ -68,7 +73,7 @@ class AccretionPipeline:
             snap_id = snapshot_ids[idx]
             print(f"\nSnapshot {snap_id}  ({idx + 1}/{len(snapshot_ids)})")
             snap_result = self._process_snapshot(
-                snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start,
+                snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
             )
             previous_resp_sim = snap_result.previous_resp_sim
             save_checkpoint(self._checkpoint_path, {
@@ -80,11 +85,28 @@ class AccretionPipeline:
 
     def _filter_snapshots(self, start_snapshot, end_snapshot):
         ids = self.merger_handler.snapshots
-        if start_snapshot is not None:
-            ids = [s for s in ids if s >= start_snapshot]
-        if end_snapshot is not None:
-            ids = [s for s in ids if s <= end_snapshot]
+        start = ids[start_snapshot] if start_snapshot is not None and start_snapshot < 0 else start_snapshot
+        end = ids[end_snapshot] if end_snapshot is not None and end_snapshot < 0 else end_snapshot
+        if start is not None:
+            ids = [s for s in ids if s >= start]
+        if end is not None:
+            ids = [s for s in ids if s <= end]
         return ids
+
+    def _resolve_snap_indices(self, raw, all_snaps):
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            snap_data = np.loadtxt(raw)
+            return {int(s) for s in snap_data}
+        snaps = [raw] if isinstance(raw, int) else list(raw)
+        resolved = set()
+        for s in snaps:
+            try:
+                resolved.add(all_snaps[s] if s < 0 else s)
+            except IndexError:
+                continue
+        return resolved
 
     def _try_resume(self, snapshot_ids):
         try:
@@ -137,7 +159,7 @@ class AccretionPipeline:
             equivalence_df=self.equiv_table.dataframe,
         )
 
-    def _process_snapshot(self, snap_id, idx, total, previous_resp_sim, t_start):
+    def _process_snapshot(self, snap_id, idx, total, previous_resp_sim, t_start, dyn_snaps):
         try:
             t0 = time.time()
             snap_df = self.merger_handler.select_snapshots(snap_id)
@@ -150,8 +172,10 @@ class AccretionPipeline:
 
             satellites = self.merger_handler.compute_satellites(snap_df)
 
+            compute_dynstate = dyn_snaps is None or snap_id in dyn_snaps
             snap_result = self.orchestrator.process(
                 snap_id, snap_df, snap_data, satellites, previous_resp_sim,
+                compute_dynstate=compute_dynstate,
             )
             t2 = time.time()
 

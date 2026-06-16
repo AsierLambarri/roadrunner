@@ -66,6 +66,7 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         min_particles_structural=config.min_particles_structural,
         ssc_nmin=config.ssc_nmin,
         ssc_alpha=config.ssc_alpha,
+        dynstate_snapshots=config.dynstate_snapshots,
     )
 
     birth_tracker = BirthTracker(

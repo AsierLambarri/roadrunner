@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,7 @@ class ReductionConfig:
     min_particles_structural: int = 30
     ssc_nmin: int = 30
     ssc_alpha: float = 0.9
+    dynstate_snapshots: int | list[int] | str | None = field(default_factory=lambda: [-2, -1])
 
 
 def reduce_snapshot(
@@ -28,6 +29,7 @@ def reduce_snapshot(
     galaxy_particles: dict[int, np.ndarray],
     galaxy_bound: dict[int, np.ndarray],
     config: ReductionConfig,
+    compute_dynstate: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     coords = np.column_stack([snap_data.positions, snap_data.velocities])
 
@@ -63,13 +65,16 @@ def reduce_snapshot(
         ssc_alpha=config.ssc_alpha,
     )
 
-    dynstate = compute_riley_criterion(
-        main_id=config.accretion_id,
-        particle_masses=snap_data.masses,
-        particle_coords=coords,
-        galaxy_allowed=galaxy_particles,
-        galaxy_bound=galaxy_bound,
-        redshift=snap_data.redshift,
+    dynstate = (
+        compute_riley_criterion(
+            main_id=config.accretion_id,
+            particle_masses=snap_data.masses,
+            particle_coords=coords,
+            galaxy_allowed=galaxy_particles,
+            galaxy_bound=galaxy_bound,
+            redshift=snap_data.redshift,
+        )
+        if compute_dynstate else pd.DataFrame()
     )
 
     return properties, dynstate
