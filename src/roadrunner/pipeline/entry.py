@@ -56,6 +56,7 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         halo_model=config.halo_model,
         search_factor=config.search_factor,
         min_particles=config.min_particles,
+        comoving=config.comoving,
     )
     reduction_config = ReductionConfig(
         accretion_id=accretion_id,

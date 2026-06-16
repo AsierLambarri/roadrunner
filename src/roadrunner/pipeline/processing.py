@@ -19,6 +19,7 @@ class ProcessingConfig:
     halo_model: str = "kepler"
     search_factor: float = 1.0
     min_particles: int = 10
+    comoving: bool = True
 
 
 def process_snapshot(
@@ -34,7 +35,7 @@ def process_snapshot(
     ])
 
     ensemble = HaloEnsemble([
-        HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=False)
+        HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving)
         for _, row in snap_df.iterrows()
     ])
     compute_halo_bound_particles(

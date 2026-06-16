@@ -30,6 +30,7 @@ class RunConfig:
     n_los: int = 15
     search_factor: float = 1.0
     min_particles: int = 10
+    comoving: bool = True
 
     birth_window_factor: float = 5.0
     enforce_initial_hosts: bool = True
