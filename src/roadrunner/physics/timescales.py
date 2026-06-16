@@ -1,5 +1,7 @@
 import numpy as np
 
+from roadrunner.physics.constants import MAX_DYN_TIMESCALE
+
 
 def compute_particle_dynamical_timescales(particle_df, ensemble, groups, td_factor=1.0):
     particle_df["timescale"] = 0.0
@@ -10,7 +12,7 @@ def compute_particle_dynamical_timescales(particle_df, ensemble, groups, td_fact
 
         tdyn_dense = csc_t.to_dense()
 
-        max_tdyn = np.minimum(np.nanmax(tdyn_dense, axis=1) * td_factor, 0.4)
+        max_tdyn = np.minimum(np.nanmax(tdyn_dense, axis=1) * td_factor, MAX_DYN_TIMESCALE)
         gp_idx = csc_t.row_id
         particle_df.loc[gp_idx, "timescale"] = max_tdyn
 

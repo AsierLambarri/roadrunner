@@ -1,5 +1,7 @@
 import numpy as np
 
+from roadrunner.physics.constants import SCALER_RANGE
+
 
 class StandardScaler:
     def __init__(self):
@@ -10,7 +12,7 @@ class StandardScaler:
         self.mean_ = np.mean(X, axis=0).astype(np.float64, copy=False)
         diff = X.max(axis=0) - X.min(axis=0)
         diff[diff == 0] = 1.0
-        self.scale_ = (10.0 / diff).astype(np.float64, copy=False)
+        self.scale_ = (SCALER_RANGE / diff).astype(np.float64, copy=False)
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:

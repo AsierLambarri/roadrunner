@@ -3,13 +3,12 @@ import pandas as pd
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
-from roadrunner.physics.constants import G_KM
+from roadrunner.physics.constants import G_KM, DUFFY_A, DUFFY_B, DUFFY_C, DUFFY_PIVOT_MASS, MIN_DISTANCE
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 
 
 def nfw_cmz_relation_duffy(M: float | np.ndarray, z: float) -> float | np.ndarray:
-    A, B, C = 7.85, -0.081, -0.71
-    return A * (M / 2e12) ** B * (1 + z) ** C
+    return DUFFY_A * (M / DUFFY_PIVOT_MASS) ** DUFFY_B * (1 + z) ** DUFFY_C
 
 
 class MergerTreeHandlerCSV(MergerTreeReaderCSV):
@@ -115,7 +114,7 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             dist = np.linalg.norm(r_vec, axis=1)
             v_rel = velocities[idx_candidates] - vel_i
             v_rel2 = np.sum(v_rel**2, axis=1)
-            non_zero = dist > 1e-10
+            non_zero = dist > MIN_DISTANCE
             if not np.any(non_zero):
                 continue
             idx_candidates = idx_candidates[non_zero]
@@ -181,7 +180,7 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             v_rel = velocities[idx_candidates] - vel_i
             v_rel2 = np.sum(v_rel**2, axis=1)
 
-            non_zero = dist > 1e-10
+            non_zero = dist > MIN_DISTANCE
             if not np.any(non_zero):
                 continue
             idx_candidates = idx_candidates[non_zero]
