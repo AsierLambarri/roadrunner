@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 
-from roadrunner._defaults import NN_FRACTION
 from roadrunner.physics.constants import (
+    NN_FRACTION,
     RILEY_BOUND_THRESHOLD,
     RILEY_SVM_SLOPE,
     RILEY_SVM_INTERCEPT,

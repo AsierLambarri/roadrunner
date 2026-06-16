@@ -10,9 +10,6 @@ MASS_FRACTION_R80 = 0.8
 CENTER_QUANTILE = 0.95             # inner-region quantile for center finding
 CENTER_SCALE = 0.5                 # inner-region scale factor
 
-# ── Mixing analysis ────────────────────────────────────────────────
-NN_FRACTION = 0.01                 # nearest-neighbour fraction for local sigma
-
 # ── GMM assignment ─────────────────────────────────────────────────
 UNRESOLVED_GROUP_RATIO = 10        # N < RATIO * n_comp triggers flat assignment
 
@@ -40,7 +37,6 @@ __all__ = [
     "MASS_FRACTION_R80",
     "CENTER_QUANTILE",
     "CENTER_SCALE",
-    "NN_FRACTION",
     "UNRESOLVED_GROUP_RATIO",
     "CORESET_ALPHA_BASE",
     "CORESET_ALPHA_OFFSET",

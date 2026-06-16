@@ -30,6 +30,9 @@ MIN_DISTANCE = 1e-10              # kpc, floor to avoid division by zero
 # ── StandardScaler ─────────────────────────────────────────────────
 SCALER_RANGE = 10.0               # maps data range to interval of width 10
 
+# ── Mixing analysis ────────────────────────────────────────────────
+NN_FRACTION = 0.01                 # nearest-neighbour fraction for local sigma
+
 
 __all__ = [
     "G_KM",
@@ -47,4 +50,5 @@ __all__ = [
     "DUFFY_PIVOT_MASS",
     "MIN_DISTANCE",
     "SCALER_RANGE",
+    "NN_FRACTION",
 ]
