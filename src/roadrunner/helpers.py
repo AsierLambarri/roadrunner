@@ -34,9 +34,10 @@ def select_int_dtype(max_val):
 def select_float_dtype(max_value, abs_tol=1e-4):
     max_value = abs(max_value)
     for dtype in (np.float16, np.float32, np.float64, np.float128):
-        x = dtype(max_value)
-        if np.spacing(x) / 2 <= abs_tol:
-            return dtype
+        with np.errstate(all='ignore'):
+            x = dtype(max_value)
+            if np.spacing(x) / 2 <= abs_tol:
+                return dtype
     warnings.warn("float128 insufficient for requested precision")
     return np.float64
 

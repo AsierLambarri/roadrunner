@@ -45,7 +45,8 @@ def _riley_criterion_single(
         local_disp = _local_velocity_dispersion(
             subset_positions, subset_velocities,
         )
-        sigma50 = np.nanmedian(local_disp)
+        valid = local_disp[~np.isnan(local_disp)]
+        sigma50 = np.median(valid) if len(valid) > 0 else np.nan
         svm = RILEY_SVM_SLOPE * np.log10(mstar) + RILEY_SVM_INTERCEPT
         dynstate = 2 if (sigma50 >= svm or np.isnan(sigma50)) else 1
 
