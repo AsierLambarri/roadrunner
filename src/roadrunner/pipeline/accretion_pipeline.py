@@ -160,7 +160,8 @@ class AccretionPipeline:
             if self.cat_writer:
                 self.cat_writer.write_snapshot(
                     snap_id, snap_data.time,
-                    snap_result.properties, snap_result.dynstate, satellites,
+                    snap_result.properties, snap_result.dynstate,
+                    snap_result.satellites,
                 )
             if self.part_writer:
                 self.part_writer.write_snapshot(

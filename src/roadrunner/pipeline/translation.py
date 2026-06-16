@@ -46,17 +46,12 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     )
 
 
-def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, satellites, birth_tracker=None, pop_ids=None) -> None:
+def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, satellites, birth_tracker=None) -> None:
     assignment_map = {}
     for sid, group in result.particle_df.groupby("Sub_tree_id"):
         arr_idx = group["array_index"].values
         assignment_map[int(sid)] = set(snap_data.indices[arr_idx].tolist())
     birth_map = birth_tracker.current_birth_map() if birth_tracker is not None else {}
-
-    if pop_ids is not None:
-        satellites = {k: (v & pop_ids) for k, v in satellites.items()
-                      if k in pop_ids and (v & pop_ids)}
-
     assembly_tracker.update(snap_id, assignment_map, birth_map, satellites)
 
 

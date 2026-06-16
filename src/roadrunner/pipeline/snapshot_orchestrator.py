@@ -28,6 +28,7 @@ class SnapshotResult:
     previous_resp_sim: SparseCSC | None
     properties: pd.DataFrame | None
     dynstate: pd.DataFrame | None
+    satellites: dict | None = None
 
 
 class SnapshotOrchestrator:
@@ -64,11 +65,14 @@ class SnapshotOrchestrator:
         if self.birth_tracker is not None:
             update_birth_tracker(self.birth_tracker, snap_id, snap_data, result)
 
+        pop_ids = set(ensemble.sub_tree_ids[ensemble.populated_indices()])
+        satellites = {k: (v & pop_ids) for k, v in satellites.items()
+                      if k in pop_ids and (v & pop_ids)}
+
         if self.assembly_tracker is not None:
-            pop_ids = set(ensemble.sub_tree_ids[ensemble.populated_indices()])
             update_assembly_tracker(
                 self.assembly_tracker, snap_id, snap_data, result,
-                satellites, self.birth_tracker, pop_ids=pop_ids,
+                satellites, self.birth_tracker,
             )
 
         galaxy_particles, galaxy_bound = build_reduction_input(
@@ -89,4 +93,5 @@ class SnapshotOrchestrator:
             previous_resp_sim=previous_resp_sim_out,
             properties=properties,
             dynstate=dynstate,
+            satellites=satellites,
         )
