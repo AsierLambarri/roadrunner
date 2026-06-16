@@ -29,17 +29,12 @@ class RunLogger:
             f.write("\n\n")
 
     def _col_width(self, label, fmt_spec):
-        """Column width = max(label length, expected data width from fmt)."""
-        # Estimate render width from format spec
         if fmt_spec == "s":
-            data_w = 12  # runtime string
+            data_w = 12
         elif fmt_spec == "d":
-            data_w = 10  # generous for integers up to 1e9
+            data_w = 10
         else:
-            # e.g. ".3f" → 1 digit + dot + 3 decimals = 5
-            # e.g. ".4f" → 1 + 1 + 4 = 6
-            decimal = int(fmt_spec.lstrip(".").rstrip("f"))
-            data_w = decimal + 2  # at least "0.xxx"
+            data_w = 9
         return max(len(label), data_w)
 
     def write_snapshot(self, stats):
@@ -68,7 +63,8 @@ class RunLogger:
 
         # Header
         header_parts = [f"{label:>{w}}" for _, label, w, _ in cols]
-        header = " ".join(header_parts)
+        sep = "   "
+        header = sep.join(header_parts)
         total_width = len(header)
 
         # Data row
@@ -80,7 +76,7 @@ class RunLogger:
             else:
                 fstr = f">{w}{fmt_spec}" if fmt_spec != "s" else f">{w}s"
                 cell_parts.append(f"{raw:{fstr}}")
-        row = " ".join(cell_parts)
+        row = sep.join(cell_parts)
 
         with open(self._log_path, "a") as f:
             if not hasattr(self, "_header_written") or not self._header_written:
