@@ -58,6 +58,7 @@ class BirthTracker:
 
             t0 = np.array([self._active[p]["t0"] for p in p_active])
             tau0 = np.array([self._active[p]["tau"] for p in p_active])
+            tau0 = np.maximum(tau0, 1e-10)
 
             deltas = (w_active * self._window_fn((t_snap - t0) / tau0)).astype(np.float64)
             for p, host, delta in zip(p_active, host_active, deltas):
