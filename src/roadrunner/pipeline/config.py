@@ -34,6 +34,10 @@ class RunConfig:
 
     birth_window_factor: float = 5.0
     enforce_initial_hosts: bool = True
+    use_gmm_centers: bool = True
+    min_particles_structural: int = 30
+    ssc_nmin: int = 30
+    ssc_alpha: float = 0.9
 
     output_dir: str = "./output"
     save_particles: bool = True
@@ -51,7 +55,7 @@ class RunConfig:
 
         for field_name in (
             "tol", "reg_covar", "search_factor",
-            "birth_window_factor", "float_atol",
+            "birth_window_factor", "float_atol", "ssc_alpha",
         ):
             val = getattr(self, field_name, None)
             if val is not None:

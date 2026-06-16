@@ -7,8 +7,10 @@ FRAGMENT_THRESHOLD = 10            # galaxies with fewer particles are fragments
 MASS_FRACTION_R20 = 0.2
 MASS_FRACTION_RH = 0.5
 MASS_FRACTION_R80 = 0.8
-CENTER_QUANTILE = 0.95             # inner-region quantile for center finding
-CENTER_SCALE = 0.5                 # inner-region scale factor
+
+# ── Centering ──────────────────────────────────────────────────────
+SSC_NMIN = 30                      # default shrink-sphere minimum particles
+SSC_ALPHA = 0.9                    # default shrink-sphere shrink factor
 
 # ── GMM assignment ─────────────────────────────────────────────────
 UNRESOLVED_GROUP_RATIO = 10        # N < RATIO * n_comp triggers flat assignment
@@ -35,8 +37,8 @@ __all__ = [
     "MASS_FRACTION_R20",
     "MASS_FRACTION_RH",
     "MASS_FRACTION_R80",
-    "CENTER_QUANTILE",
-    "CENTER_SCALE",
+    "SSC_NMIN",
+    "SSC_ALPHA",
     "UNRESOLVED_GROUP_RATIO",
     "CORESET_ALPHA_BASE",
     "CORESET_ALPHA_OFFSET",

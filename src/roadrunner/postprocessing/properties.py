@@ -4,8 +4,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._defaults import (
-    CENTER_QUANTILE, CENTER_SCALE,
-    MIN_PARTICLES_STRUCTURAL,
+    MIN_PARTICLES_STRUCTURAL, SSC_NMIN, SSC_ALPHA,
 )
 from roadrunner.physics.potentials import get_potential
 from roadrunner.physics.timescales import compute_tidal_radius
@@ -62,20 +61,12 @@ def rotation_matrix_from_los(los):
     return np.vstack((ex, ey, ez))
 
 
-def find_center(particle_positions, particle_velocities, particle_masses):
-    radii = np.linalg.norm(
-        particle_positions - np.median(particle_positions, axis=0),
-        axis=1,
-    )
-    quantile = np.quantile(radii, CENTER_QUANTILE)
-    rc_scale = CENTER_SCALE
-    inner = radii <= rc_scale * quantile
-    center_pos = np.average(
-        particle_positions[inner], axis=0, weights=particle_masses[inner],
-    )
-    center_vel = np.average(
-        particle_velocities[inner], axis=0, weights=particle_masses[inner],
-    )
+def find_center(positions, velocities, masses):
+    center = np.median(positions, axis=0)
+    radii = np.sum((positions - center)**2, axis=1)
+    mask = radii <= np.median(radii)
+    center_pos = np.average(positions[mask], weights=masses[mask], axis=0)
+    center_vel = np.average(velocities[mask], weights=masses[mask], axis=0)
     return center_pos, center_vel
 
 
@@ -163,6 +154,10 @@ def compute_galaxy_properties(
     halo_model,
     n_los=15,
     galaxy_centers=None,
+    use_gmm_centers=True,
+    min_particles_structural=MIN_PARTICLES_STRUCTURAL,
+    ssc_nmin=SSC_NMIN,
+    ssc_alpha=SSC_ALPHA,
 ):
     columns = [
         "Sub_tree_id", "mb_host_id",
@@ -220,13 +215,19 @@ def compute_galaxy_properties(
             continue
 
         fitted = None if galaxy_centers is None else galaxy_centers.get(sid)
-        if fitted is not None:
+        if use_gmm_centers and fitted is not None:
             center_pos = fitted[:3]
             center_vel = fitted[3:6]
+        elif npart >= ssc_nmin:
+            from roadrunner.postprocessing.centering import ssc_center
+            center_pos, center_vel = ssc_center(
+                gal_pos, gal_vel, gal_masses,
+                alpha=ssc_alpha, nmin=ssc_nmin,
+            )
         else:
             center_pos, center_vel = find_center(gal_pos, gal_vel, gal_masses)
 
-        if npart < MIN_PARTICLES_STRUCTURAL:
+        if npart < min_particles_structural:
             records.append(dict(
                 Sub_tree_id=sid, mb_host_id=host_id,
                 position_x=center_pos[0], position_y=center_pos[1],

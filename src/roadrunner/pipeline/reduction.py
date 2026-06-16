@@ -15,6 +15,10 @@ class ReductionConfig:
     accretion_id: int
     halo_model: str = "kepler"
     n_los: int = 15
+    use_gmm_centers: bool = True
+    min_particles_structural: int = 30
+    ssc_nmin: int = 30
+    ssc_alpha: float = 0.9
 
 
 def reduce_snapshot(
@@ -53,6 +57,10 @@ def reduce_snapshot(
         halo_model=config.halo_model,
         n_los=config.n_los,
         galaxy_centers=galaxy_centers,
+        use_gmm_centers=config.use_gmm_centers,
+        min_particles_structural=config.min_particles_structural,
+        ssc_nmin=max(config.ssc_nmin, config.min_particles_structural),
+        ssc_alpha=config.ssc_alpha,
     )
 
     dynstate = compute_riley_criterion(
