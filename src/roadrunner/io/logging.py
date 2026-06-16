@@ -49,10 +49,10 @@ class RunLogger:
             ("groups",     "GROUPS",     "d"),
             ("fragments",  "FRAGS",      "d"),
             ("unassigned", "UNASSIGNED", "d"),
-            ("avg_conf",   "AVG_CONF",   ".4f"),
-            ("avg_entropy","AVG_ENTROPY",".4f"),
-            ("avg_cond",   "AVG_COND",   ".2f"),
-            ("avg_retention","AVG_RET",  ".4f"),
+            ("avg_conf",   "AVG_CONF",   ".3f"),
+            ("avg_entropy","AVG_ENTROPY",".3f"),
+            ("avg_cond",   "AVG_COND",   ".3f"),
+            ("avg_retention","AVG_RET",  ".3f"),
         ]
 
         # Build columns with widths computed from label + format
