@@ -167,6 +167,21 @@ class AccretionPipeline:
                     snap_id, snap_data.time, snap_data.redshift, snap_data,
                 )
             if self.assign_writer:
+                if "timescale" in snap_result.result.particle_df.columns:
+                    sim_ids = snap_data.indices[snap_result.result.particle_df["array_index"].values]
+                    recs = np.array(
+                        list(zip(sim_ids, snap_result.result.particle_df["timescale"].values)),
+                        dtype=[("particle_index", np.uint64), ("timescale", np.float32)],
+                    )
+                    self.assign_writer.write_timescales(recs)
+
+                snap_result.result.particle_df["particle_index"] = snap_data.indices[
+                    snap_result.result.particle_df["array_index"].values
+                ]
+                snap_result.result.particle_df.drop(
+                    columns=["array_index", "timescale"], inplace=True, errors="ignore",
+                )
+
                 bound_csc, _ = snap_result.ensemble.get_particles()
                 self.assign_writer.write_snapshot(
                     snap_id, snap_data.time, snap_result.result, bound_csc,
@@ -188,15 +203,7 @@ class AccretionPipeline:
         bt = self.orchestrator.birth_tracker
         at = self.orchestrator.assembly_tracker
 
-        if bt is not None:
-            birth_df = bt.finalize()
-            timescales = np.array([
-                bt._finalized.get(i, {}).get("timescale", -1)
-                for i in range(len(bt._finalized))
-            ]) if bt._finalized else np.array([], dtype=np.float32)
-        else:
-            birth_df = pd.DataFrame()
-            timescales = np.array([], dtype=np.float32)
+        birth_df = bt.finalize() if bt is not None else pd.DataFrame()
 
         assembly_dict = at.current() if at is not None else {}
         assembly_records = [
@@ -207,9 +214,6 @@ class AccretionPipeline:
         ) if assembly_records else pd.DataFrame()
 
         self.cat_writer.write_finalize(birth_df, assembly_df)
-
-        if self.assign_writer is not None and len(timescales) > 0:
-            self.assign_writer.write_timescales(timescales)
 
         self.logger.write_summary()
         print(f"Pipeline complete in {format_runtime(time.time() - t_start)}")

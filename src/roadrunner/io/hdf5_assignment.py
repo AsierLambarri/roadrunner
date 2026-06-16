@@ -111,14 +111,10 @@ class HDF5AssignmentWriter:
     def write_timescales(self, particle_timescales):
         with h5py.File(self._path, "a") as hf:
             hdr = hf.require_group("header")
-            ts_dtype = select_float_dtype(
-                float(particle_timescales.max()) if particle_timescales.size > 0 else 1.0,
-                self._float_atol,
-            )
             if "timescales" in hdr:
                 del hdr["timescales"]
             hdr.create_dataset(
                 "timescales",
-                data=particle_timescales.astype(ts_dtype, copy=False),
+                data=particle_timescales,
                 compression="gzip",
             )
