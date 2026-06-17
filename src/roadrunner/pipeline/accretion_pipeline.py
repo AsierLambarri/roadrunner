@@ -76,9 +76,11 @@ class AccretionPipeline:
                 snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
             )
             previous_resp_sim = snap_result.previous_resp_sim
+            self.orchestrator.assigner.previous_parameters = snap_result.result.fitted_parameters
             save_checkpoint(self._checkpoint_path, {
                 "last_snapshot": snap_id,
                 "previous_resp": previous_resp_sim,
+                "previous_parameters": self.orchestrator.assigner.previous_parameters,
             })
 
         self._finalize(t_start)
@@ -129,6 +131,9 @@ class AccretionPipeline:
             )
         next_idx = snapshot_ids.index(last_completed) + 1
         previous_resp_sim = ckpt.get("previous_resp")
+        previous_parameters = ckpt.get("previous_parameters")
+        if previous_parameters is not None:
+            self.orchestrator.assigner.previous_parameters = previous_parameters
         if next_idx >= len(snapshot_ids):
             print(f"Snapshot {last_completed} was the last snapshot. Nothing to resume.")
             return previous_resp_sim, len(snapshot_ids)

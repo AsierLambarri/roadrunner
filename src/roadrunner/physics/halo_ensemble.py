@@ -38,6 +38,10 @@ class HaloEnsemble:
         return np.array([h.xcen for h in self._halos], dtype=np.float64)
 
     @property
+    def velocities(self) -> np.ndarray:
+        return np.array([h.velocity for h in self._halos], dtype=np.float64)
+
+    @property
     def virial_radii(self) -> np.ndarray:
         return np.array([h.virial_radius for h in self._halos], dtype=np.float64)
 

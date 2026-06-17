@@ -17,6 +17,7 @@ from roadrunner.mixture.weighted_gmm import (
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
 from roadrunner._defaults import UNRESOLVED_GROUP_RATIO
 from roadrunner.physics.halo_ensemble import HaloEnsemble
+from .priors import build_bgmm_priors
 
 
 _MIXTURE_CLASSES: dict[str, type[BaseMixture]] = {
@@ -79,6 +80,7 @@ class XGMMAssigner:
         self.method = method
         self.mixture_class = _get_mixture_class(method)
         self.statistics = GMMAssignerStatistics()
+        self.previous_parameters = None
 
     def assign(self, halos, particle_coords, newborn_indices, groups,
                **kwargs) -> AssignmentResult:
@@ -198,14 +200,29 @@ class XGMMAssigner:
             verbose=self.verbose,
         )
 
+        # ── Halo catalogue lookup for mean prior ────────────────
+        tid_to_idx = dict(zip(self.ensemble.sub_tree_ids,
+                              range(len(self.ensemble.sub_tree_ids))))
+        sid_to_halo_6d = {
+            int(h.sub_tree_id): np.concatenate([h.xcen, h.velocity])
+            for h in self.ensemble
+            if int(h.sub_tree_id) in set(int(s) for s in group_subtrees)
+        }
+
+        prior_kwargs = build_bgmm_priors(
+            self.previous_parameters, group_subtrees, csc_b,
+            scaler, n_comp, sid_to_halo_6d,
+            self.cov_type, self.particle_coords.shape[1],
+        )
+
         try:
             gmm = self.mixture_class(
-                **init_kwargs, **run_kwargs,
+                **init_kwargs, **prior_kwargs, **run_kwargs,
             ).fit(coords, latent_prior=prior)
         except np.linalg.LinAlgError:
             run_kwargs["cast_dtype"] = np.float64
             gmm = self.mixture_class(
-                **init_kwargs, **run_kwargs,
+                **init_kwargs, **prior_kwargs, **run_kwargs,
             ).fit(coords, latent_prior=prior)
             warnings.warn("Precision increased to float64.")
 
@@ -223,6 +240,9 @@ class XGMMAssigner:
         }
         natural = self.get_parameters_natural(scaled, scaler)
 
+        # Effective particle counts per component for next snapshot
+        nk_after = post_prob.sum(axis=0)
+
         for i, sid in enumerate(group_subtrees):
             sid = int(sid)
             if sid in natural["means"]:
@@ -231,7 +251,7 @@ class XGMMAssigner:
                 cond = float(vals.max() / max(vals.min(), 1e-30))
                 self.parameters[sid] = {
                     "mean": natural["means"][sid],
-                    "weight": natural["weights"][sid],
+                    "count": float(nk_after[i]),
                     "covariance": natural["covariances"][sid],
                     "covariance_condition": cond,
                 }
