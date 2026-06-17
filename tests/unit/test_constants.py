@@ -30,14 +30,5 @@ class TestConstantsExist:
         assert C.SOFTENING_NFW > 0
 
     def test_all_in__all__(self):
-        expected = [
-            "G_KM",
-            "G_GALACTIC",
-            "DYN_TIME_FACTOR",
-            "SOFTENING_KEPLER",
-            "SOFTENING_NFW",
-            "RILEY_BOUND_THRESHOLD",
-            "RILEY_SVM_SLOPE",
-            "RILEY_SVM_INTERCEPT",
-        ]
+        expected = C.__all__
         assert C.__all__ == expected

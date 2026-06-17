@@ -46,7 +46,6 @@ def _make_assignment_result(n_particles=100, n_galaxies=5):
         fitted_parameters=fitted,
         statistics={"groups": 1},
     )
-    # Build matching boundness CSC
     bound_csc = SparseCSC(
         col_idx_list, col_val_list,
         column_id=np.arange(1, n_galaxies + 1, dtype=np.int64),
@@ -65,9 +64,9 @@ class TestHDF5AssignmentWriter:
         result, csc = _make_assignment_result()
         w.write_snapshot(0, 13.0, result, csc)
 
-        path = os.path.join(tmp_dir, "assignment.hdf5")
+        path = os.path.join(tmp_dir, "assignment", "snapshot0000.hdf5")
         with h5py.File(path, "r") as hf:
-            galaxies = hf["/snapshots/0/galaxies"]
+            galaxies = hf["galaxies"]
             for gid in range(1, 6):
                 grp = galaxies[str(gid)]
                 assert "indices" in grp
@@ -78,19 +77,23 @@ class TestHDF5AssignmentWriter:
                 assert "covariance" in grp
                 assert grp["indices"].shape == grp["log_resp"].shape
                 assert grp["indices"].shape == grp["boundness"].shape
-            assert "hard_assignment" in hf[f"/snapshots/0"]
+            assert "hard_assignment" in hf
+            assert hf.attrs["time"] == 13.0
 
     def test_timescales(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
         w = HDF5AssignmentWriter(tmp_dir)
         result, csc = _make_assignment_result()
         w.write_snapshot(0, 13.0, result, csc)
-        ts = np.full(100, 0.5, dtype=np.float32)
+        ts = np.array(
+            list(zip(range(100), np.full(100, 0.5, dtype=np.float32))),
+            dtype=[("particle_index", np.uint64), ("timescale", np.float32)],
+        )
         w.write_timescales(ts)
-        path = os.path.join(tmp_dir, "assignment.hdf5")
-        with h5py.File(path, "r") as hf:
-            stored = hf["header/timescales"][:]
-            assert np.allclose(stored, ts)
+        ts_path = os.path.join(tmp_dir, "assignment", "timescales.txt")
+        assert os.path.exists(ts_path)
+        loaded = np.loadtxt(ts_path, dtype=np.uint64)
+        assert loaded.shape == (100, 2)
 
     def test_empty_assignment(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
@@ -112,6 +115,6 @@ class TestHDF5AssignmentWriter:
                               [np.array([], dtype=np.float32)],
                               column_id=np.array([1], dtype=np.int64))
         w.write_snapshot(0, 13.0, result, bound_csc)
-        path = os.path.join(tmp_dir, "assignment.hdf5")
+        path = os.path.join(tmp_dir, "assignment", "snapshot0000.hdf5")
         with h5py.File(path, "r") as hf:
-            assert "/snapshots/0/hard_assignment" in hf
+            assert "hard_assignment" in hf

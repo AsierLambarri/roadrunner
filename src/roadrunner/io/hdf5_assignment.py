@@ -9,8 +9,16 @@ from roadrunner.helpers import select_float_dtype, select_uint_dtype
 class HDF5AssignmentWriter:
     def __init__(self, output_dir, float_atol=1e-4):
         os.makedirs(output_dir, exist_ok=True)
-        self._path = os.path.join(output_dir, "assignment.hdf5")
+        self._dir = os.path.join(output_dir, "assignment")
         self._float_atol = float_atol
+
+    def _snap_path(self, snapshot_id):
+        os.makedirs(self._dir, exist_ok=True)
+        return os.path.join(self._dir, f"snapshot{snapshot_id:04d}.hdf5")
+
+    def _ts_path(self):
+        os.makedirs(self._dir, exist_ok=True)
+        return os.path.join(self._dir, "timescales.txt")
 
     def _gal_uint_dtype(self, gids):
         return select_uint_dtype(int(max(gids)) if len(gids) > 0 else 1)
@@ -21,15 +29,14 @@ class HDF5AssignmentWriter:
 
     def write_snapshot(self, snapshot_id, time,
                        assignment_result, boundness_csc):
-        with h5py.File(self._path, "a") as hf:
-            snap_grp = hf.require_group(f"/snapshots/{snapshot_id}")
-            snap_grp.attrs["time"] = float(time)
+        path = self._snap_path(snapshot_id)
+        with h5py.File(path, "w") as hf:
+            hf.attrs["time"] = float(time)
 
-            galaxies_grp = snap_grp.require_group("galaxies")
+            galaxies_grp = hf.require_group("galaxies")
 
             resp_csc = assignment_result.responsibilities
             all_gids = list(resp_csc.column_id)
-            uint_dtype = self._gal_uint_dtype(all_gids) if all_gids else np.uint32
             if all_gids:
                 all_vals = np.concatenate(resp_csc.column_values)
                 float_dtype = self._pick_float_dtype(all_vals)
@@ -98,23 +105,15 @@ class HDF5AssignmentWriter:
                         **kw,
                     )
 
-            # Hard assignment
-            hard_path = "/".join(["", "snapshots", str(snapshot_id), "hard_assignment"])
-            if hard_path in hf:
-                del hf[hard_path]
-            snap_grp.create_dataset(
+            # Hard assignment at root
+            hf.create_dataset(
                 "hard_assignment",
                 data=assignment_result.particle_df.to_records(index=False),
                 compression="gzip",
             )
 
     def write_timescales(self, particle_timescales):
-        with h5py.File(self._path, "a") as hf:
-            hdr = hf.require_group("header")
-            if "timescales" in hdr:
-                del hdr["timescales"]
-            hdr.create_dataset(
-                "timescales",
-                data=particle_timescales,
-                compression="gzip",
-            )
+        path = self._ts_path()
+        np.savetxt(path, particle_timescales,
+                   header="particle_index\ttimescale",
+                   fmt="%u\t%.6f")

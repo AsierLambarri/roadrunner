@@ -30,31 +30,29 @@ class TestHDF5ParticleWriter:
         w = HDF5ParticleWriter(tmp_dir)
         snap = self._make_snap_data()
         w.write_snapshot(0, 13.0, 0.1, snap)
-        path = os.path.join(tmp_dir, "particles.hdf5")
+        path = os.path.join(tmp_dir, "particle_data", "snapshot0000.hdf5")
         with h5py.File(path, "r") as hf:
-            grp = hf["/snapshots/0"]
-            assert "positions" in grp
-            assert "velocities" in grp
-            assert "masses" in grp
-            assert "indices" in grp
-            assert "scaler" in grp
-            assert grp["positions"].shape == (50, 3)
-            assert grp["masses"].shape == (50,)
-            assert grp.attrs["time"] == 13.0
-            assert grp.attrs["redshift"] == 0.1
+            assert "positions" in hf
+            assert "velocities" in hf
+            assert "masses" in hf
+            assert "indices" in hf
+            assert "scaler" in hf
+            assert hf["positions"].shape == (50, 3)
+            assert hf["masses"].shape == (50,)
+            assert hf.attrs["time"] == 13.0
+            assert hf.attrs["redshift"] == 0.1
 
     def test_scaler_round_trip(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
         w = HDF5ParticleWriter(tmp_dir)
         snap = self._make_snap_data()
         w.write_snapshot(0, 13.0, 0.1, snap)
-        path = os.path.join(tmp_dir, "particles.hdf5")
+        path = os.path.join(tmp_dir, "particle_data", "snapshot0000.hdf5")
         with h5py.File(path, "r") as hf:
-            grp = hf["/snapshots/0"]
-            mean = grp["scaler/mean"][:]
-            scale = grp["scaler/scale"][:]
-            scaled_pos = grp["positions"][:]
-            scaled_vel = grp["velocities"][:]
+            mean = hf["scaler/mean"][:]
+            scale = hf["scaler/scale"][:]
+            scaled_pos = hf["positions"][:]
+            scaled_vel = hf["velocities"][:]
 
         coords = np.column_stack([snap.positions, snap.velocities])
         scaler = StandardScaler()
@@ -69,7 +67,9 @@ class TestHDF5ParticleWriter:
         w = HDF5ParticleWriter(tmp_dir)
         w.write_snapshot(0, 13.0, 0.1, self._make_snap_data(30))
         w.write_snapshot(1, 12.0, 0.2, self._make_snap_data(40))
-        path = os.path.join(tmp_dir, "particles.hdf5")
-        with h5py.File(path, "r") as hf:
-            assert hf["/snapshots/0/indices"].shape == (30,)
-            assert hf["/snapshots/1/indices"].shape == (40,)
+        p0 = os.path.join(tmp_dir, "particle_data", "snapshot0000.hdf5")
+        p1 = os.path.join(tmp_dir, "particle_data", "snapshot0001.hdf5")
+        with h5py.File(p0, "r") as hf:
+            assert hf["indices"].shape == (30,)
+        with h5py.File(p1, "r") as hf:
+            assert hf["indices"].shape == (40,)
