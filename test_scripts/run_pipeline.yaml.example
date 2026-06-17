@@ -31,7 +31,8 @@ fields:
 # start_snapshot: 0            # First snapshot (or -5 for "5th from last")
 # end_snapshot: 100            # Last snapshot (or -1 for "last")
 
-# ── GMM assigner ─────────────────────────────────────────────────────────────
+# ── Assigner ──────────────────────────────────────────────────────────────────
+assignment_method: gmm          # XGMM method: gmm (standard EM) or bgmm (variational Bayesian)
 cov_type: full                 # Covariance type: full, diagonal, spherical
 max_iter: 10                   # Maximum EM iterations
 tol: 1e-2                      # Convergence tolerance
