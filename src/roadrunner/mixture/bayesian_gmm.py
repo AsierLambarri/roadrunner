@@ -231,12 +231,35 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             self.precisions_ = self.precisions_cholesky_**2        
             
     def _check_parameters(self, X):
-        """Check the values and shapes of parameter models.
+        """Check the values and shapes of weights, covariances, and means.
         """
-        self._check_parameters(X)
+        n_samples, n_features = X.shape
+        if self.cov_type not in ["spherical", "diagonal", "full"]:
+            raise ValueError("provided covariance type is not valid.")
+
+        if self.counts_init is not None:
+            self.counts_init = _check_counts(
+                self.counts_init,
+                self.n_components,
+                n_samples
+            )
+        if self.means_init is not None:
+            self.means_init = _check_means(
+                self.means_init,
+                self.n_components,
+                n_features
+            )
+        if self.covariance_init is not None:
+            self.covariance_init = _check_covariances(
+                self.covariance_init,
+                self.cov_type,
+                self.n_components,
+                n_features
+            )
+
         self._check_weights_prior()
         self._check_means_prior(X)
-        self._check_precisions_prior(X.shape[1])
+        self._check_precisions_prior(n_features)
         self._check_covariance_prior(X)
 
     def _check_weights_prior(self):
@@ -387,40 +410,6 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             raise ValueError(
                 f"degrees_of_freedom should be greater than {n_features-1} but for {self.degrees_of_freedom_prior}"
             )
-
-            
-    def _check_parameters(self, X):
-        """Check the values and shapes of weights, covariances, and means.
-        """
-        n_samples, n_features = X.shape
-        if self.cov_type not in ["spherical", "diagonal", "full"]:
-            raise ValueError("provided covariance type is not valid.")
-
-        self._check_weights_prior()
-        self._check_means_prior(X)
-        self._check_precisions_prior(n_features)
-        self._check_covariance_prior(X)
-
-        if self.counts_init is not None:
-            self.counts_init = _check_counts(
-                self.counts_init,
-                self.n_components,
-                n_samples
-            )
-        if self.means_init is not None:
-            self.means_init = _check_means(
-                self.means_init,
-                self.n_components,
-                n_features
-            )
-        if self.covariance_init is not None:
-            self.covariance_init = _check_covariances(
-                self.covariance_init,
-                self.cov_type,
-                self.n_components,
-                n_features
-            )
-
 
     def _is_incomplete_init(self):
         """Checks wether initialization is incomplete or not.
