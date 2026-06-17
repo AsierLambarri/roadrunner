@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit, prange
 
 
-@njit(parallel=True, fastmath=False, inline="always")
+@njit(parallel=True, fastmath=False, inline="always", cache=True)
 def logsumexp(log_probs):
     N, M = log_probs.shape
     out = np.empty((N, 1), dtype=log_probs.dtype)
@@ -23,7 +23,7 @@ def logsumexp(log_probs):
     return out
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def row_l1_normalize(resp):
     n_samples, n_components = resp.shape
     for n in prange(n_samples):
@@ -38,7 +38,7 @@ def row_l1_normalize(resp):
     return resp
 
 
-@njit(fastmath=False)
+@njit(fastmath=False, cache=True)
 def row_squared_norms(X):
     n_samples, n_features = X.shape
     result = np.empty(n_samples, dtype=X.dtype)

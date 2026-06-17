@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit
 
 
-@njit
+@njit(cache=True)
 def _weighted_com(positions, masses):
     ndim = positions.shape[1]
     center = np.zeros(ndim, dtype=positions.dtype)
@@ -17,7 +17,7 @@ def _weighted_com(positions, masses):
     return center
 
 
-@njit
+@njit(cache=True)
 def _max_radius(positions, center):
     rmax2 = 0.0
     for i in range(positions.shape[0]):
@@ -30,7 +30,7 @@ def _max_radius(positions, center):
     return np.sqrt(rmax2)
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def centering_statistic_SSC_numba(
     positions, velocities, masses,
     alpha=0.9, nmin=100, atol=1e-5,

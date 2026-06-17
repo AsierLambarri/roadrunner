@@ -19,7 +19,7 @@ def build_dense_from_csc(matrix_shape, true_indices, column_indices, column_valu
     )
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _csc_to_dense_kernel(
     matrix_shape, true_indices, flat_indices, flat_values, offsets,
     fill_value,
@@ -42,7 +42,7 @@ def _csc_to_dense_kernel(
     return np.asarray(dense, dtype=flat_values.dtype)
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def stitch_zero_rows(matrix1, matrix2):
     assert matrix1.shape == matrix2.shape, (
         f"Matrices cannot be stitched together: shape {matrix1.shape} "

@@ -28,7 +28,7 @@ def _rank_transform(values, func_rank=np.log1p):
     return func_rank(ranks).astype(np.float32, copy=False)
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
     """Merge previous responsibilities with boundness.
 
