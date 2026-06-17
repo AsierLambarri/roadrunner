@@ -3,7 +3,7 @@ from scipy.special import digamma, gammaln
 from scipy.linalg import solve_triangular
 
 from ._kmeans_plusplus import kmeans_plusplus_prior
-from ._math import row_squared_norms
+from ._math import entropy_sum, row_squared_norms
 from .base import BaseMixture
 from .weighted_gmm import (
     _check_counts,
@@ -612,7 +612,7 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         ).sum()
 
         return (
-            - np.sum(np.exp(log_resp) * log_resp)
+            - entropy_sum(log_resp, np.exp(log_resp))
             - log_norm_weight
             - log_wishart
             - 0.5 * n_features * np.sum(np.log(self.mean_precision_))

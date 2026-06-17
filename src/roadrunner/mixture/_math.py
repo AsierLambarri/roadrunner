@@ -24,6 +24,16 @@ def logsumexp(log_probs):
 
 
 @njit(parallel=True, cache=True)
+def entropy_sum(log_resp, resp):
+    s = 0.0
+    for i in prange(log_resp.shape[0]):
+        for j in range(log_resp.shape[1]):
+            if resp[i, j] > 0:
+                s += resp[i, j] * log_resp[i, j]
+    return s
+
+
+@njit(parallel=True, cache=True)
 def row_l1_normalize(resp):
     n_samples, n_components = resp.shape
     for n in prange(n_samples):
