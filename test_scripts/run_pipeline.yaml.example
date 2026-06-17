@@ -28,8 +28,8 @@ fields:
 
 # ── Target halo ──────────────────────────────────────────────────────────────
 # accretion_id: 12345          # Target Sub_tree_id (auto-detect if omitted)
-# start_snapshot: 0            # First snapshot to process (default: first)
-# end_snapshot: 100            # Last snapshot to process (default: last)
+# start_snapshot: 0            # First snapshot (or -5 for "5th from last")
+# end_snapshot: 100            # Last snapshot (or -1 for "last")
 
 # ── GMM assigner ─────────────────────────────────────────────────────────────
 cov_type: full                 # Covariance type: full, diagonal, spherical
@@ -44,6 +44,20 @@ n_los: 15                      # Number of lines of sight for properties
 search_factor: 1.0             # Search radius multiplier (Rvir)
 comoving: true                 # Merger tree positions in comoving kpc (true)
                                #   or physical kpc (false)
+
+# ── Centering ────────────────────────────────────────────────────────────────
+use_gmm_centers: true          # Use GMM-derived centers when available
+min_particles_structural: 30   # Minimum particles for structural properties
+ssc_nmin: 30                   # Minimum particles for shrink-sphere centering
+ssc_alpha: 0.9                 # Shrink-sphere contraction factor (0-1)
+
+# ── Dynstate (Riley criterion) ───────────────────────────────────────────────
+dynstate_snapshots: [-2, -1]   # Which snapshots get dynstate:
+                               #   null     → all snapshots
+                               #   -1       → only last
+                               #   [-2, -1] → last two
+                               #   [0, 10]  → specific IDs
+                               #   /path/snaps.txt → load from file
 
 # ── Birth tracker ────────────────────────────────────────────────────────────
 birth_window_factor: 5.0       # Birth scoring window (set ≤ 0 to disable)
