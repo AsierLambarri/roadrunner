@@ -40,3 +40,9 @@ scripts/
 # Planning documents (not part of source code)
 planning/
 re-planning/
+
+# Draft development files
+_XGMMAssigner.py
+test_scripts/test_bgmm_vs_sklearn.py
+test_scripts/mixtures.py
+test_scripts/test_bayes_priors.py

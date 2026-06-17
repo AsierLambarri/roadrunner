@@ -9,12 +9,29 @@ from roadrunner._mcf_types import AssignmentResult
 from roadrunner.clustering.assignment.statistics import GMMAssignerStatistics
 from roadrunner.clustering.sparse import SparseCSC, stitch_zero_rows
 from roadrunner.mixture._math import row_l1_normalize
+from roadrunner.mixture.base import BaseMixture
 from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
     _estimate_gaussian_parameters,
 )
+from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
 from roadrunner._defaults import UNRESOLVED_GROUP_RATIO
 from roadrunner.physics.halo_ensemble import HaloEnsemble
+
+
+_MIXTURE_CLASSES: dict[str, type[BaseMixture]] = {
+    "gmm": WeightedGaussianMixture,
+    "bgmm": WeightedBayesianGaussianMixture,
+}
+
+
+def _get_mixture_class(method: str) -> type[BaseMixture]:
+    try:
+        return _MIXTURE_CLASSES[method]
+    except KeyError:
+        raise ValueError(
+            f"Unknown assignment method {method!r}. "
+            f"Choose from: {list(_MIXTURE_CLASSES)}")
 
 
 def _no_transform(values):
@@ -30,15 +47,6 @@ def _rank_transform(values, func_rank=np.log1p):
 
 @njit(parallel=True, cache=True)
 def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
-    """Merge previous responsibilities with boundness.
-
-    Parameters
-    ----------
-    raw : float32 (n, k) — prev_dense on input, overwritten with merged result.
-    bound : float32 (n, k) — dense boundness matrix.
-    n_components : int
-    newborn_1d : bool (n,) — True for newborn particles.
-    """
     n = raw.shape[0]
     inv_ncomp = 1.0 / n_components
     for n_idx in prange(n):
@@ -57,17 +65,10 @@ def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
                 raw[n_idx, k_idx] = 0.0
 
 
-class GMMAssigner:
-    def __init__(
-        self,
-        cov_type="full",
-        max_iter=10,
-        tol=1e-2,
-        min_particles=10,
-        reg_covar=1e-6,
-        prior_type="",
-        verbose=1,
-    ):
+class XGMMAssigner:
+    def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
+                 min_particles=10, reg_covar=1e-6, prior_type="",
+                 verbose=1, method="gmm"):
         self.cov_type = cov_type
         self.max_iter = max_iter
         self.tol = tol
@@ -75,22 +76,24 @@ class GMMAssigner:
         self.reg_covar = reg_covar
         self.prior_type = prior_type
         self.verbose = verbose
+        self.method = method
+        self.mixture_class = _get_mixture_class(method)
         self.statistics = GMMAssignerStatistics()
 
-    def assign(
-        self, halos, particle_coords, newborn_indices, groups, **kwargs
-    ) -> AssignmentResult:
-        self.ensemble = HaloEnsemble(halos) if not isinstance(halos, HaloEnsemble) else halos
+    def assign(self, halos, particle_coords, newborn_indices, groups,
+               **kwargs) -> AssignmentResult:
+        self.ensemble = (
+            HaloEnsemble(halos)
+            if not isinstance(halos, HaloEnsemble)
+            else halos
+        )
         self.particle_coords = particle_coords
         self.newborn_indices = newborn_indices
         self.previous_resp = kwargs.get("previous_resp", {})
 
         N = particle_coords.shape[0]
         self.particles_df = pd.DataFrame(
-            {
-                "array_index": np.arange(N, dtype=np.uint64),
-                "Sub_tree_id": -1,
-            }
+            {"array_index": np.arange(N, dtype=np.uint64), "Sub_tree_id": -1}
         ).set_index("array_index")
         self.resp_map: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self.parameters: dict[int, dict] = {}
@@ -115,12 +118,12 @@ class GMMAssigner:
             column_id=gids,
         )
         return AssignmentResult(
-            self.particles_df, resp_csc, self.parameters, {
-                "groups": len(groups),
-                "halos_in_groups": sum(len(g) for g in groups),
-                "bound_particles": self.ensemble.nstars,
-                **self.statistics.values,
-        })
+            self.particles_df, resp_csc, self.parameters,
+            {"groups": len(groups),
+             "halos_in_groups": sum(len(g) for g in groups),
+             "bound_particles": self.ensemble.nstars,
+             **self.statistics.values,
+            })
 
     def _process_group(self, group):
         sub_ensemble = self.ensemble.select(group)
@@ -152,8 +155,7 @@ class GMMAssigner:
             mask = nonz[:, i] > 0
             if np.any(mask):
                 self.resp_map[group_subtrees[i]] = (
-                    gp_idx[mask],
-                    post_prob[mask, i],
+                    gp_idx[mask], post_prob[mask, i],
                 )
 
         assigned = group_subtrees[post_prob.argmax(axis=1)]
@@ -174,37 +176,36 @@ class GMMAssigner:
     def _fit_resolved(self, gp_idx, group_subtrees, csc_b):
         from roadrunner.physics.scaler import StandardScaler
         scaler = StandardScaler()
-        coords = scaler.fit_transform(self.particle_coords[gp_idx].astype(np.float64, copy=False))
+        coords = scaler.fit_transform(
+            self.particle_coords[gp_idx].astype(np.float64, copy=False))
 
-        prior, w_init, m_init, c_init, cov_t = self._estimate_initial_params(
-            coords, csc_b
-        )
+        prior, nk, means, covs, cov_t = self._estimate_initial_params(
+            coords, csc_b)
         nonz = (prior > 0).astype(np.uint8)
         n_comp = len(group_subtrees)
 
+        init_kwargs = dict(
+            n_components=n_comp,
+            counts_init=nk,
+            means_init=means,
+            covariance_init=covs,
+            cov_type=cov_t,
+            init_params="kmeans++",
+        )
+        run_kwargs = dict(
+            cast_dtype=np.float32,
+            tol=self.tol,
+            verbose=self.verbose,
+        )
+
         try:
-            gmm = WeightedGaussianMixture(
-                n_components=n_comp,
-                means_init=m_init,
-                covariance_init=c_init,
-                weights_init=w_init,
-                cov_type=cov_t,
-                init_params="kmeans++",
-                cast_dtype=np.float32,
-                tol=self.tol,
-                verbose=self.verbose,
+            gmm = self.mixture_class(
+                **init_kwargs, **run_kwargs,
             ).fit(coords, latent_prior=prior)
         except np.linalg.LinAlgError:
-            gmm = WeightedGaussianMixture(
-                n_components=n_comp,
-                means_init=m_init,
-                covariance_init=c_init,
-                weights_init=w_init,
-                cov_type=cov_t,
-                init_params="kmeans++",
-                cast_dtype=np.float64,
-                tol=self.tol,
-                verbose=self.verbose,
+            run_kwargs["cast_dtype"] = np.float64
+            gmm = self.mixture_class(
+                **init_kwargs, **run_kwargs,
             ).fit(coords, latent_prior=prior)
             warnings.warn("Precision increased to float64.")
 
@@ -212,9 +213,12 @@ class GMMAssigner:
         post_prob = np.exp(log_prob)
 
         scaled = {
-            "means": {int(sid): gmm.means_[i] for i, sid in enumerate(group_subtrees)},
-            "weights": {int(sid): gmm.weights_[i] for i, sid in enumerate(group_subtrees)},
-            "covariances": {int(sid): gmm.covariances_[i] for i, sid in enumerate(group_subtrees)},
+            "means": {int(sid): gmm.means_[i]
+                      for i, sid in enumerate(group_subtrees)},
+            "weights": {int(sid): gmm.weights_[i]
+                        for i, sid in enumerate(group_subtrees)},
+            "covariances": {int(sid): gmm.covariances_[i]
+                            for i, sid in enumerate(group_subtrees)},
             "cov_type": gmm.cov_type,
         }
         natural = self.get_parameters_natural(scaled, scaler)
@@ -260,9 +264,8 @@ class GMMAssigner:
             coords, resp, np.ones(n_samples, dtype=np.float32),
             self.cov_type, reg_covar=self.reg_covar,
         )
-        weights_init = nk / nk.sum()
 
-        return prior, weights_init, means_init, covs_init, self.cov_type
+        return prior, nk, means_init, covs_init, self.cov_type
 
     @staticmethod
     def get_parameters_natural(stored, scaler):

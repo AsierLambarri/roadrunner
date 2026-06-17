@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore")
 
 from roadrunner.pipeline.processing import ProcessingConfig, process_snapshot
 from roadrunner._mcf_types import SnapshotData
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 
 
@@ -61,7 +61,7 @@ class TestProcessingConfig:
 class TestProcessSnapshot:
     def test_returns_ensemble_and_result(self):
         tree, coords, masses, snap_data = _load_mock()
-        assigner = GMMAssigner(
+        assigner = XGMMAssigner(
             cov_type="full", max_iter=5, tol=1e-2,
             min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
         )
@@ -76,7 +76,7 @@ class TestProcessSnapshot:
 
     def test_with_previous_resp(self):
         tree, coords, masses, snap_data = _load_mock()
-        assigner = GMMAssigner(
+        assigner = XGMMAssigner(
             cov_type="full", max_iter=3, tol=1e-2,
             min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
         )
@@ -93,7 +93,7 @@ class TestProcessSnapshot:
 
     def test_search_factor_affects_boundness(self):
         tree, coords, masses, snap_data = _load_mock()
-        assigner = GMMAssigner(
+        assigner = XGMMAssigner(
             cov_type="full", max_iter=5, tol=1e-2,
             min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
         )
@@ -112,7 +112,7 @@ class TestProcessSnapshot:
 
     def test_min_particles_affects_groups(self):
         tree, coords, masses, snap_data = _load_mock()
-        assigner = GMMAssigner(
+        assigner = XGMMAssigner(
             cov_type="full", max_iter=5, tol=1e-2,
             min_particles=5, reg_covar=1e-6, prior_type="", verbose=0,
         )

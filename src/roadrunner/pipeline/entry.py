@@ -6,7 +6,7 @@ from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.snapshot import SnapshotReader
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.physics.merger_tree import MergerTreeHandlerCSV
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.pipeline.config import RunConfig
 from roadrunner.pipeline.processing import ProcessingConfig
 from roadrunner.pipeline.reduction import ReductionConfig
@@ -42,7 +42,7 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         )
         accretion_id = int(host_df["Sub_tree_id"].iloc[0])
 
-    assigner = GMMAssigner(
+    assigner = XGMMAssigner(
         cov_type=config.cov_type,
         max_iter=config.max_iter,
         tol=config.tol,
@@ -50,6 +50,7 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         reg_covar=config.reg_covar,
         prior_type="",
         verbose=1,
+        method=config.assignment_method,
     )
 
     processing_config = ProcessingConfig(

@@ -2,7 +2,7 @@ import numpy as np
 
 from roadrunner._mcf_types import ParticleAssigner
 from roadrunner.clustering.assignment.gmm import (
-    GMMAssigner,
+    XGMMAssigner,
     _merge_resp_kernel,
     _no_transform,
     _rank_transform,
@@ -117,16 +117,16 @@ class TestMergeRespKernel:
         assert prev[1, 0] == 0.0   # newborn + bound → 0
 
 
-# ── GMMAssigner integration tests ───────────────────────
+# ── XGMMAssigner integration tests ───────────────────────
 
-class TestGMMAssigner:
+class TestXGMMAssigner:
     def test_is_particle_assigner(self):
-        assert isinstance(GMMAssigner(), ParticleAssigner)
+        assert isinstance(XGMMAssigner(), ParticleAssigner)
 
     def test_single_halo(self):
         halos, coords = _setup_mock_halos(n_halos=1, n_particles=50)
         groups = [[0]]
-        assigner = GMMAssigner(verbose=0)
+        assigner = XGMMAssigner(verbose=0)
         result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
         assert result.particle_df is not None
         assert isinstance(result.responsibilities, SparseCSC)
@@ -134,7 +134,7 @@ class TestGMMAssigner:
     def test_two_halos_assigned(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]
-        assigner = GMMAssigner(verbose=0)
+        assigner = XGMMAssigner(verbose=0)
         result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
         df = result.particle_df
         assert len(df) == 100
@@ -143,7 +143,7 @@ class TestGMMAssigner:
     def test_assign_returns_respmap(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=50)
         groups = [[0], [1]]
-        assigner = GMMAssigner(verbose=0)
+        assigner = XGMMAssigner(verbose=0)
         result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
         assert isinstance(result.responsibilities, SparseCSC)
         assert len(result.responsibilities.column_id) > 0
@@ -156,7 +156,7 @@ class TestGMMAssigner:
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]
         newborn = np.array([0, 1], dtype=np.uint64)
-        assigner = GMMAssigner(verbose=0)
+        assigner = XGMMAssigner(verbose=0)
         result = assigner.assign(halos, coords, newborn, groups)
         assert result.particle_df is not None
 
@@ -174,7 +174,7 @@ class TestGMMAssigner:
         ]
         prev_resp = SparseCSC(prev_candidates, prev_values, column_id=np.array([1, 2], dtype=np.int64))
 
-        assigner = GMMAssigner(verbose=0)
+        assigner = XGMMAssigner(verbose=0)
         result = assigner.assign(
             halos, coords, np.array([], dtype=np.uint64), groups,
             previous_resp=prev_resp,
@@ -199,7 +199,7 @@ class TestGMMAssigner:
             np.full(200, 0.1, dtype=np.float32),
         )
         groups = [[0, 1]]
-        assigner = GMMAssigner(verbose=0, max_iter=5)
+        assigner = XGMMAssigner(verbose=0, max_iter=5)
         result = assigner.assign([h1, h2], coords, np.array([], dtype=np.uint64), groups)
         assert result.particle_df is not None
 
@@ -215,6 +215,6 @@ class TestGMMAssigner:
         )
         # h2 has no boundness — stays empty
         groups = [[0, 1]]
-        assigner = GMMAssigner(verbose=0)
+        assigner = XGMMAssigner(verbose=0)
         result = assigner.assign([h1, h2], coords, np.array([], dtype=np.uint64), groups)
         assert result.particle_df is not None

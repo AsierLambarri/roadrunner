@@ -6,7 +6,7 @@ import pytest
 
 from roadrunner._exceptions import RestartError
 from roadrunner._mcf_types import SnapshotData
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_reader import HDF5CatalogueReader
@@ -44,7 +44,7 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers
 
     merger_handler = MergerTreeHandlerCSV(tree.copy())
 
-    assigner = GMMAssigner(
+    assigner = XGMMAssigner(
         cov_type=cov_type, max_iter=3, tol=1e-2,
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
     )

@@ -9,6 +9,23 @@ from .base import BaseMixture
 
 
 
+def _check_counts(counts, n_components, n_samples):
+    if counts is None:
+        raise ValueError("counts should not be None")
+
+    counts = np.asarray(counts)
+
+    if counts.shape != (n_components,):
+        raise ValueError(
+            f"counts must have shape ({n_components},), got {counts.shape}"
+        )
+
+    if np.any(counts < 0):
+        raise ValueError("counts must be non-negative")
+        if not np.allclose(counts.sum(), n_samples, atol=1E-1):
+            raise ValueError(f"counts must sum to {n_samples}, got {counts.sum()}")
+
+    return counts
 
 
 def _check_weights(weights, n_components):
@@ -268,11 +285,8 @@ def _estimate_log_gaussian_prob(X, means, covs, cov_type):
 
 
 
-
-
-
 class WeightedGaussianMixture(BaseMixture):
-    def __init__(self, n_components=2, means_init=None, covariance_init=None, weights_init=None, cov_type="full",
+    def __init__(self, n_components=2, means_init=None, covariance_init=None, counts_init=None, cov_type="full",
                  init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6, cast_dtype=np.float64,
                  **kwargs):
 
@@ -290,7 +304,7 @@ class WeightedGaussianMixture(BaseMixture):
 
         self.means_init   = means_init
         self.covariance_init = covariance_init
-        self.weights_init = weights_init if weights_init is None else np.maximum(weights_init, np.finfo(self.cast_dtype).eps)
+        self.counts_init = counts_init 
         self.means_       = None         # (K, D)
         self.covariances_ = None         # (K, D, D)
         self.weights_     = None         # (K,)
@@ -307,14 +321,15 @@ class WeightedGaussianMixture(BaseMixture):
     def _check_parameters(self, X):
         """Check the values and shapes of weights, covariances, and means.
         """
-        _, n_features = X.shape
+        n_samples, n_features = X.shape
         if self.cov_type not in ["spherical", "diagonal", "full"]:
             raise ValueError("provided covariance type is not valid.")
 
-        if self.weights_init is not None:
-            self.weights_init = _check_weights(
-                self.weights_init,
-                self.n_components
+        if self.counts_init is not None:
+            self.counts_init = _check_counts(
+                self.counts_init,
+                self.n_components,
+                n_samples
             )
         if self.means_init is not None:
             self.means_init = _check_means(
@@ -336,7 +351,7 @@ class WeightedGaussianMixture(BaseMixture):
         """
         return (
             self.means_init is None
-            or self.weights_init is None
+            or self.counts_init is None
             or self.covariance_init is None
         )
 
@@ -367,7 +382,7 @@ class WeightedGaussianMixture(BaseMixture):
             )
             weights /= weights.sum()
 
-        self.weights_  = np.maximum(weights, np.finfo(X.dtype).eps) if self.weights_init is None else np.asarray(self.weights_init, dtype=X.dtype)
+        self.weights_  = weights if self.counts_init is None else np.asarray(self.counts_init, dtype=X.dtype)
         self.weights_ /= self.weights_.sum()
         self.means_    = means if self.means_init is None else np.asarray(self.means_init, dtype=X.dtype)
         self.covariances_ = covariances if self.covariance_init is None else np.asarray(self.covariance_init, dtype=X.dtype)

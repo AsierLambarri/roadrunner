@@ -25,7 +25,7 @@ from .postprocessing.tracking.birth import BirthTracker
 from .postprocessing.tracking.assembly import AssemblyTracker
 from .postprocessing.mixing import compute_riley_criterion
 from .postprocessing.properties import compute_galaxy_properties
-from .clustering.assignment.gmm import GMMAssigner
+from .clustering.assignment.gmm import XGMMAssigner
 from .physics.halo_model import HaloModel
 from .physics.potentials import get_potential, KeplerPotential, NFWPotential
 
@@ -55,7 +55,7 @@ __all__ = [
     "AssemblyTracker",
     "compute_riley_criterion",
     "compute_galaxy_properties",
-    "GMMAssigner",
+    "XGMMAssigner",
     "HaloModel",
     "get_potential",
     "KeplerPotential",

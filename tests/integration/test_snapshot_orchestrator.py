@@ -7,7 +7,7 @@ import pandas as pd
 warnings.filterwarnings("ignore")
 
 from roadrunner._mcf_types import SnapshotData
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.pipeline.processing import ProcessingConfig
 from roadrunner.pipeline.reduction import ReductionConfig
 from roadrunner.pipeline.snapshot_orchestrator import (
@@ -42,7 +42,7 @@ def _load_mock():
 
 
 def _make_assigner():
-    return GMMAssigner(
+    return XGMMAssigner(
         cov_type="full", max_iter=5, tol=1e-2,
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
     )

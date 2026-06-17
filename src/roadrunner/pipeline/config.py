@@ -22,6 +22,7 @@ class RunConfig:
     start_snapshot: int | None = None
     end_snapshot: int | None = None
 
+    assignment_method: str = "gmm"
     halo_model: str = "kepler"
     cov_type: str = "full"
     max_iter: int = 10

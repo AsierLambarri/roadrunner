@@ -5,7 +5,13 @@ from scipy.linalg import solve_triangular
 from ._kmeans_plusplus import kmeans_plusplus_prior
 from ._math import row_squared_norms
 from .base import BaseMixture
-from .weighted_gmm import _estimate_gaussian_parameters
+from .weighted_gmm import (
+    _check_counts,
+    _check_weights,
+    _check_means,
+    _check_covariances,
+    _estimate_gaussian_parameters
+)
 
 
 def _log_dirichlet_norm(alpha):
@@ -170,7 +176,7 @@ def _estimate_log_gaussian_prob_pchol(X, means, precisions_chol, cov_type):
 
 
 class WeightedBayesianGaussianMixture(BaseMixture):
-    def __init__(self, n_components=2, means_init=None, resp_init=None, cov_type="full", 
+    def __init__(self, n_components=2, means_init=None, covariance_init=None, counts_init=None, cov_type="full", 
                  weight_concentration_prior=None, mean_precision_prior=None, mean_prior=None, degrees_of_freedom_prior=None, covariance_prior=None,
                  init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6, cast_dtype=np.float64, 
                  **kwargs):
@@ -194,7 +200,9 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self.covariance_prior           = covariance_prior
 
         self.means_init   = means_init
-        self.resp_init    = resp_init
+        self.covariance_init = covariance_init
+        self.counts_init = counts_init 
+        
         self.means_       = None         
         self.covariances_ = None         
         self.weight_concentration_ = None         
@@ -224,7 +232,8 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             
     def _check_parameters(self, X):
         """Check the values and shapes of parameter models.
-        """        
+        """
+        self._check_parameters(X)
         self._check_weights_prior()
         self._check_means_prior(X)
         self._check_precisions_prior(X.shape[1])
@@ -380,11 +389,46 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             )
 
             
+    def _check_parameters(self, X):
+        """Check the values and shapes of weights, covariances, and means.
+        """
+        n_samples, n_features = X.shape
+        if self.cov_type not in ["spherical", "diagonal", "full"]:
+            raise ValueError("provided covariance type is not valid.")
+
+        self._check_weights_prior()
+        self._check_means_prior(X)
+        self._check_precisions_prior(n_features)
+        self._check_covariance_prior(X)
+
+        if self.counts_init is not None:
+            self.counts_init = _check_counts(
+                self.counts_init,
+                self.n_components,
+                n_samples
+            )
+        if self.means_init is not None:
+            self.means_init = _check_means(
+                self.means_init,
+                self.n_components,
+                n_features
+            )
+        if self.covariance_init is not None:
+            self.covariance_init = _check_covariances(
+                self.covariance_init,
+                self.cov_type,
+                self.n_components,
+                n_features
+            )
+
+
     def _is_incomplete_init(self):
         """Checks wether initialization is incomplete or not.
         """
         return (
-            self.resp_init is None
+            self.means_init is None
+            or self.counts_init is None
+            or self.covariance_init is None
         )
         
     def _initialize_complete(self, X, resp, _):
@@ -393,16 +437,19 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         """
         n_samples, _ = X.shape
         
-        nk, xk, sk = _estimate_gaussian_parameters(
-            X, 
-            resp if self._incomplete else self.resp_init, 
-            np.ones(X.shape[0]), self.cov_type, self.reg_covar
-        )
+        nk, xk, sk = None, None, None
+        if resp is not None:
+            nk, xk, sk = _estimate_gaussian_parameters(
+                X, resp, np.ones(X.shape[0]), self.cov_type, self.reg_covar
+            )
+
+        nk = self.counts_init if nk is None else nk
+        xk = self.means_init if  xk is None else xk
+        sk = self.covariance_init if sk is None else sk
 
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
         self._estimate_covariances(nk, xk, sk)
-        del self.resp_init
 
     def _initialize_means(self, X, _, alpha):
         """Initializes the means of the clusters through kmeans++ algorithm and taking into account
