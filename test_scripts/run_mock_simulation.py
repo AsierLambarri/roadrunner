@@ -12,6 +12,9 @@ Usage:
       --accretion-id 1
 """
 
+import sys
+sys.path.insert(0, "src")
+
 import argparse
 import os
 
@@ -21,7 +24,7 @@ from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.physics.merger_tree import MergerTreeHandlerCSV
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.pipeline.processing import ProcessingConfig
 from roadrunner.pipeline.reduction import ReductionConfig
 from roadrunner.pipeline.snapshot_orchestrator import SnapshotOrchestrator
@@ -70,6 +73,8 @@ def main():
                         help="Only process the first N snapshots (default: all)")
 
     # GMM
+    parser.add_argument("--method", default="gmm",
+                        choices=["gmm", "bgmm"])
     parser.add_argument("--cov-type", default="full",
                         choices=["full", "diagonal", "spherical"])
     parser.add_argument("--max-iter", type=int, default=10)
@@ -121,7 +126,7 @@ def main():
         accretion_id = int(host_df["Sub_tree_id"].iloc[0])
 
     # ── 4. Assigner ────────────────────────────────────────────────
-    assigner = GMMAssigner(
+    assigner = XGMMAssigner(
         cov_type=args.cov_type,
         max_iter=args.max_iter,
         tol=args.tol,
@@ -129,6 +134,7 @@ def main():
         reg_covar=1e-6,
         prior_type="",
         verbose=1,
+        method=args.method,
     )
 
     # ── 5. Configs ─────────────────────────────────────────────────

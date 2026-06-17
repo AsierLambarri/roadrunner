@@ -32,7 +32,7 @@ from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.clustering.segmentation import HaloSegmenter
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_particles import HDF5ParticleWriter
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
@@ -91,7 +91,7 @@ def process_snapshot(snapshot_id, tree, coords, masses, cat_writer,
         key=len, reverse=True,
     ) if seg.pruned_groups else []
 
-    assigner = GMMAssigner(
+    assigner = XGMMAssigner(
         cov_type=cov_type, max_iter=10, tol=1e-2,
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
     )

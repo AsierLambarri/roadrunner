@@ -34,7 +34,7 @@ from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.clustering.segmentation import HaloSegmenter
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 
 
 def main():
@@ -79,7 +79,7 @@ def main():
         key=len, reverse=True,
     ) if seg.pruned_groups else []
 
-    assigner = GMMAssigner(
+    assigner = XGMMAssigner(
         cov_type="full", max_iter=10, tol=1e-2,
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
     )

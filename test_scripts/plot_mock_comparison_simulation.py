@@ -54,16 +54,12 @@ def main():
         true_id = p["galaxy_id"]
 
         # ── Load pipeline output ───────────────────────────────────
-        assign_path = os.path.join(output_dir, "assignment.hdf5")
+        assign_path = os.path.join(output_dir, "assignment", f"snapshot{snap_k:04d}.hdf5")
         if not os.path.exists(assign_path):
-            print(f"Snap {snap_k}: no assignment.hdf5, skipping")
+            print(f"Snap {snap_k}: no assignment file, skipping")
             continue
         with h5py.File(assign_path, "r") as f:
-            group = f.get(f"snapshots/{snap_k}")
-            if group is None:
-                print(f"Snap {snap_k}: no snapshot group in assignment.hdf5, skipping")
-                continue
-            hard_assign = group["hard_assignment"][:]
+            hard_assign = f["hard_assignment"][:]
         pred_id = hard_assign["Sub_tree_id"]
 
         # ── Load galaxy properties ─────────────────────────────────
@@ -174,7 +170,7 @@ def main():
         )
         plt.tight_layout(rect=[0, 0, 1, 0.97])
 
-        out_path = os.path.join(output_dir, f"comparison{snap_k:03d}.png")
+        out_path = os.path.join("figures", f"comparison_bgmm_{snap_k:03d}.png")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         print(f"Snap {snap_k}: saved {out_path}")
         plt.close(fig)

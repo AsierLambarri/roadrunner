@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from roadrunner._mcf_types import SnapshotData
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.pipeline.processing import ProcessingConfig
 from roadrunner.pipeline.reduction import ReductionConfig
 from roadrunner.pipeline.snapshot_orchestrator import SnapshotOrchestrator
@@ -81,7 +81,7 @@ def main():
     )
 
     # ── Build orchestrator ─────────────────────────────────────────
-    assigner = GMMAssigner(
+    assigner = XGMMAssigner(
         cov_type=COV_TYPE, max_iter=3, tol=1e-2,
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
     )

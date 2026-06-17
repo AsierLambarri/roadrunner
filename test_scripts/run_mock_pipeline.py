@@ -21,7 +21,7 @@ from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.clustering.segmentation import HaloSegmenter
-from roadrunner.clustering.assignment.gmm import GMMAssigner
+from roadrunner.clustering.assignment.gmm import XGMMAssigner
 
 
 def main():
@@ -89,7 +89,7 @@ def main():
     print(f"  {len(groups_sorted)} groups")
 
     print(f"Assigning particles ({args.cov_type} covariances)...")
-    assigner = GMMAssigner(
+    assigner = XGMMAssigner(
         cov_type=args.cov_type,
         max_iter=10,
         tol=args.tol,
