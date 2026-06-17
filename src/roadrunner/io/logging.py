@@ -76,6 +76,8 @@ class RunLogger:
             if raw is None or (isinstance(raw, float) and np.isnan(raw)):
                 cell_parts.append(f"{'--':>{w}}")
             else:
+                if isinstance(raw, float) and fmt_spec != "s":
+                    raw = min(raw, 99999.999)
                 fstr = f">{w}{fmt_spec}" if fmt_spec != "s" else f">{w}s"
                 cell_parts.append(f"{raw:{fstr}}")
         row = sep.join(cell_parts)
