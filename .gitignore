@@ -45,6 +45,7 @@ re-planning/
 _XGMMAssigner.py
 semiempirical.py
 test_scripts/generate_mock_priors.py
+test_scripts/check_initial_params_vs_catalogue.py
 test_scripts/test_bgmm_vs_sklearn.py
 test_scripts/mixtures.py
 test_scripts/test_bayes_priors.py

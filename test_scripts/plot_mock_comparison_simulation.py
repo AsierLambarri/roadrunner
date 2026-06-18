@@ -21,6 +21,7 @@ import h5py
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
+import pandas as pd
 
 
 def main():
@@ -31,6 +32,8 @@ def main():
                         help="Pipeline output directory (also where pngs are saved)")
     parser.add_argument("--n-snap", type=int, default=None,
                         help="Only process first N snapshots (default: all)")
+    parser.add_argument("--save-dir", default="figures",
+                        help="Directory to save comparison PNGs")
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -40,9 +43,23 @@ def main():
     equiv = np.genfromtxt(equiv_path, delimiter=",", names=True)
     n_snap = args.n_snap or len(equiv)
 
+    mt_path = os.path.join(data_dir, "merger_tree.csv")
+    mt = pd.read_csv(mt_path) if os.path.exists(mt_path) else None
+
     for snap_k in range(n_snap):
         z_k = equiv[snap_k]["redshift"]
         t_k = equiv[snap_k]["time"]
+
+        # ── Halo catalogue positions for this snapshot ────────────
+        halo_positions = {}
+        if mt is not None:
+            snap_mt = mt[mt["Snapshot"] == snap_k]
+            for _, row in snap_mt.iterrows():
+                sid = int(row["Sub_tree_id"])
+                halo_positions[sid] = {
+                    "px": row["position_x"], "py": row["position_y"],
+                    "vx": row["velocity_x"], "vy": row["velocity_y"],
+                }
 
         # ── Load ground truth ──────────────────────────────────────
         snap_file = os.path.join(data_dir, f"particles_{snap_k:03d}.npz")
@@ -108,6 +125,14 @@ def main():
                     x_data[mask], y_data[mask],
                     s=0.5, c=[colors[i % 20]], alpha=0.6,
                 )
+            # Halo catalogue positions (red X)
+            for sid, hpos in halo_positions.items():
+                if row == 0:
+                    cx, cy = hpos["px"], hpos["py"]
+                else:
+                    cx, cy = hpos["vx"], hpos["vy"]
+                true_ax.plot(cx, cy, "xr", markersize=8, markeredgewidth=1.5, zorder=10)
+
             true_ax.set_xlabel(xlabel)
             true_ax.set_ylabel(ylabel)
             true_ax.set_title(["XY \u2014 Ground truth", "VX/VY \u2014 Ground truth"][row])
@@ -170,7 +195,7 @@ def main():
         )
         plt.tight_layout(rect=[0, 0, 1, 0.97])
 
-        out_path = os.path.join("figures", f"comparison_bgmm_{snap_k:03d}.png")
+        out_path = os.path.join(args.save_dir, f"comparison_{snap_k:03d}.png")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         print(f"Snap {snap_k}: saved {out_path}")
         plt.close(fig)

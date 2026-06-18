@@ -75,6 +75,11 @@ def main():
     # GMM
     parser.add_argument("--method", default="gmm",
                         choices=["gmm", "bgmm"])
+    parser.add_argument("--dtype-math", default="float64",
+                        choices=["float32", "float64", "float128"])
+    parser.add_argument("--use-bgmm-priors", default=True,
+                        type=lambda x: x.lower() == "true",
+                        help="Enable BGMM priors (bgmm only)")
     parser.add_argument("--cov-type", default="full",
                         choices=["full", "diagonal", "spherical"])
     parser.add_argument("--max-iter", type=int, default=10)
@@ -135,6 +140,8 @@ def main():
         prior_type="",
         verbose=1,
         method=args.method,
+        use_bgmm_priors=args.use_bgmm_priors,
+        dtype_math=args.dtype_math,
     )
 
     # ── 5. Configs ─────────────────────────────────────────────────
