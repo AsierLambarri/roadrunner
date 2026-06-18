@@ -229,7 +229,7 @@ class XGMMAssigner:
             init_params="kmeans++",
         )
         run_kwargs = dict(
-            cast_dtype=np.float32,
+            cast_dtype=np.float32 if self.method == "gmm" else np.float64,
             tol=self.tol,
             verbose=self.verbose,
         )
@@ -319,20 +319,21 @@ class XGMMAssigner:
 
             nk_n1 = max(p.get("count", 1.0), 1.0)
             n_b = max(bound_counts[i], 1.0)
+            nk_clamped = max(nk_n1, n_b * 0.2)
 
             wp[i] = prior.weight_concentration_prior(nk_n1, n_b, n_comp)
             pp[i] = prior.mean_precision_prior(nk_n1, n_b)
             cp[i] = prior.covariance_prior(
                 prior.degrade_covariance(p["covariance"], n_f),
-                nk_n1, n_b,
+                nk_clamped, n_b,
                 inv_s, dof, self.cov_type
             )
 
         return dict(
-            mean_prior=mp,
-            covariance_prior=cp,
-            weight_concentration_prior=wp,
-            mean_precision_prior=pp,
+            mean_prior=np.asarray(mp, dtype=np.float64),
+            covariance_prior=np.asarray(cp, dtype=np.float64),
+            weight_concentration_prior=np.asarray(wp, dtype=np.float64),
+            mean_precision_prior=np.asarray(pp, dtype=np.float64),
             degrees_of_freedom_prior=dof,
         )
 
