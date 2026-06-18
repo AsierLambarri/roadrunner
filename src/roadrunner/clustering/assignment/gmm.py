@@ -15,8 +15,16 @@ from roadrunner.mixture.weighted_gmm import (
     _estimate_gaussian_parameters,
 )
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
-from roadrunner._defaults import UNRESOLVED_GROUP_RATIO
+from roadrunner._defaults import (
+    PRIOR_DOF_OFFSET,
+    UNRESOLVED_GROUP_RATIO,
+)
 from roadrunner.physics.halo_ensemble import HaloEnsemble
+
+_PRECISION_LADDER = {
+    "float32": "float64",
+    "float64": "float128",
+}
 from roadrunner.clustering.assignment import priors as prior
 
 
@@ -69,7 +77,8 @@ def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
 class XGMMAssigner:
     def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
                  min_particles=10, reg_covar=1e-6, prior_type="",
-                 verbose=1, method="gmm"):
+                 verbose=1, method="gmm", use_bgmm_priors=True,
+                 dtype_math="float64"):
         self.cov_type = cov_type
         self.max_iter = max_iter
         self.tol = tol
@@ -81,6 +90,8 @@ class XGMMAssigner:
         self.mixture_class = _get_mixture_class(method)
         self.statistics = GMMAssignerStatistics()
         self.previous_parameters = None
+        self.use_bgmm_priors = use_bgmm_priors
+        self.dtype_math = dtype_math
 
     def assign(self, halos, particle_coords, newborn_indices, groups,
                **kwargs) -> AssignmentResult:
@@ -229,23 +240,26 @@ class XGMMAssigner:
             init_params="kmeans++",
         )
         run_kwargs = dict(
-            cast_dtype=np.float32 if self.method == "gmm" else np.float64,
             tol=self.tol,
             verbose=self.verbose,
         )
 
         prior_kwargs = self._build_prior_kwargs(group_subtrees, csc_b, scaler, n_comp)
 
-        try:
-            gmm = self.mixture_class(
-                **init_kwargs, **prior_kwargs, **run_kwargs,
-            ).fit(coords, latent_prior=prior)
-        except np.linalg.LinAlgError:
-            run_kwargs["cast_dtype"] = np.float64
-            gmm = self.mixture_class(
-                **init_kwargs, **prior_kwargs, **run_kwargs,
-            ).fit(coords, latent_prior=prior)
-            warnings.warn("Precision increased to float64.")
+        kwargs = dict(cast_dtype=getattr(np, self.dtype_math),
+                      **init_kwargs, **prior_kwargs, **run_kwargs)
+
+        for _ in range(3):
+            try:
+                gmm = self.mixture_class(**kwargs).fit(coords, latent_prior=prior)
+                break
+            except (np.linalg.LinAlgError, ValueError):
+                next_dtype = _PRECISION_LADDER.get(kwargs["cast_dtype"])
+                if next_dtype is not None and hasattr(np, next_dtype):
+                    kwargs["cast_dtype"] = getattr(np, next_dtype)
+                    warnings.warn(f"Numerical issue — retrying with {next_dtype}.")
+                else:
+                    raise
 
         log_prob = gmm.predict_log_proba(coords, latent_prior=prior)
         post_prob = np.exp(log_prob)
@@ -280,12 +294,13 @@ class XGMMAssigner:
         return params, post_prob, nonz
 
     def _build_prior_kwargs(self, group_subtrees, csc_b, scaler, n_comp):
-        if self.method != "bgmm" or self.previous_parameters is None:
+        if (self.method != "bgmm" or not self.use_bgmm_priors
+                or self.previous_parameters is None):
             return {}
 
         n_f = self.particle_coords.shape[1]
         inv_s = 1.0 / scaler.scale_
-        dof = n_f + 4
+        dof = n_f + PRIOR_DOF_OFFSET
 
         mp = np.zeros((n_comp, n_f))
         cp = (
@@ -319,14 +334,13 @@ class XGMMAssigner:
 
             nk_n1 = max(p.get("count", 1.0), 1.0)
             n_b = max(bound_counts[i], 1.0)
-            nk_clamped = max(nk_n1, n_b * 0.2)
 
             wp[i] = prior.weight_concentration_prior(nk_n1, n_b, n_comp)
             pp[i] = prior.mean_precision_prior(nk_n1, n_b)
             cp[i] = prior.covariance_prior(
                 prior.degrade_covariance(p["covariance"], n_f),
-                nk_clamped, n_b,
-                inv_s, dof, self.cov_type
+                nk_n1, n_b,
+                inv_s, dof, self.cov_type,
             )
 
         return dict(

@@ -1,5 +1,11 @@
 import numpy as np
 
+from roadrunner._defaults import (
+    PRIOR_COVARIANCE_SCALE,
+    PRIOR_WEIGHT_DIVISOR,
+    PRIOR_MEAN_DIVISOR,
+)
+
 
 def degrade_covariance(cov, n_features):
     """Reduce stored covariance to 1D per-dimension variances."""
@@ -13,7 +19,7 @@ def degrade_covariance(cov, n_features):
 
 def covariance_prior(diag_vars, nk_n1, n_bound, inv_s, dof, cov_type):
     """Scale per-dimension variances to BGMM-expected shape."""
-    scale = dof * n_bound / max(nk_n1, 1.0) * 0.25
+    scale = dof * n_bound / max(nk_n1, 1.0) * PRIOR_COVARIANCE_SCALE
     scaled = diag_vars * inv_s**2 * scale
 
     if cov_type == "spherical":
@@ -24,8 +30,8 @@ def covariance_prior(diag_vars, nk_n1, n_bound, inv_s, dof, cov_type):
 
 
 def weight_concentration_prior(nk_n1, n_bound, n_comp):
-    return min(nk_n1 / 2.0, n_bound / 2.0)
+    return min(nk_n1 / PRIOR_WEIGHT_DIVISOR, n_bound / PRIOR_WEIGHT_DIVISOR)
 
 
 def mean_precision_prior(nk_n1, n_bound):
-    return min(nk_n1 / 10.0, n_bound / 10.0)
+    return min(nk_n1 / PRIOR_MEAN_DIVISOR, n_bound / PRIOR_MEAN_DIVISOR)

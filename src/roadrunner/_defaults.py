@@ -15,6 +15,12 @@ SSC_ALPHA = 0.9                    # default shrink-sphere shrink factor
 # ── GMM assignment ─────────────────────────────────────────────────
 UNRESOLVED_GROUP_RATIO = 10        # N < RATIO * n_comp triggers flat assignment
 
+# ── BGMM priors ────────────────────────────────────────────────────
+PRIOR_DOF_OFFSET = 4               # degrees_of_freedom = n_features + offset
+PRIOR_COVARIANCE_SCALE = 0.25      # scale factor for covariance_prior
+PRIOR_WEIGHT_DIVISOR = 2.0         # nk / divisor → weight_concentration_prior
+PRIOR_MEAN_DIVISOR = 10.0          # nk / divisor → mean_precision_prior
+
 # ── Coresets ───────────────────────────────────────────────────────
 CORESET_ALPHA_BASE = 16
 CORESET_ALPHA_OFFSET = 2
@@ -40,6 +46,10 @@ __all__ = [
     "SSC_NMIN",
     "SSC_ALPHA",
     "UNRESOLVED_GROUP_RATIO",
+    "PRIOR_DOF_OFFSET",
+    "PRIOR_COVARIANCE_SCALE",
+    "PRIOR_WEIGHT_DIVISOR",
+    "PRIOR_MEAN_DIVISOR",
     "CORESET_ALPHA_BASE",
     "CORESET_ALPHA_OFFSET",
     "KMEANS_MAX_ITER",

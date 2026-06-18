@@ -51,6 +51,8 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         prior_type="",
         verbose=1,
         method=config.assignment_method,
+        use_bgmm_priors=config.use_bgmm_priors,
+        dtype_math=config.dtype_math,
     )
 
     processing_config = ProcessingConfig(

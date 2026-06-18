@@ -33,6 +33,8 @@ fields:
 
 # ── Assigner ──────────────────────────────────────────────────────────────────
 assignment_method: gmm          # XGMM method: gmm (standard EM) or bgmm (variational Bayesian)
+use_bgmm_priors: true           # Use previous snapshot as BGMM prior (bgmm only)
+dtype_math: float64             # XGMM math precision: float32, float64, float128
 cov_type: full                 # Covariance type: full, diagonal, spherical
 max_iter: 10                   # Maximum EM iterations
 tol: 1e-2                      # Convergence tolerance
