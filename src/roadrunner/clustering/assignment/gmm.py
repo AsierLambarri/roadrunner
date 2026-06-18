@@ -17,7 +17,7 @@ from roadrunner.mixture.weighted_gmm import (
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
 from roadrunner._defaults import UNRESOLVED_GROUP_RATIO
 from roadrunner.physics.halo_ensemble import HaloEnsemble
-from .priors import build_bgmm_priors
+from roadrunner.clustering.assignment import priors as prior
 
 
 _MIXTURE_CLASSES: dict[str, type[BaseMixture]] = {
@@ -175,6 +175,61 @@ class XGMMAssigner:
         nonz = (post_prob > 0).astype(np.uint8)
         return post_prob, nonz
 
+    def _build_prior_kwargs(self, group_subtrees, csc_b, scaler, n_comp):
+        if self.method != "bgmm" or self.previous_parameters is None:
+            return {}
+
+        n_f = self.particle_coords.shape[1]
+        inv_s = 1.0 / scaler.scale_
+        dof = n_f + 4
+
+        mp = np.zeros((n_comp, n_f))
+        cp = (
+            np.zeros((n_comp, n_f, n_f)) if self.cov_type == "full"
+            else np.zeros((n_comp, n_f)) if "diag" in self.cov_type
+            else np.zeros(n_comp)
+        )
+        wp = np.full(n_comp, 1.0 / n_comp)
+        pp = np.ones(n_comp)
+
+        bound_counts = np.array([len(c) for c in csc_b.column_indices],
+                                dtype=np.float64)
+
+        tid_to_idx = dict(zip(self.ensemble.sub_tree_ids,
+                              range(len(self.ensemble.sub_tree_ids))))
+
+        for i, sid in enumerate(group_subtrees):
+            sid_int = int(sid)
+
+            idx = tid_to_idx.get(sid_int)
+            if idx is not None:
+                pos6 = np.concatenate([
+                    self.ensemble.positions[idx],
+                    self.ensemble.velocities[idx],
+                ])
+                mp[i] = (pos6 - scaler.mean_) * inv_s
+
+            p = self.previous_parameters.get(sid_int)
+            if p is None:
+                continue
+
+            nk_n1 = max(p.get("count", 1.0), 1.0)
+            n_b = max(bound_counts[i], 1.0)
+
+            wp[i] = prior.weight_concentration_prior(nk_n1, n_b, n_comp)
+            pp[i] = prior.mean_precision_prior(nk_n1, n_b)
+            diag_vars = prior.degrade_covariance(p["covariance"], n_f)
+            cp[i] = prior.covariance_prior(diag_vars, nk_n1, n_b,
+                                           inv_s, dof, self.cov_type)
+
+        return dict(
+            mean_prior=mp,
+            covariance_prior=cp,
+            weight_concentration_prior=wp,
+            mean_precision_prior=pp,
+            degrees_of_freedom_prior=dof,
+        )
+
     def _fit_resolved(self, gp_idx, group_subtrees, csc_b):
         from roadrunner.physics.scaler import StandardScaler
         scaler = StandardScaler()
@@ -200,20 +255,7 @@ class XGMMAssigner:
             verbose=self.verbose,
         )
 
-        # ── Halo catalogue lookup for mean prior ────────────────
-        tid_to_idx = dict(zip(self.ensemble.sub_tree_ids,
-                              range(len(self.ensemble.sub_tree_ids))))
-        sid_to_halo_6d = {
-            int(h.sub_tree_id): np.concatenate([h.xcen, h.velocity])
-            for h in self.ensemble
-            if int(h.sub_tree_id) in set(int(s) for s in group_subtrees)
-        }
-
-        prior_kwargs = build_bgmm_priors(
-            self.previous_parameters, group_subtrees, csc_b,
-            scaler, n_comp, sid_to_halo_6d,
-            self.cov_type, self.particle_coords.shape[1],
-        )
+        prior_kwargs = self._build_prior_kwargs(group_subtrees, csc_b, scaler, n_comp)
 
         try:
             gmm = self.mixture_class(
