@@ -17,8 +17,8 @@ UNRESOLVED_GROUP_RATIO = 10        # N < RATIO * n_comp triggers flat assignment
 
 # ── BGMM priors ────────────────────────────────────────────────────
 PRIOR_DOF_OFFSET = 4               # degrees_of_freedom = n_features + offset
-PRIOR_COVARIANCE_SCALE = 0.25      # scale factor for covariance_prior
-PRIOR_WEIGHT_DIVISOR = 2.0         # nk / divisor → weight_concentration_prior
+PRIOR_COVARIANCE_SCALE = 0.04      # scale factor for covariance_prior
+PRIOR_WEIGHT_DIVISOR = 5.0         # nk / divisor → weight_concentration_prior
 PRIOR_MEAN_DIVISOR = 10.0          # nk / divisor → mean_precision_prior
 
 # ── Coresets ───────────────────────────────────────────────────────
