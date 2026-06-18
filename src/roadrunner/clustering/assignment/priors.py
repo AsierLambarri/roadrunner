@@ -24,8 +24,8 @@ def covariance_prior(diag_vars, nk_n1, n_bound, inv_s, dof, cov_type):
 
 
 def weight_concentration_prior(nk_n1, n_bound, n_comp):
-    return max(min(nk_n1 / 2.0, n_bound / 2.0), 1.0 / n_comp)
+    return min(nk_n1 / 2.0, n_bound / 2.0)
 
 
 def mean_precision_prior(nk_n1, n_bound):
-    return max(min(nk_n1 / 20.0, n_bound / 20.0), 1.0)
+    return min(nk_n1 / 10.0, n_bound / 10.0)
