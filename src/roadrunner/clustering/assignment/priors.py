@@ -17,10 +17,10 @@ def degrade_covariance(cov, n_features):
         return np.diag(cov)
 
 
-def covariance_prior(diag_vars, nk_n1, n_bound, inv_s, dof, cov_type):
+def covariance_prior(diag_vars, nk_n1, n_bound, s, dof, cov_type):
     """Scale per-dimension variances to BGMM-expected shape."""
     scale = dof * n_bound / max(nk_n1, 1.0) * PRIOR_COVARIANCE_SCALE
-    scaled = diag_vars * inv_s**2 * scale
+    scaled = diag_vars * s**2 * scale
 
     if cov_type == "spherical":
         return float(scaled.mean())

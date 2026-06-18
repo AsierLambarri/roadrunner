@@ -299,7 +299,7 @@ class XGMMAssigner:
             return {}
 
         n_f = self.particle_coords.shape[1]
-        inv_s = 1.0 / scaler.scale_
+        s = scaler.scale_
         dof = n_f + PRIOR_DOF_OFFSET
 
         mp = np.zeros((n_comp, n_f))
@@ -326,7 +326,7 @@ class XGMMAssigner:
                     self.ensemble.positions[idx],
                     self.ensemble.velocities[idx],
                 ])
-                mp[i] = (pos6 - scaler.mean_) * inv_s
+                mp[i] = (pos6 - scaler.mean_) * s
 
             p = self.previous_parameters.get(sid_int)
             if p is None:
@@ -340,7 +340,7 @@ class XGMMAssigner:
             cp[i] = prior.covariance_prior(
                 prior.degrade_covariance(p["covariance"], n_f),
                 nk_n1, n_b,
-                inv_s, dof, self.cov_type,
+                s, dof, self.cov_type,
             )
 
         return dict(
