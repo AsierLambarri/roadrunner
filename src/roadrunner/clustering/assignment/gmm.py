@@ -90,11 +90,15 @@ class XGMMAssigner:
         self.mixture_class = _get_mixture_class(method)
         self.statistics = GMMAssignerStatistics()
         self.previous_parameters = None
+        self.parameters: dict[int, dict] = {}
         self.use_bgmm_priors = use_bgmm_priors
         self.dtype_math = dtype_math
 
     def assign(self, halos, particle_coords, newborn_indices, groups,
                **kwargs) -> AssignmentResult:
+        self.previous_parameters = dict(self.parameters) or None
+        self.parameters = {}
+
         self.ensemble = (
             HaloEnsemble(halos)
             if not isinstance(halos, HaloEnsemble)
@@ -109,7 +113,6 @@ class XGMMAssigner:
             {"array_index": np.arange(N, dtype=np.uint64), "Sub_tree_id": -1}
         ).set_index("array_index")
         self.resp_map: dict[int, tuple[np.ndarray, np.ndarray]] = {}
-        self.parameters: dict[int, dict] = {}
 
         ngal = np.concatenate(groups).size if groups else 0
         print(f"{ngal} in a total of {len(groups)} groups")
