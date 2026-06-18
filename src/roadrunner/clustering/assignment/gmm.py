@@ -127,7 +127,7 @@ class XGMMAssigner:
              **self.statistics.values,
             })
 
-    def _process_group(self, group):
+    def _process_group(self, group) -> dict:
         sub_ensemble = self.ensemble.select(group)
         csc_b, _ = sub_ensemble.get_particles()
         group_subtrees = sub_ensemble.sub_tree_ids
@@ -142,18 +142,14 @@ class XGMMAssigner:
         n_comp = len(group_subtrees)
 
         if n_comp == 1:
-            post_prob, nonz = self._fit_single(gp_idx)
-            group_params = self._compute_group_parameters(
-                gp_idx, post_prob, group_subtrees)
+            params, post_prob, nonz = self._fit_single(gp_idx, group_subtrees)
         elif gp_idx.size < UNRESOLVED_GROUP_RATIO * n_comp:
             warnings.warn(
                 f"WARNING: {n_comp} galaxies are unresolved inside a group!"
             )
-            post_prob, nonz = self._fit_unresolved(gp_idx, csc_b)
-            group_params = self._compute_group_parameters(
-                gp_idx, post_prob, group_subtrees)
+            params, post_prob, nonz = self._fit_unresolved(gp_idx, group_subtrees, csc_b)
         else:
-            post_prob, nonz, group_params = self._fit_resolved(
+            params, post_prob, nonz = self._fit_resolved(
                 gp_idx, group_subtrees, csc_b
             )
 
@@ -167,19 +163,51 @@ class XGMMAssigner:
         assigned = group_subtrees[post_prob.argmax(axis=1)]
         self.particles_df.loc[gp_idx, "Sub_tree_id"] = assigned
 
-        return group_params
+        return params
 
-    def _fit_single(self, gp_idx):
+    def _fit_single(self, gp_idx, group_subtrees):
         post_prob = np.ones((gp_idx.size, 1))
         nonz = (post_prob > 0).astype(np.uint8)
-        return post_prob, nonz
 
-    def _fit_unresolved(self, gp_idx, csc_b):
+        nk, means, covs = _estimate_gaussian_parameters(
+            self.particle_coords[gp_idx], post_prob,
+            np.ones(gp_idx.size, dtype=np.float32),
+            self.cov_type, reg_covar=self.reg_covar,
+        )
+        sid = int(group_subtrees[0])
+        vals = np.linalg.eigvalsh(covs[0]) if covs[0].ndim == 2 else covs[0]
+        params = {
+            sid: {
+                "mean": means[0],
+                "count": float(nk[0]),
+                "covariance": covs[0],
+                "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
+            }
+        }
+        return params, post_prob, nonz
+
+    def _fit_unresolved(self, gp_idx, group_subtrees, csc_b):
         post_prob = row_l1_normalize(
             csc_b.to_dense(col_func=_no_transform)
         ).astype(np.float32, copy=False)
         nonz = (post_prob > 0).astype(np.uint8)
-        return post_prob, nonz
+
+        nk, means, covs = _estimate_gaussian_parameters(
+            self.particle_coords[gp_idx], post_prob,
+            np.ones(gp_idx.size, dtype=np.float32),
+            self.cov_type, reg_covar=self.reg_covar,
+        )
+        params = {}
+        for i, sid in enumerate(group_subtrees):
+            sid = int(sid)
+            vals = np.linalg.eigvalsh(covs[i]) if covs[i].ndim == 2 else covs[i]
+            params[sid] = {
+                "mean": means[i],
+                "count": float(nk[i]),
+                "covariance": covs[i],
+                "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
+            }
+        return params, post_prob, nonz
 
     def _fit_resolved(self, gp_idx, group_subtrees, csc_b):
         from roadrunner.physics.scaler import StandardScaler
@@ -222,35 +250,34 @@ class XGMMAssigner:
         log_prob = gmm.predict_log_proba(coords, latent_prior=prior)
         post_prob = np.exp(log_prob)
 
-        # Posterior parameters (regularized by priors)
-        inv_s = 1.0 / scaler.scale_
+        scaled = {
+            "means": {int(sid): gmm.means_[i]
+                      for i, sid in enumerate(group_subtrees)},
+            "weights": {int(sid): gmm.weights_[i]
+                        for i, sid in enumerate(group_subtrees)},
+            "covariances": {int(sid): gmm.covariances_[i]
+                            for i, sid in enumerate(group_subtrees)},
+            "cov_type": gmm.cov_type,
+        }
+        natural = self.get_parameters_natural(scaled, scaler)
+
         nk_after = post_prob.sum(axis=0)
-        cov_t = gmm.cov_type
 
         params = {}
         for i, sid in enumerate(group_subtrees):
             sid = int(sid)
-            mean_s = gmm.means_[i]
-            cov_s = gmm.covariances_[i]
+            if sid in natural["means"]:
+                cov_scaled = gmm.covariances_[i]
+                vals = np.linalg.eigvalsh(cov_scaled) if cov_scaled.ndim == 2 else cov_scaled
+                cond = float(vals.max() / max(vals.min(), 1e-30))
+                params[sid] = {
+                    "mean": natural["means"][sid],
+                    "count": float(nk_after[i]),
+                    "covariance": natural["covariances"][sid],
+                    "covariance_condition": cond,
+                }
 
-            if cov_t == "spherical":
-                scaling_matrix = np.mean(inv_s**2)
-            elif cov_t in ("diagonal", "diag"):
-                scaling_matrix = inv_s**2
-            else:
-                scaling_matrix = np.outer(inv_s, inv_s)
-
-            vals = np.linalg.eigvalsh(cov_s) if cov_s.ndim == 2 else cov_s
-            cond = float(vals.max() / max(vals.min(), 1e-30))
-
-            params[sid] = {
-                "mean": mean_s * inv_s + scaler.mean_,
-                "count": float(nk_after[i]),
-                "covariance": cov_s * scaling_matrix,
-                "covariance_condition": cond,
-            }
-
-        return post_prob, nonz, params
+        return params, post_prob, nonz
 
     def _build_prior_kwargs(self, group_subtrees, csc_b, scaler, n_comp):
         if self.method != "bgmm" or self.previous_parameters is None:
@@ -337,45 +364,6 @@ class XGMMAssigner:
         )
 
         return prior, nk, means_init, covs_init, self.cov_type
-
-    def _compute_group_parameters(self, gp_idx, post_prob, group_subtrees):
-        from roadrunner.physics.scaler import StandardScaler
-        scaler = StandardScaler()
-        coords = scaler.fit_transform(
-            self.particle_coords[gp_idx].astype(np.float64, copy=False))
-
-        nk, means, covs = _estimate_gaussian_parameters(
-            coords, post_prob, np.ones(len(gp_idx), dtype=np.float32),
-            self.cov_type, reg_covar=self.reg_covar,
-        )
-
-        inv_s = 1.0 / scaler.scale_
-        cov_t = self.cov_type
-
-        params = {}
-        for i, s in enumerate(group_subtrees):
-            s = int(s)
-            mean_s = means[i]
-            cov_s = covs[i]
-
-            if cov_t == "spherical":
-                scaling_matrix = np.mean(inv_s**2)
-            elif cov_t in ("diagonal", "diag"):
-                scaling_matrix = inv_s**2
-            else:
-                scaling_matrix = np.outer(inv_s, inv_s)
-
-            vals = np.linalg.eigvalsh(cov_s) if cov_s.ndim == 2 else cov_s
-            cond = float(vals.max() / max(vals.min(), 1e-30))
-
-            params[s] = {
-                "mean": mean_s * inv_s + scaler.mean_,
-                "count": float(nk[i]),
-                "covariance": cov_s * scaling_matrix,
-                "covariance_condition": cond,
-            }
-
-        return params
 
     @staticmethod
     def get_parameters_natural(stored, scaler):
