@@ -7,6 +7,7 @@ from roadrunner.physics.constants import (
     RILEY_BOUND_THRESHOLD,
     RILEY_SVM_SLOPE,
     RILEY_SVM_INTERCEPT,
+    RILEY_WI
 )
 
 
@@ -16,7 +17,8 @@ def _local_velocity_dispersion(pos, vel, nmin=10):
     if N <= nmin + 1:
         return np.full(N, np.nan)
 
-    wi = np.std(vel, axis=0) / np.std(pos, axis=0)
+    # wi in units of kpc·km^-1·s
+    wi = RILEY_WI # np.std(vel, axis=0) / np.std(pos, axis=0)
     data = np.empty((N, 6), dtype=np.float32)
     data[:, :3] = pos
     data[:, 3:] = vel / wi
@@ -67,6 +69,7 @@ def compute_riley_criterion(
     galaxy_bound,
     redshift,
 ):
+    # important to use physical positions rather than comoving
     positions = particle_coords[:, :3] / (1 + redshift)
     velocities = particle_coords[:, 3:6]
 
