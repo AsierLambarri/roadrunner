@@ -14,7 +14,7 @@ SOFTENING_NFW = 1E-3
 RILEY_BOUND_THRESHOLD = 0.97
 RILEY_SVM_SLOPE = 3.51
 RILEY_SVM_INTERCEPT = 1.08
-
+RILEY_WI = 4 # units of kpc·km^-1·s
 # ── Timescales ─────────────────────────────────────────────────────
 MAX_DYN_TIMESCALE = 0.4          # Gyr, upper clamp for particle dynamical time
 
