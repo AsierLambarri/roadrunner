@@ -10,6 +10,8 @@ class RunConfig:
     equivalence_path: str = ""
     code: str = "RAMSES"
     ptype: str = "star"
+    reader_type: str = "yt"
+    npz_mock_sim: bool = False
     fields: dict = field(default_factory=lambda: {
         "index": "particle_index",
         "mass": "particle_mass",
@@ -44,11 +46,15 @@ class RunConfig:
     dynstate_snapshots: int | list[int] | str | None = field(default_factory=lambda: [-2, -1])
 
     output_dir: str = "./output"
+    resume: bool = False
     save_particles: bool = True
     save_assignment: bool = True
     float_atol: float = 1e-4
 
     def __post_init__(self):
+        if self.reader_type not in ("yt", "npz", "pdata"):
+            raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")
+
         for field_name in (
             "accretion_id", "max_iter", "n_los", "min_particles",
             "start_snapshot", "end_snapshot",

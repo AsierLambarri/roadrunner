@@ -4,6 +4,8 @@ import os
 
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.snapshot import SnapshotReader
+from roadrunner.readers.npz_reader import NPZSnapshotReader
+from roadrunner.readers.particle_data_reader import ParticleDataSnapshotReader
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.physics.merger_tree import MergerTreeHandlerCSV
 from roadrunner.clustering.assignment.gmm import XGMMAssigner
@@ -27,12 +29,25 @@ def run_accretion_history(config: RunConfig | dict) -> None:
     reader = MergerTreeReaderCSV(config.merger_tree_path)
     merger_handler = MergerTreeHandlerCSV(reader.dataframe)
 
-    snapshot_reader = SnapshotReader(
-        config.code, config.ptype, config.fields, config.unit_base,
-    )
     equiv_table = EquivalenceTable(
         config.equivalence_path, base_dir=config.particle_data_dir,
     )
+
+    if config.reader_type == "yt":
+        snapshot_reader = SnapshotReader(
+            config.code, config.ptype, config.fields, config.unit_base,
+        )
+    elif config.reader_type == "npz":
+        snapshot_reader = NPZSnapshotReader(
+            equiv_table, base_dir=config.particle_data_dir,
+            mock_sim=config.npz_mock_sim,
+        )
+    elif config.reader_type == "pdata":
+        snapshot_reader = ParticleDataSnapshotReader(
+            equiv_table, base_dir=config.particle_data_dir,
+        )
+    else:
+        raise ValueError(f"Unknown reader_type: {config.reader_type}")
 
     accretion_id = config.accretion_id
     if accretion_id is None:
@@ -115,4 +130,5 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         config.output_dir,
         start_snapshot=config.start_snapshot,
         end_snapshot=config.end_snapshot,
+        resume=config.resume,
     )

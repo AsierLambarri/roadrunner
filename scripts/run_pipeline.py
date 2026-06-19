@@ -31,6 +31,7 @@ def build_config_from_args(args):
         equivalence_path=args.equivalence,
         code=args.code,
         ptype=args.ptype,
+        reader_type=args.reader_type,
         fields={
             "index": args.index_field,
             "mass": args.mass_field,
@@ -46,6 +47,9 @@ def build_config_from_args(args):
         accretion_id=args.halo_id,
         start_snapshot=args.start_snapshot,
         end_snapshot=args.end_snapshot,
+        assignment_method=args.assignment_method,
+        use_bgmm_priors=args.use_bgmm_priors,
+        dtype_math=args.dtype_math,
         halo_model=args.halo_model,
         cov_type=args.cov_type,
         max_iter=args.max_iter,
@@ -55,6 +59,7 @@ def build_config_from_args(args):
         search_factor=args.search_factor,
         birth_window_factor=args.birth_window,
         output_dir=args.output_dir,
+        resume=args.resume,
         save_particles=args.save_particles,
         save_assignment=args.save_assignment,
     )
@@ -73,7 +78,10 @@ def main():
     parser.add_argument("--particle-dir", type=str, default=None,
                         help="Base directory for snapshot files")
 
-    # Simulation code
+    # Simulation code / data source
+    parser.add_argument("--reader-type", type=str, default="yt",
+                        choices=["yt", "npz", "pdata"],
+                        help="Data reader type")
     parser.add_argument("--code", type=str, default="RAMSES",
                         choices=["ART", "ART-I", "GEAR", "AURIGA",
                                  "AREPO", "RAMSES", "VINTERGATAN"],
@@ -95,7 +103,13 @@ def main():
     parser.add_argument("--start-snapshot", type=int, default=None)
     parser.add_argument("--end-snapshot", type=int, default=None)
 
-    # GMM
+    # GMM / Assigner
+    parser.add_argument("--assignment-method", type=str, default="gmm",
+                        choices=["gmm", "bgmm"])
+    parser.add_argument("--use-bgmm-priors", type=lambda x: x.lower() == "true",
+                        default=True)
+    parser.add_argument("--dtype-math", type=str, default="float64",
+                        choices=["float32", "float64", "float128"])
     parser.add_argument("--cov-type", type=str, default="full",
                         choices=["full", "diagonal", "spherical"])
     parser.add_argument("--max-iter", type=int, default=10)
@@ -114,6 +128,8 @@ def main():
     # Output
     parser.add_argument("--output-dir", type=str, default="./output",
                         help="Output directory")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from checkpoint")
     parser.add_argument("--save-particles", action="store_true",
                         help="Save particle positions/velocities")
     parser.add_argument("--save-assignment", action="store_true", default=True,
