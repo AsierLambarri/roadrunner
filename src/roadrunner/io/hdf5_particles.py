@@ -20,8 +20,12 @@ class HDF5ParticleWriter:
     def write_snapshot(self, snapshot_id, time, redshift, snapshot_data):
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:
-            hf.attrs["time"] = float(time)
-            hf.attrs["redshift"] = float(redshift)
+            header = hf.create_group("header")
+            header.attrs["snapshot"] = int(snapshot_id)
+            header.attrs["time"] = float(time)
+            header.attrs["redshift"] = float(redshift)
+
+            data = hf.create_group("data")
 
             coords = np.column_stack([
                 snapshot_data.positions,
@@ -31,7 +35,7 @@ class HDF5ParticleWriter:
             scaler = StandardScaler()
             scaled = scaler.fit_transform(coords.astype(np.float64, copy=False))
 
-            scaler_grp = hf.require_group("scaler")
+            scaler_grp = data.require_group("scaler")
             scaler_grp.create_dataset("mean", data=scaler.mean_)
             scaler_grp.create_dataset("scale", data=scaler.scale_)
 
@@ -39,12 +43,12 @@ class HDF5ParticleWriter:
                 max(abs(scaled).max(), 1e-10), self._float_atol
             )
 
-            hf.create_dataset(
+            data.create_dataset(
                 "positions",
                 data=scaled[:, :3].astype(float_dtype, copy=False),
                 compression="gzip",
             )
-            hf.create_dataset(
+            data.create_dataset(
                 "velocities",
                 data=scaled[:, 3:6].astype(float_dtype, copy=False),
                 compression="gzip",
@@ -53,14 +57,14 @@ class HDF5ParticleWriter:
             mass_dtype = select_float_dtype(
                 float(snapshot_data.masses.max()), self._float_atol
             )
-            hf.create_dataset(
+            data.create_dataset(
                 "masses",
                 data=snapshot_data.masses.astype(mass_dtype, copy=False),
                 compression="gzip",
             )
 
             idx_dtype = select_uint_dtype(int(snapshot_data.indices.max()))
-            hf.create_dataset(
+            data.create_dataset(
                 "indices",
                 data=snapshot_data.indices.astype(idx_dtype, copy=False),
                 compression="gzip",
