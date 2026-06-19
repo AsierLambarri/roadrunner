@@ -62,6 +62,8 @@ class AccretionPipeline:
         else:
             previous_resp_sim, start_idx = None, 0
 
+        self._ensure_merger_columns()
+
         if start_idx == 0:
             if os.path.isdir(output_dir):
                 shutil.rmtree(output_dir)
@@ -139,13 +141,15 @@ class AccretionPipeline:
         print(f"Resuming after snapshot {last_completed}, starting at snapshot {snapshot_ids[next_idx]}")
         return previous_resp_sim, next_idx
 
-    def _initialize_run(self, snapshot_ids):
+    def _ensure_merger_columns(self):
         self.merger_handler.compute_scale_radii()
         self.merger_handler.compute_most_bound_satellite()
         self.merger_handler.compute_distance_to_host()
         acc_id = self.orchestrator.reduction_config.accretion_id
         self.merger_handler.set_constant_column("acc_id", acc_id)
         self.merger_handler.compute_distance_to_host(column="acc_id")
+
+    def _initialize_run(self, snapshot_ids):
         self.logger.write_header({
             "output_dir": os.path.dirname(self._log_path) or ".",
             "halo_model": self.orchestrator.processing_config.halo_model,

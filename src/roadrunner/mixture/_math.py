@@ -36,12 +36,18 @@ def entropy_sum(log_resp, resp):
 @njit(parallel=True, cache=True)
 def row_l1_normalize(resp):
     n_samples, n_components = resp.shape
+    eps = 10 * np.finfo(resp.dtype).tiny
+    SCALE = 1e16
     for n in prange(n_samples):
         row = resp[n]
         row_sum = 0.0
         for k in range(n_components):
             row_sum += float(row[k])
         if row_sum > 0:
+            if row_sum < eps:
+                for k in range(n_components):
+                    row[k] *= SCALE
+                row_sum *= SCALE
             inv_sum = 1.0 / row_sum
             for k in range(n_components):
                 row[k] *= inv_sum
