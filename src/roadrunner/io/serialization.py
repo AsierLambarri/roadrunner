@@ -23,6 +23,17 @@ _VERSION = 2
 
 
 def save_checkpoint(path, data, level=ZSTD_COMPRESSION_LEVEL):
+    """Save data to a zstd-compressed checkpoint file.
+
+    Parameters
+    ----------
+    path : str
+        Output file path.
+    data : object
+        Any picklable object to save.
+    level : int, default=ZSTD_COMPRESSION_LEVEL
+        Zstd compression level.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {"version": _VERSION, "data": data}
     pickled = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
@@ -35,6 +46,23 @@ def save_checkpoint(path, data, level=ZSTD_COMPRESSION_LEVEL):
 
 
 def load_checkpoint(path):
+    """Load data from a zstd-compressed checkpoint file.
+
+    Parameters
+    ----------
+    path : str
+        Checkpoint file path.
+
+    Returns
+    -------
+    data : object
+        The saved data.
+
+    Raises
+    ------
+    RestartError
+        If the file is missing or corrupt.
+    """
     try:
         with open(path, "rb") as f:
             compressed = f.read()

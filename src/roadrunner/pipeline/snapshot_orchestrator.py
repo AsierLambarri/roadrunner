@@ -36,6 +36,7 @@ from roadrunner.postprocessing.tracking.birth import BirthTracker
 
 @dataclass
 class SnapshotResult:
+    """Result container for a single snapshot's processing and reduction."""
     ensemble: HaloEnsemble
     result: AssignmentResult
     previous_resp_sim: SparseCSC | None
