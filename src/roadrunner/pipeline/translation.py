@@ -19,6 +19,7 @@ from roadrunner._mcf_types import AssignmentResult, SnapshotData
 
 
 def responsibilities_to_sim(csc, snap_data: SnapshotData):
+    """Remap responsibility row IDs from array indices to simulation particle IDs."""
     if csc is None or len(csc) == 0:
         return None
     src, dst = snap_data.index_to_id_map()
@@ -26,6 +27,7 @@ def responsibilities_to_sim(csc, snap_data: SnapshotData):
 
 
 def responsibilities_from_sim(csc, snap_data: SnapshotData):
+    """Remap responsibility row IDs from simulation particle IDs to array indices."""
     if csc is None or len(csc) == 0:
         return None
     src, dst = snap_data.id_to_index_map()
@@ -33,6 +35,7 @@ def responsibilities_from_sim(csc, snap_data: SnapshotData):
 
 
 def detect_newborns(previous_resp, n_particles: int) -> np.ndarray:
+    """Detect newborn particles not present in the previous snapshot."""
     if previous_resp is None:
         return np.arange(n_particles, dtype=np.uint64)
     existing = set(previous_resp.row_id.tolist())
@@ -43,6 +46,7 @@ def detect_newborns(previous_resp, n_particles: int) -> np.ndarray:
 
 
 def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult) -> None:
+    """Update the birth tracker with the current snapshot assignment."""
     df = result.particle_df
     arr_idx = df["array_index"].values
     sim_ids = snap_data.indices[arr_idx]
@@ -60,6 +64,7 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
 
 
 def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, satellites, birth_tracker=None) -> None:
+    """Update the assembly tracker with current assignment and satellite data."""
     assignment_map = {}
     for sid, group in result.particle_df.groupby("Sub_tree_id"):
         arr_idx = group["array_index"].values
@@ -69,6 +74,7 @@ def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotD
 
 
 def build_reduction_input(snap_data: SnapshotData, ensemble, assembly_tracker) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
+    """Build allowed and bound particle sets for each galaxy."""
     bound_csc, _ = ensemble.get_particles()
     sid_to_col = {int(sid): i for i, sid in enumerate(bound_csc.column_id)}
 
