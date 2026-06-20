@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.postprocessing
+# file:      properties.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   15 may 2026 - Created
+#            15 may 2026 - Last edit
+#
+#############################################################################
+
 import warnings
 
 import numpy as np

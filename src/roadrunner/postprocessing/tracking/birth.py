@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.postprocessing.tracking
+# file:      birth.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   18 may 2026 - Created
+#            18 may 2026 - Last edit
+#
+#############################################################################
+
 import heapq
 from collections import Counter, defaultdict
 

@@ -1,3 +1,24 @@
+#############################################################################
+#
+# package:   roadrunner.clustering.assignment
+# file:      statistics.py
+# brief:     Summary statistics tracker for the XGMM assigner.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   19 May 2026 - Created
+#            16 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Assignment statistics tracker for the XGMM assigner.
+
+The :class:`GMMAssignerStatistics` class collects per-snapshot metrics
+such as the number of unassigned particles, average confusion and
+entropy of responsibilities, and the average condition number of
+fitted covariances.
+"""
+
 from collections import defaultdict
 
 import numpy as np

@@ -1,3 +1,30 @@
+#############################################################################
+#
+# package:   roadrunner.clustering.assignment
+# file:      gmm.py
+# brief:     Parameterized Gaussian mixture assigner (XGMM) with method dispatch.
+#
+# Provides the XGMMAssigner, which dispatches to a concrete mixture
+# class based on a ``method`` string ("gmm", "bgmm", "svi-bgmm").
+# The assigner handles per-snapshot fitting, temporal smoothing via
+# previous responsibilities, and building BGMM prior kwargs from
+# the previous snapshot's fitted parameters.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   14 May 2026 - Created
+#            20 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Parameterized Gaussian mixture assigner with multi-method dispatch.
+
+The :class:`XGMMAssigner` is the central assigner in the roadrunner
+pipeline.  It is initialised with a ``method`` string (``'gmm'``,
+``'bgmm'``, or ``'svi-bgmm'``) and an optional ``**mixture_kwargs``
+dict that is forwarded to the concrete mixture constructor.
+"""
+
 import warnings
 
 import numpy as np

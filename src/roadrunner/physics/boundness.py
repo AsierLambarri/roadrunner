@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.physics
+# file:      boundness.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 may 2026 - Created
+#            13 may 2026 - Last edit
+#
+#############################################################################
+
 import numpy as np
 from scipy.spatial import KDTree
 

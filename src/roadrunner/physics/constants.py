@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.physics
+# file:      constants.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   12 may 2026 - Created
+#            12 may 2026 - Last edit
+#
+#############################################################################
+
 from math import sqrt
 
 

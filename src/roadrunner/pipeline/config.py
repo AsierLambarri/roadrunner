@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.pipeline
+# file:      config.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   21 may 2026 - Created
+#            21 may 2026 - Last edit
+#
+#############################################################################
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

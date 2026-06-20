@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.physics
+# file:      halo_ensemble.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   14 may 2026 - Created
+#            14 may 2026 - Last edit
+#
+#############################################################################
+
 import numpy as np
 
 from roadrunner.clustering.sparse import SparseCSC

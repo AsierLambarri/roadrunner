@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.postprocessing
+# file:      centering.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   16 jun 2026 - Created
+#            16 jun 2026 - Last edit
+#
+#############################################################################
+
 import numpy as np
 from numba import njit
 

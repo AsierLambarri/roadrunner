@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.readers
+# file:      snapshot.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 may 2026 - Created
+#            13 may 2026 - Last edit
+#
+#############################################################################
+
 import numpy as np
 import yt
 

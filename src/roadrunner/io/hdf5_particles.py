@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.io
+# file:      hdf5_particles.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   19 may 2026 - Created
+#            19 may 2026 - Last edit
+#
+#############################################################################
+
 import os
 
 import h5py

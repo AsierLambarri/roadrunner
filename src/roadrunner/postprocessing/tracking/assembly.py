@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.postprocessing.tracking
+# file:      assembly.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   18 may 2026 - Created
+#            18 may 2026 - Last edit
+#
+#############################################################################
+
 from collections import defaultdict, deque
 
 from tqdm import tqdm

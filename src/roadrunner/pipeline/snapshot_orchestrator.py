@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.pipeline
+# file:      snapshot_orchestrator.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   22 may 2026 - Created
+#            22 may 2026 - Last edit
+#
+#############################################################################
+
 from __future__ import annotations
 
 from dataclasses import dataclass

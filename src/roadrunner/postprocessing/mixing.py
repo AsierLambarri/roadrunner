@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.postprocessing
+# file:      mixing.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   17 may 2026 - Created
+#            17 may 2026 - Last edit
+#
+#############################################################################
+
 import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree

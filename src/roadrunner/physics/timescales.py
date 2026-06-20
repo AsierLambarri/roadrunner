@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.physics
+# file:      timescales.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   15 may 2026 - Created
+#            15 may 2026 - Last edit
+#
+#############################################################################
+
 import numpy as np
 
 from roadrunner.physics.constants import MAX_DYN_TIMESCALE

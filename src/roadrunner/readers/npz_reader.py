@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.readers
+# file:      npz_reader.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   19 jun 2026 - Created
+#            19 jun 2026 - Last edit
+#
+#############################################################################
+
 from __future__ import annotations
 
 import os

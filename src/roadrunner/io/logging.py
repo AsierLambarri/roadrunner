@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.io
+# file:      logging.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   19 may 2026 - Created
+#            19 may 2026 - Last edit
+#
+#############################################################################
+
 import numpy as np
 
 from roadrunner._defaults import COL_WIDTH_RUNTIME, COL_WIDTH_INT, COL_WIDTH_FLOAT

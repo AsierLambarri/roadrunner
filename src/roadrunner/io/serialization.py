@@ -1,3 +1,16 @@
+#############################################################################
+#
+# package:   roadrunner.io
+# file:      serialization.py
+# brief:     <TODO>
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   19 may 2026 - Created
+#            19 may 2026 - Last edit
+#
+#############################################################################
+
 import pickle
 import os
 

@@ -1,3 +1,22 @@
+#############################################################################
+#
+# package:   roadrunner.clustering.assignment
+# file:      priors.py
+# brief:     Prior-parameter helpers for Bayesian Gaussian mixture assigners.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   17 Jun 2026 - Created
+#            18 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Prior parameter computation for Bayesian Gaussian mixtures.
+
+Provides pure helper functions (no assigner state) for computing
+per-component prior kwargs from previous snapshot parameters.
+"""
+
 import numpy as np
 
 from roadrunner._defaults import (
