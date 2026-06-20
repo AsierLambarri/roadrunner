@@ -74,7 +74,7 @@ def main():
 
     # GMM
     parser.add_argument("--method", default="gmm",
-                        choices=["gmm", "bgmm"])
+                        choices=["gmm", "bgmm", "svi-bgmm"])
     parser.add_argument("--dtype-math", default="float64",
                         choices=["float32", "float64", "float128"])
     parser.add_argument("--use-bgmm-priors", default=True,

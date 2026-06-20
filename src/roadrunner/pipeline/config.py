@@ -27,6 +27,8 @@ class RunConfig:
     assignment_method: str = "gmm"
     use_bgmm_priors: bool = True
     dtype_math: str = "float64"
+    svi_iters: int = 1000
+    svi_batch_size: int = 10000
     halo_model: str = "kepler"
     cov_type: str = "full"
     max_iter: int = 10

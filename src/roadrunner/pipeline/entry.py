@@ -68,6 +68,8 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         method=config.assignment_method,
         use_bgmm_priors=config.use_bgmm_priors,
         dtype_math=config.dtype_math,
+        n_svi_iters=config.svi_iters,
+        batch_size=config.svi_batch_size,
     )
 
     processing_config = ProcessingConfig(
