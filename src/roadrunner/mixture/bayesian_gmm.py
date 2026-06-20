@@ -1,3 +1,30 @@
+#############################################################################
+#
+# package:   roadrunner.mixture
+# file:      bayesian_gmm.py
+# brief:     Variational Bayesian Gaussian mixture with weighted responsibilities.
+#
+# Implements a full variational-Bayes treatment of Gaussian mixtures
+# with a Normal-Wishart prior over (mu, Sigma) and a Dirichlet prior
+# over the mixing weights.  Supports per-particle point weights, a
+# ``latent_prior`` responsibility mask, and the ``counts_init`` /
+# ``means_init`` / ``covariance_init`` initialisation convention.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 May 2026 - Created
+#            17 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Variational Bayesian Gaussian mixture with weighted responsibilities.
+
+The :class:`WeightedBayesianGaussianMixture` class replaces the
+standard EM M-step with a set of conjugate-update equations for the
+Normal-Wishart and Dirichlet posteriors.  Convergence is assessed
+via the variational lower bound (ELBO).
+"""
+
 import numpy as np
 from scipy.special import digamma, gammaln
 from scipy.linalg import solve_triangular
@@ -176,6 +203,53 @@ def _estimate_log_gaussian_prob_pchol(X, means, precisions_chol, cov_type):
 
 
 class WeightedBayesianGaussianMixture(BaseMixture):
+    """Variational Bayesian Gaussian mixture with weighted responsibilities.
+
+    Uses a conjugate Normal-Wishart prior over the component means and
+    covariances and a Dirichlet prior over the mixing weights.  The
+    variational posterior is updated via coordinate-ascent VB, which
+    has the same loop structure as EM but replaces the M-step with
+    conjugate-update equations.
+
+    Parameters
+    ----------
+    n_components : int, default=2
+        Number of mixture components.
+    means_init : ndarray of shape (n_components, n_features), optional
+        Initial means.
+    covariance_init : ndarray, optional
+        Initial covariances.
+    counts_init : ndarray of shape (n_components,), optional
+        Initial effective counts (sum of responsibilities).
+    cov_type : str, default='full'
+        Covariance type.
+    weight_concentration_prior : float or array-like, optional
+        Dirichlet concentration parameter (``1/n_components`` by default).
+    mean_precision_prior : float or array-like, optional
+        Precision of the Gaussian prior on the mean (default 1).
+    mean_prior : ndarray of shape (n_features,), optional
+        Mean of the Gaussian prior (default data mean).
+    degrees_of_freedom_prior : float, optional
+        Degrees of freedom of the Wishart prior (default ``n_features``).
+    covariance_prior : float or array-like, optional
+        Scale matrix of the Wishart prior (default data covariance).
+    init_params : str, default='kmeans'
+        Initialisation method.
+    max_iter : int, default=10
+        Maximum VB iterations.
+    tol : float, default=1e-3
+        Convergence threshold (absolute change in ELBO).
+    verbose : bool or int, default=False
+        Verbosity flag.
+    random_state : int or RandomState, optional
+        Random state.
+    reg_covar : float, default=1e-6
+        Regularisation added to covariance diagonal.
+    cast_dtype : dtype, default=np.float64
+        Working precision.
+    **kwargs
+        Additional keyword arguments.
+    """
     def __init__(self, n_components=2, means_init=None, covariance_init=None, counts_init=None, cov_type="full", 
                  weight_concentration_prior=None, mean_precision_prior=None, mean_prior=None, degrees_of_freedom_prior=None, covariance_prior=None,
                  init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6, cast_dtype=np.float64, 
