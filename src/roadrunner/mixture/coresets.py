@@ -1,3 +1,29 @@
+#############################################################################
+#
+# package:   roadrunner.mixture
+# file:      coresets.py
+# brief:     Gaussian coreset construction via Mahalanobis importance sampling.
+#
+# Implements importance-sampled coresets for Gaussian mixture models
+# using the Mahalanobis distance (following Lucic et al. 2018) instead
+# of the Euclidean distance, making the method suitable for
+# dimensionally heterogeneous data.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 May 2026 - Created
+#            16 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Gaussian coreset construction via Mahalanobis importance sampling.
+
+The :class:`GaussianCoreset` builds a weighted subsample (coreset)
+that preserves the log-likelihood of a Gaussian mixture to within a
+user-specified tolerance, enabling fast approximate fitting on large
+datasets.
+"""
+
 import numpy as np
 from scipy.optimize import root_scalar
 from sklearn.cluster import kmeans_plusplus

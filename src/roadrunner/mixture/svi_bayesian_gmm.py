@@ -1,3 +1,30 @@
+#############################################################################
+#
+# package:   roadrunner.mixture
+# file:      svi_bayesian_gmm.py
+# brief:     Stochastic variational Bayesian Gaussian mixture (SVI-BGMM).
+#
+# Implements mini-batch natural-gradient SVI for the variational
+# Bayesian Gaussian mixture model.  Convergence is assessed via a
+# rolling window of relative lower-bound changes (Stan-style
+# mean/median delta-ELBO criterion).
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   20 Jun 2026 - Created
+#
+#############################################################################
+
+"""Stochastic variational Bayesian Gaussian mixture (SVI-BGMM).
+
+The :class:`SVIBayesianGaussianMixture` class extends
+:class:`WeightedBayesianGaussianMixture` by replacing the full-data
+VB M-step with a mini-batch natural-gradient update.  The learning
+rate follows a Robbins-Monro schedule ``rho = (t + tau)^(-kappa)``.
+Convergence is detected when the mean or median relative change of
+the lower bound over a rolling window falls below ``tol``.
+"""
+
 import warnings
 
 import numpy as np
