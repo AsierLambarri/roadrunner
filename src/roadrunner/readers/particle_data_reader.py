@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.readers
-# file:      particle_data_reader.py
-# brief:     Particle-data snapshot reader for custom binary formats.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   19 jun 2026 - Created
-#            19 jun 2026 - Last edit
-#
-#############################################################################
+"""Particle-data snapshot reader for custom binary formats."""
 
 from __future__ import annotations
 

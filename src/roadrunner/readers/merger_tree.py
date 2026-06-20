@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.readers
-# file:      merger_tree.py
-# brief:     Merger-tree CSV reader.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   12 may 2026 - Created
-#            12 may 2026 - Last edit
-#
-#############################################################################
+"""Merger-tree CSV reader."""
 
 import pandas as pd
 

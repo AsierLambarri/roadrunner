@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.readers
-# file:      snapshot.py
-# brief:     YT-based snapshot reader for cosmological simulations.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   13 may 2026 - Created
-#            13 may 2026 - Last edit
-#
-#############################################################################
+"""YT-based snapshot reader for cosmological simulations."""
 
 import numpy as np
 import yt

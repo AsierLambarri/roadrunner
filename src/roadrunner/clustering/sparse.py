@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.clustering
-# file:      sparse.py
-# brief:     SparseCSC and SparseCSR matrix classes with label-preserving operations.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   13 may 2026 - Created
-#            13 may 2026 - Last edit
-#
-#############################################################################
+"""SparseCSC and SparseCSR matrix classes with label-preserving operations."""
 
 import numpy as np
 from numba import njit, prange
@@ -271,6 +260,17 @@ class SparseCSC:
         new_cols_arr = new_cols.copy()
 
         def _align_one(csc):
+            """Align one sparse matrix to the unified row/column scheme.
+
+            Parameters
+            ----------
+            csc : SparseCSC
+
+            Returns
+            -------
+            indices : list of ndarray
+            values : list of ndarray
+            """
             col_map = {cid: i for i, cid in enumerate(csc.column_id)}
             new_idx, new_val = [], []
             for cid in new_cols_arr:
@@ -699,6 +699,17 @@ class SparseCSR:
         col_map[new_cols] = np.arange(new_cols.size)
 
         def _align_one(csr):
+            """Align one CSR matrix to the unified row/column scheme.
+
+            Parameters
+            ----------
+            csr : SparseCSR
+
+            Returns
+            -------
+            indices : list of ndarray
+            values : list of ndarray
+            """
             row_map = {rid: i for i, rid in enumerate(csr.row_id)}
             new_idx, new_val = [], []
             for rid in new_rows:

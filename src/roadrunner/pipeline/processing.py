@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.pipeline
-# file:      processing.py
-# brief:     Per-snapshot processing: boundness, segmentation, and assignment.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   22 may 2026 - Created
-#            22 may 2026 - Last edit
-#
-#############################################################################
+"""Per-snapshot processing: boundness, segmentation, and assignment."""
 
 from __future__ import annotations
 

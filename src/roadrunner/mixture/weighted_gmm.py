@@ -37,6 +37,18 @@ from .base import BaseMixture
 
 
 def _check_counts(counts, n_components, n_samples):
+    """Validate that *counts* has the expected shape and non-negative values.
+
+    Parameters
+    ----------
+    counts : ndarray or None
+    n_components : int
+    n_samples : int
+
+    Returns
+    -------
+    counts : ndarray of shape (n_components,)
+    """
     if counts is None:
         raise ValueError("counts should not be None")
 
@@ -56,6 +68,17 @@ def _check_counts(counts, n_components, n_samples):
 
 
 def _check_weights(weights, n_components):
+    """Validate that *weights* has the expected shape and non-negative values.
+
+    Parameters
+    ----------
+    weights : ndarray or None
+    n_components : int
+
+    Returns
+    -------
+    weights : ndarray of shape (n_components,)
+    """
     if weights is None:
         raise ValueError("weights should not be None")
 
@@ -73,6 +96,18 @@ def _check_weights(weights, n_components):
 
 
 def _check_means(means, n_components, n_features):
+    """Validate that *means* has the expected shape.
+
+    Parameters
+    ----------
+    means : ndarray or None
+    n_components : int
+    n_features : int
+
+    Returns
+    -------
+    means : ndarray of shape (n_components, n_features)
+    """
     if means is None:
         raise ValueError("means should not be None")
 
@@ -87,6 +122,20 @@ def _check_means(means, n_components, n_features):
 
 
 def _check_covariances(covariances, cov_type, n_components, n_features):
+    """Validate that *covariances* has the correct shape for *cov_type*.
+
+    Parameters
+    ----------
+    covariances : ndarray or None
+    cov_type : str
+        ``"spherical"``, ``"diagonal"``, or ``"full"``.
+    n_components : int
+    n_features : int
+
+    Returns
+    -------
+    covariances : ndarray
+    """
     if covariances is None:
         raise ValueError("covariances should not be None")
 
@@ -112,12 +161,21 @@ def _check_covariances(covariances, cov_type, n_components, n_features):
 
 def _check_parameter_shapes(weights, means, covariances,
                             cov_type, n_components, n_features):
-    weights = _check_weights(weights, n_components)
-    means = _check_means(means, n_components, n_features)
-    covariances = _check_covariances(
-        covariances, cov_type, n_components, n_features
-    )
-    return weights, means, covariances
+    """Validate shapes of all parameters (weights, means, covariances).
+
+    Parameters
+    ----------
+    weights : ndarray
+    means : ndarray
+    covariances : ndarray
+    cov_type : str
+    n_components : int
+    n_features : int
+
+    Returns
+    -------
+    weights, means, covariances : tuple of ndarray
+    """
 
 
 

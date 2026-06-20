@@ -696,6 +696,18 @@ class WeightedBayesianGaussianMixture(BaseMixture):
 
         
     def fit(self, X, latent_prior=None):
+        """Fit the Bayesian GMM to the data.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        latent_prior : SparseCSC or None, optional
+            Per-point-per-component responsibility prior.
+
+        Returns
+        -------
+        self : WeightedBayesianGaussianMixture
+        """
         return super().fit(
             X, 
             latent_prior=latent_prior,

@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.pipeline
-# file:      entry.py
-# brief:     Convenience entry point tying pipeline components together.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   21 may 2026 - Created
-#            21 may 2026 - Last edit
-#
-#############################################################################
+"""Convenience entry point tying pipeline components together."""
 
 from __future__ import annotations
 

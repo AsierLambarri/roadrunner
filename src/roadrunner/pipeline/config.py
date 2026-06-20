@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.pipeline
-# file:      config.py
-# brief:     RunConfig frozen dataclass for pipeline configuration.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   21 may 2026 - Created
-#            21 may 2026 - Last edit
-#
-#############################################################################
+"""RunConfig frozen dataclass for pipeline configuration."""
 
 from __future__ import annotations
 
@@ -18,6 +7,11 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class RunConfig:
+    """Frozen dataclass for pipeline configuration.
+
+    All fields have defaults.  See the source for the full list of
+    available parameters.
+    """
     merger_tree_path: str = ""
     particle_data_dir: str = ""
     equivalence_path: str = ""

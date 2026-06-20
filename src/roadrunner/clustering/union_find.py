@@ -90,6 +90,24 @@ class UnionFind:
 
 
 def overlapping_groups(positions, radii, linking_length_func=None):
+    """Group overlapping spheres by a linking-length criterion.
+
+    Two spheres overlap if the centre-to-centre distance is less than
+    the sum of their radii.  A custom ``linking_length_func`` can be
+    provided for alternative criteria.
+
+    Parameters
+    ----------
+    positions : ndarray of shape (n, 3)
+    radii : ndarray of shape (n,)
+    linking_length_func : callable or None, optional
+        If ``None`` the default ``dist ≤ r_i + r_j`` criterion is used.
+
+    Returns
+    -------
+    groups : list of list of int
+        Each inner list contains the indices of one connected component.
+    """
     n = len(positions)
     if n == 0:
         return []

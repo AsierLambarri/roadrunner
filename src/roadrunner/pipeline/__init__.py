@@ -1,3 +1,5 @@
+"""Pipeline orchestration: processing, reduction, and coordinate translation."""
+
 from .processing import ProcessingConfig, process_snapshot
 from .reduction import ReductionConfig, reduce_snapshot
 from .translation import (

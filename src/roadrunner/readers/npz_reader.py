@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.readers
-# file:      npz_reader.py
-# brief:     NPZ-based snapshot reader for mock simulations.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   19 jun 2026 - Created
-#            19 jun 2026 - Last edit
-#
-#############################################################################
+"""NPZ-based snapshot reader for mock simulations."""
 
 from __future__ import annotations
 

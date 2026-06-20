@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.readers
-# file:      _defaults.py
-# brief:     Default metallicity conversion for mock snapshot readers.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   16 jun 2026 - Created
-#            16 jun 2026 - Last edit
-#
-#############################################################################
+"""Default metallicity conversion parameters for mock snapshot readers."""
 
 # ── Mock snapshot reader metallicity conversion ────────────────────
 METALLICITY_COEFF0 = 2.09

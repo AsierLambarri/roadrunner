@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.pipeline
-# file:      snapshot_orchestrator.py
-# brief:     Snapshot-level orchestrator coordinating processing and reduction.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   22 may 2026 - Created
-#            22 may 2026 - Last edit
-#
-#############################################################################
+"""Snapshot-level orchestrator coordinating processing and reduction."""
 
 from __future__ import annotations
 

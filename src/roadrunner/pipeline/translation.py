@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.pipeline
-# file:      translation.py
-# brief:     Coordinate and ID translation utilities between simulation and array space.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   22 may 2026 - Created
-#            22 may 2026 - Last edit
-#
-#############################################################################
+"""Coordinate and ID translation between simulation and array space."""
 
 from __future__ import annotations
 

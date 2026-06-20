@@ -162,6 +162,22 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
     # ── fit() override ──────────────────────────────────────────────
 
     def fit(self, X, latent_prior=None):
+        """Fit the SVI Bayesian GMM using stochastic variational inference.
+
+        The method uses mini-batch natural-gradient updates with a
+        Robbins–Monro learning-rate schedule and rolling-window
+        convergence detection.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        latent_prior : SparseCSC or None, optional
+            Per-point-per-component responsibility prior.
+
+        Returns
+        -------
+        self : SVIBayesianGaussianMixture
+        """
         from time import time
 
         t0 = time()

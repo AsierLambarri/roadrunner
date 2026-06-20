@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.readers
-# file:      equivalence.py
-# brief:     Snapshot-equivalence table (snapshot ID / path / time / redshift).
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   13 may 2026 - Created
-#            13 may 2026 - Last edit
-#
-#############################################################################
+"""Snapshot-equivalence table (snapshot ID / path / time / redshift)."""
 
 import os
 

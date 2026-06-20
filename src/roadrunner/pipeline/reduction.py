@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.pipeline
-# file:      reduction.py
-# brief:     Per-snapshot reduction: galaxy properties and dynamical state.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   22 may 2026 - Created
-#            22 may 2026 - Last edit
-#
-#############################################################################
+"""Per-snapshot reduction: galaxy properties and dynamical state."""
 
 from __future__ import annotations
 
