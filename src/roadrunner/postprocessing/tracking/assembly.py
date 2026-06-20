@@ -1,15 +1,8 @@
-#############################################################################
-#
-# package:   roadrunner.postprocessing.tracking
-# file:      assembly.py
-# brief:     Assembly and accretion history tracker.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   18 may 2026 - Created
-#            18 may 2026 - Last edit
-#
-#############################################################################
+"""Assembly and accretion history tracker.
+
+Tracks which particles were accreted from which satellite, building
+a map of each galaxy's infall-list across snapshots.
+"""
 
 from collections import defaultdict, deque
 
@@ -19,6 +12,20 @@ from roadrunner._exceptions import CycleError
 
 
 class AssemblyTracker:
+    """Tracks the assembly history of each galaxy across snapshots.
+
+    Maintains an infall list per galaxy: the set of particle IDs that
+    have ever been accreted by that galaxy (including those inherited
+    from merged satellites).
+
+    Parameters
+    ----------
+    n_sat_history : int, default=2
+        Number of past satellite maps to buffer for history queries.
+    unbound_default : int, default=-1
+        Galaxy ID used for unbound particles.
+    """
+
     def __init__(self, n_sat_history=2, unbound_default=-1):
         self._infall_lists = defaultdict(set)
         self._previous_birth_map = defaultdict(set)
@@ -28,6 +35,16 @@ class AssemblyTracker:
         self._sat_history_buffer = deque(maxlen=n_sat_history - 1)
 
     def _get_current_sat_history(self, satellites_map):
+        """Combine current and buffered satellite maps into one history.
+
+        Parameters
+        ----------
+        satellites_map : dict of {int: set of int}
+
+        Returns
+        -------
+        sat_history : dict of {int: set of int}
+        """
         sat_history = {g: set(sats) for g, sats in satellites_map.items()}
         for snap_map in self._sat_history_buffer:
             for g in sat_history:
@@ -35,11 +52,26 @@ class AssemblyTracker:
         return sat_history
 
     def _order_galaxies_bottom_up(self, warm_galaxies, satellites_history):
+        """Topological sort of galaxies from smallest to largest.
+
+        Uses depth-first search to order galaxies so that a satellite
+        is always processed before its host.
+
+        Parameters
+        ----------
+        warm_galaxies : set of int
+        satellites_history : dict of {int: set of int}
+
+        Returns
+        -------
+        ordered : list of int
+        """
         ordered = []
         visited = set()
         visiting = set()
 
         def dfs(g):
+            """Recursive DFS for topological ordering."""
             if g in visited:
                 return
             if g in visiting:
@@ -60,6 +92,16 @@ class AssemblyTracker:
         return ordered
 
     def update(self, snapshot_id, assignment_map, birth_map, satellites_map, freeze_galaxies=None):
+        """Update the assembly tracker with data from a new snapshot.
+
+        Parameters
+        ----------
+        snapshot_id : int
+        assignment_map : dict of {int: set of int}
+        birth_map : dict of {int: set of int}
+        satellites_map : dict of {int: set of int}
+        freeze_galaxies : list of int or None, optional
+        """
         if snapshot_id > self._last_snapshot:
             self._last_snapshot = snapshot_id
             all_galaxies = (
@@ -80,6 +122,17 @@ class AssemblyTracker:
             self._sat_history_buffer.append(satellites_map)
 
     def _update(self, snapshot_id, ordered_galaxies, assignment_map, birth_map, satellites_map, freeze_galaxies):
+        """Core update logic: propagate infall lists across satellites.
+
+        Parameters
+        ----------
+        snapshot_id : int
+        ordered_galaxies : list of int
+        assignment_map : dict
+        birth_map : dict
+        satellites_map : dict
+        freeze_galaxies : list of int
+        """
         for g in freeze_galaxies:
             self._frozen.add(g)
 
@@ -107,9 +160,21 @@ class AssemblyTracker:
         self._previous_birth_map = dict(birth_map)
 
     def current(self):
+        """Return the current infall lists.
+
+        Returns
+        -------
+        infall_lists : dict of {int: set of int}
+        """
         return self._infall_lists
 
     def _get_state(self):
+        """Serialise the tracker state for checkpointing.
+
+        Returns
+        -------
+        state : dict
+        """
         return {
             "infall_lists": {k: list(v) for k, v in self._infall_lists.items()},
             "previous_birth_map": {k: list(v) for k, v in self._previous_birth_map.items()},
@@ -120,6 +185,12 @@ class AssemblyTracker:
         }
 
     def _set_state(self, state):
+        """Restore tracker state from a checkpoint.
+
+        Parameters
+        ----------
+        state : dict
+        """
         self._infall_lists = defaultdict(set, {k: set(v) for k, v in state["infall_lists"].items()})
         self._previous_birth_map = defaultdict(set, {k: set(v) for k, v in state["previous_birth_map"].items()})
         self._frozen = state["frozen"]

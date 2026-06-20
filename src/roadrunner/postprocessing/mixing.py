@@ -1,15 +1,9 @@
-#############################################################################
-#
-# package:   roadrunner.postprocessing
-# file:      mixing.py
-# brief:     Dynamical-state classification via the Riley criterion.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   17 may 2026 - Created
-#            17 may 2026 - Last edit
-#
-#############################################################################
+"""Dynamical-state classification via the Riley criterion.
+
+Provides :func:`compute_riley_criterion` which labels each satellite
+as dynamically relaxed (0), disturbed (1), or mixed (2) based on the
+fraction of bound particles and the local velocity dispersion.
+"""
 
 import numpy as np
 import pandas as pd
@@ -25,13 +19,30 @@ from roadrunner.physics.constants import (
 
 
 def _local_velocity_dispersion(pos, vel, nmin=10):
+    """Local velocity dispersion using nearest-neighbour sampling.
+
+    For each particle, the ``n`` nearest neighbours in 6-D phase-space
+    (with velocity scaled by :const:`RILEY_WI`) are used to estimate
+    the local velocity dispersion.
+
+    Parameters
+    ----------
+    pos : ndarray of shape (n, 3)
+    vel : ndarray of shape (n, 3)
+    nmin : int, default=10
+        Minimum number of neighbours.
+
+    Returns
+    -------
+    sigma_local : ndarray of shape (n,)
+        Per-particle local dispersion, NaN where not computable.
+    """
     N = pos.shape[0]
     n = int(max(NN_FRACTION * N, nmin))
     if N <= nmin + 1:
         return np.full(N, np.nan)
 
-    # wi in units of kpc·km^-1·s
-    wi = RILEY_WI # np.std(vel, axis=0) / np.std(pos, axis=0)
+    wi = RILEY_WI
     data = np.empty((N, 6), dtype=np.float32)
     data[:, :3] = pos
     data[:, 3:] = vel / wi
@@ -53,6 +64,29 @@ def _riley_criterion_single(
     subset_positions,
     subset_velocities,
 ):
+    """Classify a single satellite's dynamical state.
+
+    If the bound fraction exceeds :const:`RILEY_BOUND_THRESHOLD` the
+    galaxy is labelled relaxed (0).  Otherwise a local velocity dispersion
+    is computed and compared against an SVM decision boundary to
+    distinguish disturbed (1) from mixed (2).
+
+    Parameters
+    ----------
+    subtree_id : int
+    mstar : float
+        Stellar mass.
+    f_bound : float
+        Fraction of bound particles.
+    subset_positions : ndarray of shape (n, 3)
+    subset_velocities : ndarray of shape (n, 3)
+
+    Returns
+    -------
+    record : dict
+        Keys: ``Sub_tree_id``, ``mstar``, ``f_bound``, ``sigma50``,
+        ``dynstate`` (0=relaxed, 1=disturbed, 2=mixed).
+    """
     if f_bound >= RILEY_BOUND_THRESHOLD:
         sigma50 = np.linalg.norm(np.std(subset_velocities, axis=0))
         dynstate = 0
@@ -82,7 +116,32 @@ def compute_riley_criterion(
     galaxy_bound,
     redshift,
 ):
-    # important to use physical positions rather than comoving
+    """Compute the Riley dynamical-state criterion for all satellites.
+
+    Iterates over all non-host galaxies, computing the bound fraction
+    and local velocity dispersion, and labels each as relaxed (0),
+    disturbed (1), or mixed (2).
+
+    Parameters
+    ----------
+    main_id : int
+        Host galaxy ``Sub_tree_id`` (skipped).
+    particle_masses : ndarray of shape (n_particles,)
+    particle_coords : ndarray of shape (n_particles, 6)
+        Phase-space coordinates (comoving).
+    galaxy_allowed : dict of {int: ndarray}
+        Maps galaxy ID to array of allowed particle indices.
+    galaxy_bound : dict of {int: ndarray}
+        Maps galaxy ID to array of bound particle indices.
+    redshift : float
+        Snapshot redshift (for comoving-to-physical conversion).
+
+    Returns
+    -------
+    result : DataFrame
+        Columns: ``Sub_tree_id``, ``mstar``, ``f_bound``, ``sigma50``,
+        ``dynstate``.
+    """
     positions = particle_coords[:, :3] / (1 + redshift)
     velocities = particle_coords[:, 3:6]
 

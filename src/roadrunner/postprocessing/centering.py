@@ -1,15 +1,8 @@
-#############################################################################
-#
-# package:   roadrunner.postprocessing
-# file:      centering.py
-# brief:     Shrink-sphere centering (SSC) and GMM-based center estimation.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   16 jun 2026 - Created
-#            16 jun 2026 - Last edit
-#
-#############################################################################
+"""Shrink-sphere centre (SSC) and GMM-based centre estimation.
+
+Provides :func:`ssc_center` which iteratively shrinks a sphere around
+the weighted centre of mass, and numba-accelerated helper kernels.
+"""
 
 import numpy as np
 from numba import njit
@@ -17,6 +10,17 @@ from numba import njit
 
 @njit(cache=True)
 def _weighted_com(positions, masses):
+    """Weighted centre of mass of a set of particles (numba kernel).
+
+    Parameters
+    ----------
+    positions : ndarray of shape (n, ndim)
+    masses : ndarray of shape (n,)
+
+    Returns
+    -------
+    center : ndarray of shape (ndim,)
+    """
     ndim = positions.shape[1]
     center = np.zeros(ndim, dtype=positions.dtype)
     mtot = 0.0
@@ -32,6 +36,17 @@ def _weighted_com(positions, masses):
 
 @njit(cache=True)
 def _max_radius(positions, center):
+    """Maximum Euclidean distance from *center* (numba kernel).
+
+    Parameters
+    ----------
+    positions : ndarray of shape (n, ndim)
+    center : ndarray of shape (ndim,)
+
+    Returns
+    -------
+    rmax : float
+    """
     rmax2 = 0.0
     for i in range(positions.shape[0]):
         r2 = 0.0
@@ -48,6 +63,31 @@ def centering_statistic_SSC_numba(
     positions, velocities, masses,
     alpha=0.9, nmin=100, atol=1e-5,
 ):
+    """Iterative shrink-sphere centre (numba kernel).
+
+    Repeatedly shrinks the search sphere by factor *alpha* until the
+    centre converges (delta < *atol*) or fewer than *nmin* particles
+    remain.  Returns both position and velocity centres.
+
+    Parameters
+    ----------
+    positions : ndarray of shape (n, 3)
+    velocities : ndarray of shape (n, 3)
+    masses : ndarray of shape (n,)
+    alpha : float, default=0.9
+        Sphere-shrinking factor.
+    nmin : int, default=100
+        Minimum particle count to continue.
+    atol : float, default=1e-5
+        Convergence tolerance on centre displacement.
+
+    Returns
+    -------
+    center : ndarray of shape (3,)
+        Position centre.
+    vcenter : ndarray of shape (3,)
+        Velocity centre.
+    """
     n = positions.shape[0]
     ndim = positions.shape[1]
     atol2 = atol ** 2
@@ -125,4 +165,22 @@ def centering_statistic_SSC_numba(
 
 
 def ssc_center(positions, velocities, masses, alpha=0.9, nmin=100, atol=1e-5):
+    """Shrink-sphere centre (python wrapper).
+
+    Delegates to :func:`centering_statistic_SSC_numba`.
+
+    Parameters
+    ----------
+    positions : ndarray of shape (n, 3)
+    velocities : ndarray of shape (n, 3)
+    masses : ndarray of shape (n,)
+    alpha : float, default=0.9
+    nmin : int, default=100
+    atol : float, default=1e-5
+
+    Returns
+    -------
+    center : ndarray of shape (3,)
+    vcenter : ndarray of shape (3,)
+    """
     return centering_statistic_SSC_numba(positions, velocities, masses, alpha, nmin, atol)

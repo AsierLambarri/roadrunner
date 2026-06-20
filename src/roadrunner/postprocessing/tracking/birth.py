@@ -1,15 +1,8 @@
-#############################################################################
-#
-# package:   roadrunner.postprocessing.tracking
-# file:      birth.py
-# brief:     Birth-tagging tracker for newborn particles.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   18 may 2026 - Created
-#            18 may 2026 - Last edit
-#
-#############################################################################
+"""Birth-tagging tracker for newly appearing star particles.
+
+Tracks which galaxy a particle first appears in and finalises the
+association once ``factor × timescale`` snapshots have elapsed.
+"""
 
 import heapq
 from collections import Counter, defaultdict
@@ -21,14 +14,47 @@ from roadrunner._defaults import BIRTH_GAUSSIAN_WIDTH
 
 
 def _exp_window(x):
+    """Exponential decay window function.
+
+    Parameters
+    ----------
+    x : ndarray
+
+    Returns
+    -------
+    w : ndarray
+        ``exp(-x)``
+    """
     return np.exp(-x)
 
 
 def _cauchy_window(x):
+    """Cauchy (Lorentzian) window function.
+
+    Parameters
+    ----------
+    x : ndarray
+
+    Returns
+    -------
+    w : ndarray
+        ``1 / (1 + x²)``
+    """
     return 1.0 / (1 + x ** 2)
 
 
 def _gaussian_window(x):
+    """Gaussian window function.
+
+    Parameters
+    ----------
+    x : ndarray
+
+    Returns
+    -------
+    w : ndarray
+        ``exp(-width · x²)``
+    """
     return np.exp(-BIRTH_GAUSSIAN_WIDTH * x ** 2)
 
 
@@ -40,6 +66,24 @@ _WINDOWS = {
 
 
 class BirthTracker:
+    """Tracks the birth host of each star particle across snapshots.
+
+    A particle is considered "born" in the galaxy where it first appears.
+    The tracker uses a window function to accumulate evidence over
+    ``factor × timescale`` snapshots before finalising the assignment.
+
+    Parameters
+    ----------
+    factor : float, default=5
+        Multiplier on the particle's dynamical timescale to decide
+        when to finalise.
+    enforce_initial_hosts : bool, default=False
+        If ``True``, only the hosts seen at the particle's first
+        appearance are considered during the accumulation window.
+    window : str, default='gaussian'
+        Window function: ``"gaussian"``, ``"cauchy"``, or ``"exp"``.
+    """
+
     def __init__(self, factor=5, enforce_initial_hosts=False, window="gaussian"):
         if window not in _WINDOWS:
             raise ValueError(f"Unknown window: {window}. Choose from {list(_WINDOWS)}")
@@ -53,6 +97,17 @@ class BirthTracker:
         self.enforce_initial_hosts = enforce_initial_hosts
 
     def _add_update_particles(self, t_snap, snapshot_id, particle_ids, host_ids, timescales, weights):
+        """Update running host counts for active particles and register new ones.
+
+        Parameters
+        ----------
+        t_snap : float
+        snapshot_id : int
+        particle_ids : ndarray
+        host_ids : ndarray
+        timescales : ndarray
+        weights : ndarray
+        """
         finalized_keys = self._finalized.keys()
         mask_not_finalized = ~np.isin(particle_ids, list(finalized_keys))
         if not np.any(mask_not_finalized):
@@ -123,6 +178,15 @@ class BirthTracker:
                 heapq.heappush(self._heap, (np.float32(t_snap + self.factor * particle_tau), np.uint64(p)))
 
     def _finalize_particles(self, t_snap):
+        """Finalise particles whose accumulation window has expired.
+
+        Pops particles from the heap where ``t0 + factor × tau ≤ t_snap``
+        and moves them from active to finalised state.
+
+        Parameters
+        ----------
+        t_snap : float
+        """
         while self._heap and self._heap[0][0] <= t_snap:
             _, p_to_finalize = heapq.heappop(self._heap)
             if p_to_finalize not in self._active:
@@ -142,6 +206,18 @@ class BirthTracker:
             self._birth_map[birth_id].add(p_to_finalize)
 
     def update(self, t_snap, snapshot_id, particle_ids, host_ids, timescales, weights=None):
+        """Update the tracker with particles from a new snapshot.
+
+        Parameters
+        ----------
+        t_snap : float
+        snapshot_id : int
+        particle_ids : ndarray
+        host_ids : ndarray
+        timescales : ndarray
+        weights : ndarray or None, optional
+            Defaults to uniform weights.
+        """
         if snapshot_id > self._last_snapshot:
             if weights is None:
                 weights = np.full(particle_ids.shape, 1.0)
@@ -150,6 +226,13 @@ class BirthTracker:
             self._last_snapshot = snapshot_id
 
     def finalize(self):
+        """Force-finalise all active particles and return the birth table.
+
+        Returns
+        -------
+        birth_df : DataFrame
+            Columns: ``particle_index``, ``birth_id``.
+        """
         self._finalize_particles(np.inf)
         records = [
             {"particle_index": p, "birth_id": self._finalized[p]["birth_id"]}
@@ -162,12 +245,26 @@ class BirthTracker:
         return birth_df
 
     def current_birth_map(self):
+        """Return the current (incomplete) birth map.
+
+        Includes both finalised and active particles.
+
+        Returns
+        -------
+        birth_map : dict of {int: set of int}
+        """
         birth_map = {k: set(v) for k, v in self._birth_map.items()}
         for p, info in self._active.items():
             birth_map.setdefault(info["leader_host"], set()).add(p)
         return birth_map
 
     def _get_state(self):
+        """Serialise the tracker state for checkpointing.
+
+        Returns
+        -------
+        state : dict
+        """
         return {
             "active": dict(self._active),
             "finalized": dict(self._finalized),
@@ -179,11 +276,9 @@ class BirthTracker:
         }
 
     def _set_state(self, state):
-        self._active = state["active"]
-        self._finalized = state["finalized"]
-        self._heap = state["heap"]
-        heapq.heapify(self._heap)
-        self._birth_map = defaultdict(set, {k: set(v) for k, v in state["birth_map"].items()})
-        self.factor = state["factor"]
-        self._last_snapshot = state["last_snapshot"]
-        self.enforce_initial_hosts = state["enforce_initial_hosts"]
+        """Restore tracker state from a checkpoint.
+
+        Parameters
+        ----------
+        state : dict
+        """
