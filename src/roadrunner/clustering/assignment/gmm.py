@@ -64,6 +64,18 @@ _MIXTURE_CLASSES: dict[str, type[BaseMixture]] = {
 
 
 def _get_mixture_class(method: str) -> type[BaseMixture]:
+    """Look up the mixture class for a given method name.
+
+    Parameters
+    ----------
+    method : str
+        One of the keys in ``_MIXTURE_CLASSES``.
+
+    Returns
+    -------
+    mixture_class : type
+        A ``BaseMixture`` subclass.
+    """
     try:
         return _MIXTURE_CLASSES[method]
     except KeyError:
@@ -73,10 +85,39 @@ def _get_mixture_class(method: str) -> type[BaseMixture]:
 
 
 def _no_transform(values):
-    return values
+    """Identity transform.
+
+    Parameters
+    ----------
+    values : ndarray
+        Input array.
+
+    Returns
+    -------
+    values : ndarray
+        Same array, unchanged.
+    """
 
 
 def _rank_transform(values, func_rank=np.log1p):
+    """Rank-based transform applied to boundness values before normalisation.
+
+    Ranks replace the raw boundness energies, then ``func_rank``
+    is applied (default: ``log1p``).  Empty arrays are returned
+    unchanged.
+
+    Parameters
+    ----------
+    values : ndarray
+        Input boundness values.
+    func_rank : callable, default=np.log1p
+        Transformation applied to the ranks.
+
+    Returns
+    -------
+    transformed : ndarray of float32
+        Rank-transformed values.
+    """
     if len(values) == 0:
         return values
     ranks = rankdata(values, method="ordinal")
@@ -85,6 +126,24 @@ def _rank_transform(values, func_rank=np.log1p):
 
 @njit(parallel=True, cache=True)
 def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
+    """Merge previous responsibilities with boundness (in-place, parallel).
+
+    For each particle, the kernel decides the new responsibility value:
+    if the particle was previously assigned to a component (``p > 0``)
+    and is still bound (``b > 0``), the previous responsibility is kept.
+    Newborn particles get ``0`` for components they are not bound to.
+
+    Parameters
+    ----------
+    raw : ndarray of float32, shape (n_particles, n_components)
+        Previous responsibilities (dense).  Modified in place.
+    bound : ndarray of float32, shape (n_particles, n_components)
+        Current boundness matrix.
+    n_components : int
+        Number of components.
+    newborn_1d : ndarray of bool, shape (n_particles,)
+        ``True`` for particles that are new this snapshot.
+    """
     n = raw.shape[0]
     inv_ncomp = 1.0 / n_components
     for n_idx in prange(n):
@@ -104,6 +163,40 @@ def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
 
 
 class XGMMAssigner:
+    """Parameterised Gaussian-mixture assigner with method dispatch.
+
+    Dispatches to a concrete mixture class (GMM, BGMM, or SVI-BGMM)
+    based on the ``method`` string.  Handles per-snapshot fitting,
+    temporal smoothing via previous responsibilities, and construction
+    of BGMM prior kwargs from the previous snapshot's fitted parameters.
+
+    Parameters
+    ----------
+    cov_type : str, default='full'
+        Covariance type.
+    max_iter : int, default=10
+        Maximum EM iterations (``gmm`` / ``bgmm``).
+    tol : float, default=1e-2
+        EM convergence tolerance.
+    min_particles : int, default=10
+        Minimum particles per component.
+    reg_covar : float, default=1e-6
+        Covariance regularisation.
+    prior_type : str, default=''
+        Prior type string (experimental).
+    verbose : int, default=1
+        Verbosity level.
+    method : str, default='gmm'
+        One of ``'gmm'``, ``'bgmm'``, or ``'svi-bgmm'``.
+    use_bgmm_priors : bool, default=True
+        Use fitted parameters from the previous snapshot as BGMM priors.
+    dtype_math : str, default='float64'
+        Working precision for the mixture fits.
+    **mixture_kwargs
+        Additional keyword arguments forwarded to the mixture
+        constructor (e.g. ``n_svi_iters``, ``batch_size`` for SVI).
+    """
+
     def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
                  min_particles=10, reg_covar=1e-6, prior_type="",
                  verbose=1, method="gmm", use_bgmm_priors=True,
@@ -126,6 +219,26 @@ class XGMMAssigner:
 
     def assign(self, halos, particle_coords, newborn_indices, groups,
                **kwargs) -> AssignmentResult:
+        """Run the assigner on one snapshot's data.
+
+        Parameters
+        ----------
+        halos : HaloEnsemble or list of HaloModel
+            Halos with boundness already computed.
+        particle_coords : ndarray of shape (n_particles, 6)
+            6-D phase-space coordinates.
+        newborn_indices : ndarray
+            Indices of newborn particles (empty if none).
+        groups : list of list of int
+            Indices of halos belonging to each overlapping group.
+        **kwargs
+            Additional arguments (``snap_id``, ``previous_resp``, etc.).
+
+        Returns
+        -------
+        result : AssignmentResult
+            Particle assignment, responsibilities, and fitted parameters.
+        """
         self.previous_parameters = dict(self.parameters) or None
         self.parameters = {}
 
@@ -172,6 +285,22 @@ class XGMMAssigner:
             })
 
     def _process_group(self, group) -> dict:
+        """Process a single overlapping group of halos.
+
+        Selects the appropriate fit path based on the number of
+        components: ``_fit_single`` for 1, ``_fit_unresolved``
+        for poorly-sampled groups, and ``_fit_resolved`` otherwise.
+
+        Parameters
+        ----------
+        group : list of int
+            Indices of halos in this group.
+
+        Returns
+        -------
+        params : dict of ``{Sub_tree_id: {mean, count, covariance, condition}}``
+            Fitted parameters for each component in the group.
+        """
         sub_ensemble = self.ensemble.select(group)
         csc_b, _ = sub_ensemble.get_particles()
         group_subtrees = sub_ensemble.sub_tree_ids
@@ -210,6 +339,24 @@ class XGMMAssigner:
         return params
 
     def _fit_single(self, gp_idx, group_subtrees):
+        """Fit a single-component group (only one halo).
+
+        Parameters
+        ----------
+        gp_idx : ndarray of int64
+            Particle indices belonging to this group.
+        group_subtrees : ndarray of int64
+            ``Sub_tree_id`` of the single halo.
+
+        Returns
+        -------
+        params : dict
+            Fitted parameters.
+        post_prob : ndarray of shape (n_particles, 1)
+            Posterior responsibilities.
+        nonz : ndarray of shape (n_particles, 1)
+            Non-zero mask.
+        """
         post_prob = np.ones((gp_idx.size, 1))
         nonz = (post_prob > 0).astype(np.uint8)
 
@@ -231,6 +378,30 @@ class XGMMAssigner:
         return params, post_prob, nonz
 
     def _fit_unresolved(self, gp_idx, group_subtrees, csc_b):
+        """Fit an unresolved group where particles are too few for EM.
+
+        Falls back to the boundness matrix itself as the responsibility
+        matrix, then calls ``_estimate_gaussian_parameters`` to
+        produce standard fitted parameters.
+
+        Parameters
+        ----------
+        gp_idx : ndarray of int64
+            Particle indices.
+        group_subtrees : ndarray of int64
+            ``Sub_tree_id`` for each component.
+        csc_b : SparseCSC
+            Boundness matrix for this group.
+
+        Returns
+        -------
+        params : dict
+            Fitted parameters.
+        post_prob : ndarray of shape (n_particles, n_components)
+            Boundness-derived responsibilities.
+        nonz : ndarray of shape (n_particles, n_components)
+            Non-zero mask.
+        """
         post_prob = row_l1_normalize(
             csc_b.to_dense(col_func=_no_transform)
         ).astype(np.float32, copy=False)
@@ -254,6 +425,30 @@ class XGMMAssigner:
         return params, post_prob, nonz
 
     def _fit_resolved(self, gp_idx, group_subtrees, csc_b):
+        """Fit a resolved group with a proper XGMM fit.
+
+        Scales coordinates, estimates initial parameters, builds
+        prior kwargs for BGMM if applicable, and fits the mixture
+        using the configured method.
+
+        Parameters
+        ----------
+        gp_idx : ndarray of int64
+            Particle indices.
+        group_subtrees : ndarray of int64
+            ``Sub_tree_id`` for each component.
+        csc_b : SparseCSC
+            Boundness matrix for this group.
+
+        Returns
+        -------
+        params : dict
+            Fitted parameters.
+        post_prob : ndarray of shape (n_particles, n_components)
+            Posterior responsibilities.
+        nonz : ndarray of shape (n_particles, n_components)
+            Non-zero mask.
+        """
         from roadrunner.physics.scaler import StandardScaler
         scaler = StandardScaler()
         coords = scaler.fit_transform(
@@ -328,6 +523,28 @@ class XGMMAssigner:
         return params, post_prob, nonz
 
     def _build_prior_kwargs(self, group_subtrees, csc_b, scaler, n_comp):
+        """Build BGMM prior kwargs from the previous snapshot's fitted parameters.
+
+        Returns an empty dict when the method is not BGMM, priors
+        are disabled, or there is no previous snapshot data.
+
+        Parameters
+        ----------
+        group_subtrees : ndarray of int64
+            ``Sub_tree_id`` for each component.
+        csc_b : SparseCSC
+            Current boundness matrix.
+        scaler : StandardScaler
+            Fitted scaler for this group.
+        n_comp : int
+            Number of components.
+
+        Returns
+        -------
+        prior_kwargs : dict or empty dict
+            BGMM constructor kwargs (``mean_prior``, ``covariance_prior``,
+            ``weight_concentration_prior``, etc.).
+        """
         if (self.method != "bgmm" or not self.use_bgmm_priors
                 or self.previous_parameters is None):
             return {}
@@ -386,6 +603,32 @@ class XGMMAssigner:
         )
 
     def _estimate_initial_params(self, coords, csc_b):
+        """Estimate initial mixture parameters from boundness and previous responsibilities.
+
+        Merges the boundness matrix with previous responsibilities
+        (when available) and computes Gaussian sufficient statistics
+        from the merged responsibility matrix.
+
+        Parameters
+        ----------
+        coords : ndarray of shape (n_particles, n_features)
+            Scaled phase-space coordinates.
+        csc_b : SparseCSC
+            Boundness matrix.
+
+        Returns
+        -------
+        prior : ndarray of shape (n_particles, n_components)
+            Normalised boundness (latent prior).
+        nk : ndarray of shape (n_components,)
+            Effective counts.
+        means : ndarray of shape (n_components, n_features)
+            Initial means.
+        covs : ndarray
+            Initial covariances.
+        cov_t : str
+            Covariance type.
+        """
         n_samples = coords.shape[0]
         n_components = len(csc_b.column_indices)
 
@@ -416,6 +659,22 @@ class XGMMAssigner:
 
     @staticmethod
     def get_parameters_natural(stored, scaler):
+        """Convert fitted parameters from scaled to natural coordinates.
+
+        Parameters
+        ----------
+        stored : dict
+            Scaled parameters with keys ``'means'``, ``'weights'``,
+            ``'covariances'``, and ``'cov_type'``.
+        scaler : StandardScaler
+            The scaler that was used to transform the data.
+
+        Returns
+        -------
+        natural : dict
+            Parameters in natural coordinates with the same structure
+            as ``stored``.
+        """
         inv_s = 1.0 / scaler.scale_
         means, weights, covariances = {}, {}, {}
         cov_t = stored.get("cov_type", "full")
