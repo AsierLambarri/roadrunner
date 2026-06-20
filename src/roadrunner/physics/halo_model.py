@@ -1,15 +1,4 @@
-#############################################################################
-#
-# package:   roadrunner.physics
-# file:      halo_model.py
-# brief:     Single-halo model with potential and boundness storage.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   13 may 2026 - Created
-#            13 may 2026 - Last edit
-#
-#############################################################################
+"""Single-halo model with potential and boundness storage."""
 
 import numpy as np
 
@@ -28,7 +17,7 @@ class HaloModel:
     Parameters
     ----------
     inner : PotentialModel
-        Gravitational potential model (e.g. :class:`KeplerPotential`).
+        Gravitational potential model.
     xcen : ndarray of shape (3,)
         Halo centre position.
     velocity : ndarray of shape (3,)
@@ -40,8 +29,8 @@ class HaloModel:
     redshift : float
         Snapshot redshift.
     comoving : bool, default=True
-        If ``True``, ``potential()`` and related methods apply the
-        ``(1 + z)`` scaling to convert comoving to physical coordinates.
+        If ``True``, ``potential()`` applies the ``(1 + z)`` scaling
+        to convert comoving to physical coordinates.
     """
 
     def __init__(
@@ -78,6 +67,7 @@ class HaloModel:
         tdyns : ndarray of float32
             Dynamical times for the bound particles.
         """
+        self._boundness = (indices, energies, tdyns)
 
     def get_boundness(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         """Retrieve the stored boundness data.
@@ -115,7 +105,18 @@ class HaloModel:
         return self._inner.potential(r)
 
     def dynamical_time(self, xyz_or_r: np.ndarray) -> np.ndarray:
-        """Compute the dynamical time at given positions."""
+        """Compute the dynamical time at given positions.
+
+        Parameters
+        ----------
+        xyz_or_r : ndarray of shape (n, 3) or (n,)
+            If 2-D the norm of differences from ``xcen`` is computed;
+            if 1-D the values are treated as radii directly.
+
+        Returns
+        -------
+        tdyn : ndarray
+        """
         if xyz_or_r.ndim == 2:
             r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
         else:
@@ -123,7 +124,18 @@ class HaloModel:
         return self._inner.dynamical_time(r)
 
     def tidal_denominator(self, xyz_or_r: np.ndarray) -> np.ndarray:
-        """Compute the tidal denominator for tidal-radius estimation."""
+        """Compute the tidal denominator for tidal-radius estimation.
+
+        Parameters
+        ----------
+        xyz_or_r : ndarray of shape (n, 3) or (n,)
+            If 2-D the norm of differences from ``xcen`` is computed;
+            if 1-D the values are treated as radii directly.
+
+        Returns
+        -------
+        denom : ndarray
+        """
         if xyz_or_r.ndim == 2:
             r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
         else:

@@ -11,6 +11,8 @@
 #
 #############################################################################
 
+"""Ensemble of HaloModel objects with sparse particle access."""
+
 import numpy as np
 
 from roadrunner.clustering.sparse import SparseCSC

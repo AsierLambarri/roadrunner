@@ -11,6 +11,8 @@
 #
 #############################################################################
 
+"""Dynamical time-scale computation for bound particles."""
+
 import numpy as np
 
 from roadrunner.physics.constants import MAX_DYN_TIMESCALE

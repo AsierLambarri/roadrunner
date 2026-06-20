@@ -1,15 +1,7 @@
-#############################################################################
-#
-# package:   roadrunner.physics
-# file:      constants.py
-# brief:     Physical and numerical constants.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   12 may 2026 - Created
-#            12 may 2026 - Last edit
-#
-#############################################################################
+"""Physical and numerical constants used across the physics modules.
+
+All values are in kpc, km/s, Msun, and Gyr units unless noted.
+"""
 
 from math import sqrt
 

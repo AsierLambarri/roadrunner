@@ -1,15 +1,9 @@
-#############################################################################
-#
-# package:   roadrunner.physics
-# file:      merger_tree.py
-# brief:     Merger-tree CSV reader and handler with accretion-host logic.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   13 may 2026 - Created
-#            13 may 2026 - Last edit
-#
-#############################################################################
+"""Merger-tree handling with accretion-host logic.
+
+Extends :class:`MergerTreeReaderCSV` with methods for computing
+scale radii, host identification, satellite relations, and host–
+satellite distances.
+"""
 
 import numpy as np
 import pandas as pd
@@ -21,20 +15,65 @@ from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 
 
 def nfw_cmz_relation_duffy(M: float | np.ndarray, z: float) -> float | np.ndarray:
+    """Duffy et al. (2008) c(M,z) relation.
+
+    ``c = a · (M / M_pivot)^b · (1 + z)^c``
+
+    Parameters
+    ----------
+    M : float or ndarray
+        Halo mass.
+    z : float
+        Redshift.
+
+    Returns
+    -------
+    concentration : float or ndarray
+    """
     return DUFFY_A * (M / DUFFY_PIVOT_MASS) ** DUFFY_B * (1 + z) ** DUFFY_C
 
 
 class MergerTreeHandlerCSV(MergerTreeReaderCSV):
+    """Merger-tree handler extended with accretion-host computations.
+
+    Adds scale-radius estimation, most-bound-satellite identification,
+    distance-to-host calculations, and per-snapshot satellite maps.
+
+    Parameters are inherited from :class:`MergerTreeReaderCSV`.
+    """
 
     # ── STATE MODIFIERS ──────────────────────────────────────
 
     def compute_scale_radii(self):
+        """Compute scale radii for all rows using the Duffy relation.
+
+        Rows with a non-NaN ``scale_radius`` column are left untouched.
+        Missing values are filled via :func:`nfw_cmz_relation_duffy`.
+        """
         self._df["scale_radius"] = self._df.apply(self._compute_rs_row, axis=1)
 
     def set_constant_column(self, name: str, value):
+        """Set a column to a constant value for all rows.
+
+        Parameters
+        ----------
+        name : str
+            Column name.
+        value : scalar
+        """
         self._df[name] = value
 
     def compute_most_bound_satellite(self, rvir_factor: float = 1.0):
+        """Compute the most bound host for each subhalo per snapshot.
+
+        Adds a ``host_id`` column with the ``Sub_tree_id`` of the most
+        bound host (``-1`` for central halos).
+
+        Parameters
+        ----------
+        rvir_factor : float, default=1.0
+            Multiplier on the virial radius for the neighbour search.
+        """
         self._df["host_id"] = -1
         for snap in tqdm(
             self._df["Snapshot"].unique(),
@@ -52,6 +91,16 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             )
 
     def compute_distance_to_host(self, column: str = "host_id"):
+        """Compute the distance from each subhalo to its host.
+
+        Adds a ``distance_to_{column}`` column with the 3-D separation
+        in kpc (comoving).
+
+        Parameters
+        ----------
+        column : str, default="host_id"
+            Column name containing the host ``Sub_tree_id``.
+        """
         target = f"distance_to_{column}"
         self._df[target] = np.nan
         for snap in tqdm(
@@ -70,12 +119,38 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
     def compute_satellites(
         snapshot_df: pd.DataFrame, rvir_factor: float = 1.0
     ) -> dict[int, set[int]]:
+        """Build a satellite map for a single snapshot.
+
+        Parameters
+        ----------
+        snapshot_df : DataFrame
+            Merger-tree rows for one snapshot.
+        rvir_factor : float, default=1.0
+            Multiplier on the virial radius for neighbour search.
+
+        Returns
+        -------
+        satellites : dict of {int: set of int}
+            Maps each host ``Sub_tree_id`` to its set of satellite IDs.
+        """
         return MergerTreeHandlerCSV._satellites_impl(snapshot_df, rvir_factor)
 
     # ── PRIVATE HELPERS ──────────────────────────────────────
 
     @staticmethod
     def _compute_rs_row(row: pd.Series) -> float:
+        """Compute the scale radius for a single merger-tree row.
+
+        Parameters
+        ----------
+        row : Series
+            Row with ``scale_radius``, ``mass``, ``Redshift``,
+            and ``virial_radius`` columns.
+
+        Returns
+        -------
+        rs : float
+        """
         if np.isnan(row["scale_radius"]):
             conc = nfw_cmz_relation_duffy(row["mass"], row["Redshift"])
             return row["virial_radius"] / conc
@@ -85,6 +160,21 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
     def _satellites_impl(
         snap_df: pd.DataFrame, rvir_factor: float
     ) -> dict[int, set[int]]:
+        """KDTree-based satellite identification implementation.
+
+        For each host, finds neighbours within ``rvir_factor * Rvir``,
+        filters less-massive candidates, and checks gravitational binding
+        (``E_bind < 0``).
+
+        Parameters
+        ----------
+        snap_df : DataFrame
+        rvir_factor : float
+
+        Returns
+        -------
+        satellites_map : dict of {int: set of int}
+        """
         n = len(snap_df)
         if n == 0:
             return {}
@@ -147,6 +237,18 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
     def _most_bound_satellite_impl(
         snap_df: pd.DataFrame, rvir_factor: float
     ) -> dict[int, int]:
+        """Find the most bound (lowest binding energy) host for each satellite.
+
+        Parameters
+        ----------
+        snap_df : DataFrame
+        rvir_factor : float
+
+        Returns
+        -------
+        sat_to_host : dict of {int: int}
+            Maps each satellite ``Sub_tree_id`` to its most bound host.
+        """
         n = len(snap_df)
         if n == 0:
             return {}
@@ -218,6 +320,19 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
     def _distance_to_host_impl(
         snap_df: pd.DataFrame, column: str
     ) -> pd.DataFrame:
+        """Compute the 3-D distance from each subhalo to its host.
+
+        Parameters
+        ----------
+        snap_df : DataFrame
+        column : str
+            Column name for the host ``Sub_tree_id``.
+
+        Returns
+        -------
+        result : DataFrame
+            Copy of the input with an additional ``distance_to_{column}`` column.
+        """
         host_positions = snap_df[
             ["Sub_tree_id", "position_x", "position_y", "position_z"]
         ].rename(

@@ -1,15 +1,8 @@
-#############################################################################
-#
-# package:   roadrunner.physics
-# file:      scaler.py
-# brief:     StandardScaler for 6-D phase-space coordinates.
-#
-# copyright: GPLv3
-# author:    Asier Lambarri Martinez
-# changes:   15 may 2026 - Created
-#            15 may 2026 - Last edit
-#
-#############################################################################
+"""StandardScaler for 6-D phase-space coordinates.
+
+Transforms positions and velocities to a fixed range for numerical
+stability in the mixture models.
+"""
 
 import numpy as np
 

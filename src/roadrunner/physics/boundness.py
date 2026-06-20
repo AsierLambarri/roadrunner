@@ -11,6 +11,8 @@
 #
 #############################################################################
 
+"""Gravitational boundness computation for halo particles."""
+
 import numpy as np
 from scipy.spatial import KDTree
 

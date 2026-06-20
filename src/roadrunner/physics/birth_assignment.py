@@ -11,6 +11,8 @@
 #
 #############################################################################
 
+"""Assign particles to their birth halo by topological proximity."""
+
 import numpy as np
 
 from roadrunner.helpers import check_particle_uniqueness, remove_duplicates
