@@ -1,3 +1,32 @@
+#############################################################################
+#
+# package:   roadrunner.mixture
+# file:      base.py
+# brief:     Abstract base class for weighted Gaussian mixture models.
+#
+# Implements the common EM loop, E-step, convergence check, and the
+# abstract methods that concrete mixture classes (standard, Bayesian,
+# SVI) must implement.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 May 2026 - Created
+#            16 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Abstract base class for Gaussian mixture models with weighted responsibilities.
+
+:class:`BaseMixture` provides the skeleton EM loop and the
+:meth:`_initialize_weights_and_prior` helper that normalises a
+``latent_prior`` into ``log_alpha`` for the E-step.  Concrete
+subclasses implement :meth:`_check_parameters`,
+:meth:`_initialize_complete`, :meth:`_is_incomplete_init`,
+:meth:`_initialize_means`, :meth:`_m_step`,
+:meth:`_estimate_log_weights`, and
+:meth:`_estimate_log_gaussian_prob`.
+"""
+
 import abc
 from time import time
 
@@ -9,7 +38,20 @@ from roadrunner._defaults import KMEANS_MAX_ITER, KMEANS_PP_MAX_ITER
 
 
 def _nonpositive_definite(covariances, cov_type):
-    """Check if any covariance matrix is non-positive definite."""
+    """Check if any covariance matrix is non-positive definite.
+
+    Parameters
+    ----------
+    covariances : ndarray
+        Covariance matrices. Shape depends on ``cov_type``.
+    cov_type : str
+        One of ``'spherical'``, ``'diagonal'``, or ``'full'``.
+
+    Returns
+    -------
+    bad : bool or ndarray of bool
+        ``True`` for components whose covariance is non-positive definite.
+    """
     if cov_type == "spherical":
         return covariances <= 0
     elif cov_type == "diagonal":
@@ -20,7 +62,24 @@ def _nonpositive_definite(covariances, cov_type):
         return np.any(eigvals <= 0, axis=1)
 
 def _check_parameter_values(weights, means, covariances, cov_type):
-    """Check that GMM parameters do not have NaN nor Inf values."""
+    """Check mixture parameters for NaN, Inf, or non-positive-definite values.
+
+    Parameters
+    ----------
+    weights : ndarray of shape (n_components,)
+        Component weights.
+    means : ndarray of shape (n_components, n_features)
+        Component means.
+    covariances : ndarray
+        Component covariances. Shape depends on ``cov_type``.
+    cov_type : str
+        Covariance type.
+
+    Returns
+    -------
+    has_nan : tuple of bool
+        Three-element tuple ``(weights_bad, means_bad, covariances_bad)``.
+    """
     return (
         np.any(np.isnan(weights)) or np.any(np.isinf(weights)) or np.any(weights <= 0),
         np.any(np.isnan(means)) or np.any(np.isinf(means)),
@@ -32,6 +91,35 @@ def _check_parameter_values(weights, means, covariances, cov_type):
 
 
 class BaseMixture(abc.ABC):
+    """Abstract base class for Gaussian mixture models with weighted responsibilities.
+
+    Implements the common EM loop, ``fit()``, ``predict()``,
+    and ``predict_log_proba()``.  Subclasses must implement the
+    abstract methods to define their own parameterisation (standard
+    EM, variational Bayes, or stochastic variational inference).
+
+    Parameters
+    ----------
+    n_components : int, default=2
+        Number of mixture components.
+    init_params : str, default='kmeans'
+        Initialisation method.
+    max_iter : int, default=10
+        Maximum number of EM iterations.
+    tol : float, default=1e-3
+        Convergence threshold (absolute change in lower bound).
+    verbose : int, default=0
+        Verbosity level.
+    random_state : int or RandomState, optional
+        Random state for reproducibility.
+    reg_covar : float, default=1e-6
+        Regularisation added to the diagonal of covariance matrices.
+    cast_dtype : dtype, default=np.float32
+        Working precision for internal arrays.
+    **kwargs
+        Additional keyword arguments consumed by subclasses.
+    """
+
     def __init__(self, n_components=2, init_params='kmeans', max_iter=10, tol=1e-3, verbose=0,
                  random_state=None, reg_covar=1E-6, cast_dtype=np.float32, **kwargs):
 
@@ -55,32 +143,74 @@ class BaseMixture(abc.ABC):
     #---------------------------------- Initialization API -----------------------------------#
     @abc.abstractmethod
     def _set_parameters(self):
-        """Set fitted parameters of the model
+        """Update derived quantities after a parameter update.
+
+        Called at the end of ``fit()`` to compute ``weights_``,
+        ``precisions_``, etc. from the current parameter state.
         """
-        pass
 
     @abc.abstractmethod
     def _check_parameters(self, X):
-        """Check the values and shapes of parameter models.
+        """Validate and initialise all prior/hyper-parameters.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data (used to infer default priors).
         """
-        pass
 
     @abc.abstractmethod
     def _initialize_complete(self, X, resp, point_weights):
-        """Initialization of the Gaussian mixture parameters from complete set of
-        means, covars and weights.
+        """Initialise model parameters from a complete set of responsibilities.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data.
+        resp : ndarray of shape (n_samples, n_components) or None
+            Responsibilities (``None`` when using externally-provided
+            ``counts_init``, ``means_init``, ``covariance_init``).
+        point_weights : ndarray of shape (n_samples,)
+            Per-point weights.
         """
-        pass
 
     @abc.abstractmethod
     def _is_incomplete_init(self):
-        """Checks wether initialization is incomplete or not.
+        """Check whether initialisation requires k-means.
+
+        Returns
+        -------
+        incomplete : bool
+            ``True`` if the model needs k-means to obtain initial
+            responsibilities.
         """
-        pass
 
     def _initialize_weights_and_prior(self, X, point_weights, latent_prior):
-        """Initializes latent variable prior. If latent_prior is None, a flat
-        prior is assumed (standard GMM).
+        """Normalise the latent prior and compute ``log_alpha`` for the E-step.
+
+        If ``latent_prior`` is ``None`` a flat (uniform) prior is
+        assumed.  The returned ``log_alpha`` is ``log(alpha)`` where
+        ``alpha`` has been row-normalised and scaled by
+        ``n_components`` so that ``sum_k alpha_{n,k} = n_components``
+        for every row.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data (used for shape validation only).
+        point_weights : ndarray or None
+            Per-point weights. ``None`` means uniform weights.
+        latent_prior : ndarray of shape (n_samples, n_components) or None
+            Per-point, per-component prior weights.
+
+        Returns
+        -------
+        point_weights : ndarray of shape (n_samples,)
+            Per-point weights (always an array).
+        alpha : ndarray of shape (n_samples, n_components)
+            Normalised latent prior.
+        log_alpha : ndarray of shape (n_samples, n_components)
+            ``log(alpha)`` for use in the E-step.
         """
         n_samples, n_features = X.shape
 
@@ -111,8 +241,21 @@ class BaseMixture(abc.ABC):
         return point_weights, latent_prior, log_alpha
 
     def _initialize_incomplete(self, X, point_weights, alpha):
-        """Initialization of the Gaussian mixture parameters using kmeans++, where weights and
-        covariance are unknown. means may or may not be known.
+        """Initialise parameters using k-means hard assignment.
+
+        Means are obtained from ``_initialize_means()``, hard labels
+        are assigned via scikit-learn ``KMeans``, and then
+        ``_initialize_complete()`` is called with the resulting
+        one-hot responsibilities.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data.
+        point_weights : ndarray of shape (n_samples,)
+            Per-point weights.
+        alpha : ndarray of shape (n_samples, n_components)
+            Latent prior (used to weight the k-means sampling).
         """
         n_samples, _ = X.shape
 
@@ -139,14 +282,39 @@ class BaseMixture(abc.ABC):
 
     @abc.abstractmethod
     def _initialize_means(self, X, point_weights, alpha):
-        """Initializes the means of the clusters through kmeans++ algorithm and taking into account
-        the provided prior's information and ordering. If means_init is provided, those are used directly.
+        """Initialise component means (k-means++ with prior weighting).
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data.
+        point_weights : ndarray of shape (n_samples,)
+            Per-point weights.
+        alpha : ndarray of shape (n_samples, n_components)
+            Latent prior.
+
+        Returns
+        -------
+        means : ndarray of shape (n_components, n_features)
+            Initial component means.
         """
-        pass
 
     def _initialize_parameters(self, X, point_weights, alpha):
-        """Initialize the model parameters using kmeans++ and information from provided parameters
-        and latent variable prior.
+        """Dispatch initialisation to complete or incomplete path.
+
+        If :meth:`_is_incomplete_init` returns ``True`` the
+        k-means path is taken; otherwise the complete path is used,
+        which assumes ``counts_init``, ``means_init``, and
+        ``covariance_init`` have been provided externally.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data.
+        point_weights : ndarray of shape (n_samples,)
+            Per-point weights.
+        alpha : ndarray of shape (n_samples, n_components)
+            Latent prior.
         """
         self._incomplete = self._is_incomplete_init()
         if self._incomplete:
@@ -160,7 +328,24 @@ class BaseMixture(abc.ABC):
     #                                                                                         #
     #---------------------------------- Model Fitting API ------------------------------------#
     def _e_step(self, X, log_alpha):
-        """E-step: compute responsibilities γ_ik with masking."""
+        """E-step: compute posterior responsibilities.
+
+        ``log_resp[i, k] = log_gauss[i, k] + log_weights[k] + log_alpha[i, k] - log_norm[i]``
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Data.
+        log_alpha : ndarray of shape (n_samples, n_components)
+            Normalised log prior.
+
+        Returns
+        -------
+        log_resp : ndarray of shape (n_samples, n_components)
+            Log of the posterior responsibilities.
+        log_norm : ndarray of shape (n_samples, 1)
+            Log normalisation constants.
+        """
         with np.errstate(divide='ignore'):
             log_gauss   = self._estimate_log_gaussian_prob(X)
             log_weights = self._estimate_log_weights()
@@ -172,26 +357,62 @@ class BaseMixture(abc.ABC):
 
     @abc.abstractmethod
     def _estimate_log_weights(self):
-        """M-step: update weights, means, and covariances."""
-        pass
+        """Compute log of the component weights.
+
+        Returns
+        -------
+        log_weights : ndarray of shape (n_components,)
+            ``log(weights_[k])`` for each component.
+        """
 
     @abc.abstractmethod
     def _m_step(self, X, resp, point_weights):
-        """M-step: update weights, means, and covariances."""
-        pass
+        """M-step: update component parameters.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Data.
+        resp : ndarray of shape (n_samples, n_components)
+            Posterior responsibilities.
+        point_weights : ndarray of shape (n_samples,)
+            Per-point weights.
+        """
 
     @abc.abstractmethod
     def _estimate_log_gaussian_prob(self, X):
-        """Compute log N(x | mean, cov) for all components."""
-        pass
+        """Compute log Gaussian density for all components.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Data.
+
+        Returns
+        -------
+        log_prob : ndarray of shape (n_samples, n_components)
+            ``log N(x_n | mu_k, Sigma_k)``.
+        """
 
     ####################################### Public API #######################################
     #                                                                                        #
     #----------------------------------------------------------------------------------------#
     def fit(self, X, point_weights=None, latent_prior=None):
-        """
-        X             : array (N, D)
-        latent_prior  : array (N, K) with prior weights 1>= α_{n,k} >= 0
+        """Fit the mixture model to the data via EM.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data.
+        point_weights : ndarray of shape (n_samples,), optional
+            Per-point weights (defaults to uniform).
+        latent_prior : ndarray of shape (n_samples, n_components), optional
+            Per-point, per-component prior weights (``None`` = flat).
+
+        Returns
+        -------
+        self : BaseMixture
+            The fitted model.
         """
         t0 = time()
 
@@ -248,7 +469,20 @@ class BaseMixture(abc.ABC):
         return self
 
     def predict_log_proba(self, X, latent_prior=None):
-        """Posterior p(z=k|x), using the same α stored at fit."""
+        """Compute log posterior probabilities for the fitted model.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Data.
+        latent_prior : ndarray of shape (n_samples, n_components), optional
+            Per-point mask / prior.
+
+        Returns
+        -------
+        log_resp : ndarray of shape (n_samples, n_components)
+            ``log p(z_n = k | x_n)``.
+        """
         X = np.ascontiguousarray(X, dtype=self.cast_dtype)
         _, _, log_alpha = self._initialize_weights_and_prior(
             X,
@@ -259,7 +493,20 @@ class BaseMixture(abc.ABC):
         return log_resp
 
     def predict(self, X, latent_prior=None):
-        """Hard labels from the masked posterior."""
+        """Return hard cluster assignments.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Data.
+        latent_prior : ndarray of shape (n_samples, n_components), optional
+            Per-point mask / prior.
+
+        Returns
+        -------
+        labels : ndarray of shape (n_samples,)
+            Index of the most-likely component for each point.
+        """
         return np.argmax(
             self.predict_log_proba(X, latent_prior=latent_prior),
             axis=1
