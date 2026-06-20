@@ -22,16 +22,40 @@ from roadrunner.helpers import select_uint_dtype
 
 
 class HDF5CatalogueWriter:
+    """Writes the galaxy catalogue (per-snapshot and final tables) to HDF5.
+
+    Parameters
+    ----------
+    output_dir : str
+        Output directory. The catalogue is saved as ``catalogue.hdf5``.
+    """
+
     def __init__(self, output_dir):
         os.makedirs(output_dir, exist_ok=True)
         self._path = os.path.join(output_dir, "catalogue.hdf5")
 
     def _del_existing(self, group, name):
+        """Delete a dataset from an HDF5 group if it exists."""
         if name in group:
             del group[name]
 
     def write_header(self, accretion_id, snapshots, config_dict,
                      merger_tree_df, equivalence_df):
+        """Write header metadata (accretion ID, config, merger tree) to the catalogue.
+        
+        Parameters
+        ----------
+        accretion_id : int
+            Accretion host ID.
+        snapshots : list of int
+            All snapshot IDs.
+        config_dict : dict
+            Pipeline configuration.
+        merger_tree_df : DataFrame
+            Full merger tree.
+        equivalence_df : DataFrame
+            Equivalence table.
+        """
         with h5py.File(self._path, "a") as hf:
             hdr = hf.require_group("header")
             self._del_existing(hdr, "accretion_id")
@@ -57,6 +81,16 @@ class HDF5CatalogueWriter:
     def write_snapshot(self, snapshot_id, time,
                        properties_df, dynstate_df,
                        satellites_map):
+        """Write one snapshot's galaxy properties and dynamical state.
+        
+        Parameters
+        ----------
+        snapshot_id : int
+        time : float
+        properties_df : DataFrame
+        dynstate_df : DataFrame
+        satellites_map : dict
+        """
         with h5py.File(self._path, "a") as hf:
             snap_grp = hf.require_group(f"/snapshots/{snapshot_id}")
 
@@ -87,6 +121,13 @@ class HDF5CatalogueWriter:
             hf["header"]["last_snapshot"][()] = int(snapshot_id)
 
     def write_finalize(self, birth_df, assembly_df):
+        """Write the final catalogue data (birth + assembly history).
+
+        Parameters
+        ----------
+        birth_df : DataFrame
+        assembly_df : DataFrame
+        """
         with h5py.File(self._path, "a") as hf:
             final = hf.require_group("final")
             if "births" in final:
