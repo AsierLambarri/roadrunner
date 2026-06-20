@@ -32,11 +32,13 @@ fields:
 # end_snapshot: 100            # Last snapshot (or -1 for "last")
 
 # ── Assigner ──────────────────────────────────────────────────────────────────
-assignment_method: gmm          # XGMM method: gmm (standard EM) or bgmm (variational Bayesian)
+assignment_method: gmm          # XGMM method: gmm, bgmm (variational), or svi-bgmm (stochastic)
 use_bgmm_priors: true           # Use previous snapshot as BGMM prior (bgmm only)
 dtype_math: float64             # XGMM math precision: float32, float64, float128
+svi_iters: 1000                # Maximum SVI iterations (svi-bgmm only)
+svi_batch_size: 10000           # SVI mini-batch size (svi-bgmm only)
 cov_type: full                 # Covariance type: full, diagonal, spherical
-max_iter: 10                   # Maximum EM iterations
+max_iter: 10                   # Maximum EM iterations (gmm/bgmm)
 tol: 1e-2                      # Convergence tolerance
 min_particles: 10              # Minimum particles per group
 reg_covar: 1e-6                # Regularization for covariance
