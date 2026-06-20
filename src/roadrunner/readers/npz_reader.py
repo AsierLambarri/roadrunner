@@ -22,6 +22,24 @@ from roadrunner.readers.equivalence import EquivalenceTable
 
 
 class NPZSnapshotReader:
+    """Snapshot reader for NPZ files (mock simulations).
+
+    Supports two NPZ formats:
+    - Mock format (``mock_sim=True``): expects ``indices``, ``masses``,
+      ``coords`` keys with 6-D coordinates.
+    - Generic format: expects a 2-D array with columns
+      ``[id, mass, x, y, z, vx, vy, vz, metallicity]``.
+
+    Parameters
+    ----------
+    equiv_table : EquivalenceTable
+        Table mapping snapshot IDs to file paths, times, and redshifts.
+    base_dir : str, default=''
+        Base directory for snapshot files.
+    mock_sim : bool, default=False
+        If ``True``, read the roadrunner mock NPZ format.
+    """
+
     def __init__(
         self,
         equiv_table: EquivalenceTable,
@@ -36,6 +54,18 @@ class NPZSnapshotReader:
             self._snap_info[full] = (row["redshift"], row["time"])
 
     def load(self, file_path: str) -> SnapshotData:
+        """Load a snapshot from an NPZ file.
+
+        Parameters
+        ----------
+        file_path : str
+            Path to the ``.npz`` file.
+
+        Returns
+        -------
+        snap_data : SnapshotData
+            Loaded particle data (indices, masses, coordinates, metallicity).
+        """
         redshift, time = self._snap_info[file_path]
         raw = np.load(file_path, allow_pickle=False)
 
