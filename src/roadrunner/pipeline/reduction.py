@@ -25,6 +25,27 @@ from roadrunner.postprocessing.properties import compute_galaxy_properties
 
 @dataclass(frozen=True)
 class ReductionConfig:
+    """Configuration for per-snapshot reduction.
+
+    Parameters
+    ----------
+    accretion_id : int
+        ``Sub_tree_id`` of the accretion host galaxy.
+    halo_model : str, default='kepler'
+        Potential model name.
+    n_los : int, default=15
+        Number of lines of sight for property estimation.
+    use_gmm_centers : bool, default=True
+        Use GMM-derived centres for property computation.
+    min_particles_structural : int, default=30
+        Minimum particles for structural property computation.
+    ssc_nmin : int, default=30
+        Minimum particles for shrink-sphere centering.
+    ssc_alpha : float, default=0.9
+        Shrink-sphere contraction factor.
+    dynstate_snapshots : int, list, str, or None
+        Which snapshots get dynamical-state classification.
+    """
     accretion_id: int
     halo_model: str = "kepler"
     n_los: int = 15
@@ -44,6 +65,32 @@ def reduce_snapshot(
     config: ReductionConfig,
     compute_dynstate: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compute galaxy properties and dynamical state for a snapshot.
+
+    Parameters
+    ----------
+    snap_data : SnapshotData
+        Particle data.
+    snap_df : DataFrame
+        Merger-tree data for this snapshot.
+    result : AssignmentResult
+        Assignment result from the assigner.
+    galaxy_particles : dict of int → ndarray
+        Allowed particle indices per galaxy.
+    galaxy_bound : dict of int → ndarray
+        Bound particle indices per galaxy.
+    config : ReductionConfig
+        Reduction configuration.
+    compute_dynstate : bool, default=True
+        Whether to compute dynamical-state classification.
+
+    Returns
+    -------
+    properties : DataFrame
+        Galaxy properties (mass, radius, velocity dispersion, etc.).
+    dynstate : DataFrame
+        Dynamical-state classification (empty if not computed).
+    """
     coords = np.column_stack([snap_data.positions, snap_data.velocities])
 
     galaxy_table = snap_df[["Sub_tree_id", "host_id", "mass", "distance_to_acc_id"]].copy()
