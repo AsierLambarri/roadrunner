@@ -21,17 +21,48 @@ import numpy as np
 
 
 class UnionFind:
+    """Union-Find (disjoint set) data structure with path compression.
+
+    Parameters
+    ----------
+    n : int
+        Number of elements.
+    """
+
     def __init__(self, n: int):
         self.parent = list(range(n))
         self.rank = [0] * n
 
     def find(self, x: int) -> int:
+        """Find the root of element ``x`` with path compression.
+
+        Parameters
+        ----------
+        x : int
+            Element index.
+
+        Returns
+        -------
+        root : int
+            Root element index.
+        """
         while self.parent[x] != x:
             self.parent[x] = self.parent[self.parent[x]]
             x = self.parent[x]
         return x
 
     def union(self, x: int, y: int) -> None:
+        """Merge the sets containing ``x`` and ``y``.
+
+        Uses union-by-rank to keep the tree shallow.
+
+        Parameters
+        ----------
+        x : int
+            First element.
+        y : int
+            Second element.
+        """
         rx, ry = self.find(x), self.find(y)
         if rx == ry:
             return
@@ -44,6 +75,13 @@ class UnionFind:
             self.rank[rx] += 1
 
     def groups(self) -> list[list[int]]:
+        """Return all connected component groups.
+
+        Returns
+        -------
+        groups : list of list of int
+            Each element is a list of indices belonging to one group.
+        """
         groups_dict: dict[int, list[int]] = defaultdict(list)
         for i in range(len(self.parent)):
             root = self.find(i)
