@@ -19,6 +19,31 @@ from roadrunner._mcf_types import PotentialModel
 
 
 class HaloModel:
+    """Single halo model containing a gravitational potential and boundness data.
+
+    The halo stores its position, velocity, virial radius, and a
+    :class:`PotentialModel` instance for computing energies.
+    Boundness results are stored as a tuple ``(indices, energies, tdyns)``.
+
+    Parameters
+    ----------
+    inner : PotentialModel
+        Gravitational potential model (e.g. :class:`KeplerPotential`).
+    xcen : ndarray of shape (3,)
+        Halo centre position.
+    velocity : ndarray of shape (3,)
+        Halo bulk velocity.
+    virial_radius : float
+        Virial radius in kpc.
+    sub_tree_id : int
+        Halo identifier from the merger tree.
+    redshift : float
+        Snapshot redshift.
+    comoving : bool, default=True
+        If ``True``, ``potential()`` and related methods apply the
+        ``(1 + z)`` scaling to convert comoving to physical coordinates.
+    """
+
     def __init__(
         self,
         inner: PotentialModel,
@@ -42,16 +67,47 @@ class HaloModel:
     def set_boundness(
         self, indices: np.ndarray, energies: np.ndarray, tdyns: np.ndarray
     ) -> None:
-        self._boundness = (indices, energies, tdyns)
+        """Store the result of a boundness computation.
+
+        Parameters
+        ----------
+        indices : ndarray of uint64
+            Bound particle indices.
+        energies : ndarray of float32
+            Boundness energy values.
+        tdyns : ndarray of float32
+            Dynamical times for the bound particles.
+        """
 
     def get_boundness(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """Retrieve the stored boundness data.
+
+        Returns
+        -------
+        boundness : tuple of (indices, energies, tdyns) or None
+            ``None`` if boundness has not been computed yet.
+        """
         return self._boundness
 
     @property
     def has_boundness(self) -> bool:
+        """``True`` if boundness data has been stored."""
         return self._boundness is not None
 
     def potential(self, xyz_or_r: np.ndarray) -> np.ndarray:
+        """Evaluate the gravitational potential at given positions or radii.
+
+        Parameters
+        ----------
+        xyz_or_r : ndarray of shape (n_points, 3) or (n_points,)
+            If 2-D the norm of the differences from ``xcen`` is computed;
+            if 1-D the values are treated as radii directly.
+
+        Returns
+        -------
+        phi : ndarray
+            Potential energy values.
+        """
         if xyz_or_r.ndim == 2:
             r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
         else:
@@ -59,6 +115,7 @@ class HaloModel:
         return self._inner.potential(r)
 
     def dynamical_time(self, xyz_or_r: np.ndarray) -> np.ndarray:
+        """Compute the dynamical time at given positions."""
         if xyz_or_r.ndim == 2:
             r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
         else:
@@ -66,6 +123,7 @@ class HaloModel:
         return self._inner.dynamical_time(r)
 
     def tidal_denominator(self, xyz_or_r: np.ndarray) -> np.ndarray:
+        """Compute the tidal denominator for tidal-radius estimation."""
         if xyz_or_r.ndim == 2:
             r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
         else:
@@ -74,6 +132,21 @@ class HaloModel:
 
     @classmethod
     def from_snapshot_row(cls, row, model="kepler", comoving=True):
+        """Construct a HaloModel from a merger-tree row.
+
+        Parameters
+        ----------
+        row : pandas.Series
+            Row from the merger tree with position, velocity, mass, etc.
+        model : str, default='kepler'
+            Potential model name.
+        comoving : bool, default=True
+            Whether coordinates are comoving.
+
+        Returns
+        -------
+        halo : HaloModel
+        """
         xcen = np.array([
             row["position_x"], row["position_y"], row["position_z"],
         ], dtype=np.float64)
