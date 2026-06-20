@@ -15,6 +15,7 @@ from roadrunner.mixture.weighted_gmm import (
     _estimate_gaussian_parameters,
 )
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
+from roadrunner.mixture.svi_bayesian_gmm import SVIBayesianGaussianMixture
 from roadrunner._defaults import (
     PRIOR_DOF_OFFSET,
     UNRESOLVED_GROUP_RATIO,
@@ -31,6 +32,7 @@ from roadrunner.clustering.assignment import priors as prior
 _MIXTURE_CLASSES: dict[str, type[BaseMixture]] = {
     "gmm": WeightedGaussianMixture,
     "bgmm": WeightedBayesianGaussianMixture,
+    "svi-bgmm": SVIBayesianGaussianMixture,
 }
 
 
@@ -78,7 +80,7 @@ class XGMMAssigner:
     def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
                  min_particles=10, reg_covar=1e-6, prior_type="",
                  verbose=1, method="gmm", use_bgmm_priors=True,
-                 dtype_math="float64"):
+                 dtype_math="float64", **mixture_kwargs):
         self.cov_type = cov_type
         self.max_iter = max_iter
         self.tol = tol
@@ -93,6 +95,7 @@ class XGMMAssigner:
         self.parameters: dict[int, dict] = {}
         self.use_bgmm_priors = use_bgmm_priors
         self.dtype_math = dtype_math
+        self.mixture_kwargs = mixture_kwargs
 
     def assign(self, halos, particle_coords, newborn_indices, groups,
                **kwargs) -> AssignmentResult:
@@ -245,6 +248,7 @@ class XGMMAssigner:
         run_kwargs = dict(
             tol=self.tol,
             verbose=self.verbose,
+            **self.mixture_kwargs,
         )
 
         prior_kwargs = self._build_prior_kwargs(group_subtrees, csc_b, scaler, n_comp)
