@@ -1,3 +1,17 @@
+#############################################################################
+#
+# package:   roadrunner.clustering
+# file:      segmentation.py
+# brief:     Galaxy group segmentation based on overlapping virial radii.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 May 2026 - Created
+#
+#############################################################################
+
+"""Halo group segmentation based on overlapping virial radii."""
+
 import numpy as np
 
 from roadrunner.clustering.union_find import overlapping_groups

@@ -1,3 +1,20 @@
+#############################################################################
+#
+# package:   roadrunner.clustering
+# file:      union_find.py
+# brief:     Union-Find (disjoint set) data structure for group merging.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 May 2026 - Created
+#
+#############################################################################
+
+"""Union-Find (disjoint set) data structure.
+
+Used by the halo segmenter to merge overlapping groups efficiently.
+"""
+
 from collections import defaultdict
 
 import numpy as np
