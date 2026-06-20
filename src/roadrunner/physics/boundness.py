@@ -22,6 +22,28 @@ def compute_halo_bound_particles(
     particle_coordinates: np.ndarray,
     search_factor: float = 1.0,
 ) -> list:
+    """Compute gravitational boundness for a list of halos.
+
+    Uses a KD-tree to efficiently find particles within ``search_factor``
+    times the virial radius of each halo, then evaluates boundness
+    by comparing the total particle energy (kinetic + potential) to
+    the escape velocity.  Bound particles are stored on each halo
+    via :meth:`HaloModel.set_boundness`.
+
+    Parameters
+    ----------
+    halos : list of HaloModel
+        Halos to evaluate.
+    particle_coordinates : ndarray of shape (n_particles, 6)
+        6-D phase-space coordinates.
+    search_factor : float, default=1.0
+        Virial radius multiplier for the candidate search region.
+
+    Returns
+    -------
+    halos : list of HaloModel
+        The same list with boundness data set on each halo.
+    """
     positions = particle_coordinates[:, :3]
     velocities = particle_coordinates[:, 3:6]
     tree = KDTree(positions)
