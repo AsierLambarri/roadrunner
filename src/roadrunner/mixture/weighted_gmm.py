@@ -436,12 +436,24 @@ class WeightedGaussianMixture(BaseMixture):
     #                                                                                         #
     #---------------------------------- Initialization API -----------------------------------#
     def _set_parameters(self):
-        """Set fitted parameters of the model
+        """Set fitted parameters of the model.
+
+        No-op for ``WeightedGaussianMixture`` — all parameters are
+        stored directly on the instance after the M-step.
         """
         pass
 
     def _check_parameters(self, X):
         """Check the values and shapes of weights, covariances, and means.
+
+        Validates user-provided ``counts_init``, ``means_init``, and
+        ``covariance_init`` against the expected shapes. Raises
+        descriptive errors on mismatch.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+            Training data (used only for shape inference).
         """
         n_samples, n_features = X.shape
         if self.cov_type not in ["spherical", "diagonal", "full"]:
@@ -469,7 +481,15 @@ class WeightedGaussianMixture(BaseMixture):
 
 
     def _is_incomplete_init(self):
-        """Checks wether initialization is incomplete or not.
+        """Check whether initialization is incomplete.
+
+        Returns ``True`` if any of ``means_init``, ``counts_init``,
+        or ``covariance_init`` is ``None``, requiring a fallback to
+        k-means++ initialisation.
+
+        Returns
+        -------
+        incomplete : bool
         """
         return (
             self.means_init is None
@@ -492,8 +512,19 @@ class WeightedGaussianMixture(BaseMixture):
         return np.asarray(means, dtype=X.dtype)
 
     def _initialize_complete(self, X, resp, point_weights):
-        """Initialization of the Gaussian mixture parameters from complete set of
-        means, covars and weights.
+        """Initialise Gaussian mixture parameters from a complete set of responsibilities.
+
+        When ``resp`` is provided, estimates weights, means and covariances.
+        User-provided ``counts_init``, ``means_init``, ``covariance_init``
+        take precedence over estimated values.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        resp : ndarray of shape (n_samples, n_components) or None
+            Responsibility matrix.
+        point_weights : ndarray of shape (n_samples,)
+            Per-point sample weights.
         """
         n_samples, _ = X.shape
 
@@ -514,22 +545,59 @@ class WeightedGaussianMixture(BaseMixture):
     #                                                                                         #
     #---------------------------------- Model Fitting API ------------------------------------#
     def _estimate_log_weights(self):
-        """M-step: update weights, means, and covariances."""
+        """Compute log-weights from the current ``weights_``.
+
+        Returns
+        -------
+        log_weights : ndarray of shape (n_components,)
+        """
         return np.log(self.weights_)
 
     def _m_step(self, X, resp, point_weights):
-        """M-step: update weights, means, and covariances."""
+        """M-step: update weights, means, and covariances.
+
+        Delegates to ``_estimate_gaussian_parameters`` for the actual
+        computation, then normalises the weights.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        resp : ndarray of shape (n_samples, n_components)
+        point_weights : ndarray of shape (n_samples,)
+        """
         self.weights_, self.means_, self.covariances_ = _estimate_gaussian_parameters(
             X, resp, point_weights, self.cov_type, self.reg_covar
         )
         self.weights_ /= self.weights_.sum()
 
     def _estimate_log_gaussian_prob(self, X):
-        """Compute log N(x | mean, cov) for all components."""
+        """Compute log N(x | mean, cov) for all components.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+
+        Returns
+        -------
+        log_prob : ndarray of shape (n_samples, n_components)
+        """
         return _estimate_log_gaussian_prob(X, self.means_, self.covariances_, self.cov_type)
 
 
     def _compute_lower_bound(self, log_resp, log_prob_norm, point_weights):
-        """Compute the log-likelihood lower bound."""
+        """Compute the log-likelihood lower bound.
+
+        Parameters
+        ----------
+        log_resp : ndarray of shape (n_samples, n_components)
+            Log-responsibilities.
+        log_prob_norm : ndarray of shape (n_samples,)
+            Log-probability normalisation term.
+        point_weights : ndarray of shape (n_samples,)
+
+        Returns
+        -------
+        lower_bound : float
+        """
         ll = np.average(log_prob_norm.ravel(), weights=point_weights)
         return ll

@@ -164,7 +164,17 @@ class NFWPotential:
         """
 
         def _f(x):
-            """``ln(1 + x) - x / (1 + x)``, the NFW profile shape function."""
+            """``ln(1 + x) - x / (1 + x)``, the NFW profile shape function.
+
+            Parameters
+            ----------
+            x : ndarray
+                ``r / Rs``, the scaled radius.
+
+            Returns
+            -------
+            f : ndarray
+            """
             return np.log(1 + x) - x / (1 + x)
 
         x = np.minimum(self.c, np.sqrt(r**2 + SOFTENING_NFW**2) / self.Rs)

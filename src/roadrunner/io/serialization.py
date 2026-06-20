@@ -91,7 +91,20 @@ def load_checkpoint(path):
 
 
 def _migrate(payload, version):
-    """Migrate checkpoint from older versions."""
+    """Migrate a checkpoint payload from an older version to the current format.
+
+    Parameters
+    ----------
+    payload : dict
+        The loaded checkpoint payload.
+    version : int
+        The version identified in the checkpoint file.
+
+    Returns
+    -------
+    payload : dict
+        Migrated payload at the current ``_VERSION``.
+    """
     if version == 0:
         payload["version"] = 1
         payload["data"] = payload.get("data", payload)

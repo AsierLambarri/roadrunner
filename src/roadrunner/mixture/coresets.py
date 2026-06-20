@@ -156,11 +156,34 @@ def _exact_fudge(q, M, tol=5e-2, max_eta=1000):
     log1mq = np.log1p(-q)
 
     def expected_unique(T):
-        """Expected #unique points after T draws."""
+        """Expected number of unique points after T draws.
+
+        ``sum_i (1 - (1 - q_i)^T)`` for a categorical distribution
+        with probabilities ``q_i``.
+
+        Parameters
+        ----------
+        T : float
+            Number of draws.
+
+        Returns
+        -------
+        n_unique : float
+        """
         return np.sum(1.0 - np.exp(T * log1mq))
 
     def f(eta):
-        """Equation U(eta*M) - M = 0."""
+        """Equation U(eta*M) - M = 0, solved to find the coreset size.
+
+        Parameters
+        ----------
+        eta : float
+            Ratio of coreset size to full data size.
+
+        Returns
+        -------
+        residual : float
+        """
         return expected_unique(eta * M) - M
 
     sol = root_scalar(f, bracket=[1e-1, max_eta], method='brentq', xtol=tol, x0=2)
@@ -203,7 +226,17 @@ class GaussianCoreset:
 
         
     def _initialize_centroids(self, X):
-        """Initializes the centers of the clusters using kmeans++.
+        """Initialise centroids and covariances using k-means++.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+
+        Returns
+        -------
+        centroids : ndarray of shape (n_components, n_features)
+        covariances : list
+            Initial covariance estimates (identity for each component).
         """
         _, n_features = X.shape
         centroids, _ = kmeans_plusplus(
@@ -221,7 +254,14 @@ class GaussianCoreset:
         return centroids, covariances 
 
     def _initialize(self, X):
-        """Initializes the centers and covariances.
+        """Initialise the centers and covariances.
+
+        Falls back to :meth:`_initialize_centroids` if either
+        ``self.centers`` or ``self.covariances`` is ``None``.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
         """
         if self.centers is None or self.covariances is None:
             centers, covariances = self._initialize_centroids(X)
@@ -233,7 +273,21 @@ class GaussianCoreset:
         self.covariances = np.asarray(self.covariances, dtype=self.cast_dtype)
         
     def _estimate_importances(self, X, quad):
-        """Estimates the importance q(x) of the sample.
+        """Estimate the importance q(x) of each sample.
+
+        Uses the per-cluster quadratic distances to compute a sampling
+        weight for coreset construction, following Lucic et al. (2018).
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        quad : ndarray of shape (n_samples, n_components)
+            Quadratic distances to each cluster centre.
+
+        Returns
+        -------
+        importances : ndarray of shape (n_samples,)
+            Positive importance weights.
         """
         n_samples, n_features = X.shape
 

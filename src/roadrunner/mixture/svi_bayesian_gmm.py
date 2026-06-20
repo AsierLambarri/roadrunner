@@ -89,12 +89,38 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         self.tol = tol
 
     def _sample_batch(self, n_samples):
-        """Draw a uniform random mini-batch index array."""
+        """Draw a uniform random mini-batch index array.
+
+        Parameters
+        ----------
+        n_samples : int
+            Total number of data points.
+
+        Returns
+        -------
+        idx : ndarray of int
+            Indices of points in the mini-batch.
+        """
         M = min(self.batch_size, n_samples)
         return self.random_state.choice(n_samples, M, replace=False)
 
     def _svi_m_step(self, X_b, resp_b, pw_b, rho, n_total):
-        """Natural gradient M-step on mini-batch statistics."""
+        """Natural gradient M-step on mini-batch statistics.
+
+        Estimates Gaussian parameters on the mini-batch, scales the
+        sufficient statistics to the full data size, then applies
+        a Polyak–Ruppert averaging step with learning rate ``rho``.
+
+        Parameters
+        ----------
+        X_b : ndarray of shape (batch_size, n_features)
+        resp_b : ndarray of shape (batch_size, n_components)
+        pw_b : ndarray of shape (batch_size,)
+        rho : float
+            Current learning rate.
+        n_total : int
+            Total number of data points (for scaling).
+        """
         nk, xk, sk = _estimate_gaussian_parameters(
             X_b, resp_b, pw_b, self.cov_type, self.reg_covar)
         nk_s = nk * (n_total / X_b.shape[0])
@@ -123,7 +149,16 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
     # ── Convergence methods ──────────────────────────────────────────
 
     def _store_lower_bound(self, lb):
-        """Update the relative-change rolling buffer and track best LB."""
+        """Update the relative-change rolling buffer and track best LB.
+
+        Computes ``|lb - prev| / max(|prev|, 1)`` and appends to
+        ``_delta_buffer``.
+
+        Parameters
+        ----------
+        lb : float
+            Current lower bound value.
+        """
         if self._prev_lb is not None:
             delta = abs(lb - self._prev_lb) / max(abs(self._prev_lb), 1.0)
             self._delta_buffer.append(delta)
@@ -134,7 +169,16 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         self.lower_bound_ = lb
 
     def _is_converged(self):
-        """Check if the rolling-window ELBO change has stabilised."""
+        """Check if the rolling-window ELBO change has stabilised.
+
+        Convergence is declared when the mean or median relative
+        change in the lower bound over the rolling window falls
+        below ``self.tol``.
+
+        Returns
+        -------
+        converged : bool
+        """
         if len(self._delta_buffer) < self.window_size:
             return False
         return (
@@ -143,13 +187,26 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         )
 
     def _is_diverging(self):
-        """Check if the optimisation is numerically unstable."""
+        """Check if the optimisation is numerically unstable.
+
+        Returns ``True`` when the median relative change exceeds 0.5,
+        indicating a divergent trajectory.
+
+        Returns
+        -------
+        diverging : bool
+        """
         if len(self._delta_buffer) < self.window_size:
             return False
         return np.median(self._delta_buffer) > 0.5
 
     def _check_convergence_quality(self):
-        """Warn if the final LB is substantially worse than the best seen."""
+        """Warn if the final LB is substantially worse than the best seen.
+
+        If the ratio ``|final - best| / |best| > 5%`` a warning is
+        emitted, suggesting the optimisation may have settled in a
+        poor local optimum.
+        """
         if self._best_lb > -np.inf and self.lower_bound_ > -np.inf:
             ratio = abs(self.lower_bound_ - self._best_lb) / max(abs(self._best_lb), 1.0)
             if ratio > 0.05 and self.verbose > 0:

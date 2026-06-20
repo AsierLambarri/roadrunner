@@ -211,7 +211,13 @@ class AccretionPipeline:
         return previous_resp_sim, next_idx
 
     def _ensure_merger_columns(self):
-        """Ensure merger tree columns (scale radius, host, distance) are computed."""
+        """Ensure merger tree columns (scale radius, host, distance) are computed.
+
+        Calls the merger handler to compute ``scale_radius`` via the Duffy
+        relation, finds the most bound satellite host for each subhalo,
+        and computes distances both to the ``host_id`` and to the
+        accretion host (``acc_id``).
+        """
         self.merger_handler.compute_scale_radii()
         self.merger_handler.compute_most_bound_satellite()
         self.merger_handler.compute_distance_to_host()
@@ -220,7 +226,13 @@ class AccretionPipeline:
         self.merger_handler.compute_distance_to_host(column="acc_id")
 
     def _initialize_run(self, snapshot_ids):
-        """Write the catalogue header and initialise the run log."""
+        """Write the catalogue header and initialise the run log.
+
+        Parameters
+        ----------
+        snapshot_ids : list of int
+            All snapshot IDs to be processed.
+        """
         self.logger.write_header({
             "output_dir": os.path.dirname(self._log_path) or ".",
             "halo_model": self.orchestrator.processing_config.halo_model,

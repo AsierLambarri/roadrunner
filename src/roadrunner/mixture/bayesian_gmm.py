@@ -286,7 +286,10 @@ class WeightedBayesianGaussianMixture(BaseMixture):
     #                                                                                         #
     #---------------------------------- Initialization API -----------------------------------#        
     def _set_parameters(self):
-        """Set fitted parameters of the model
+        """Set fitted parameters of the model.
+
+        Computes ``weights_`` from the concentration parameter and
+        ``precisions_`` from the Cholesky factors.
         """
         self.weights_ = self.weight_concentration_ / np.sum(
             self.weight_concentration_
@@ -306,6 +309,14 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             
     def _check_parameters(self, X):
         """Check the values and shapes of weights, covariances, and means.
+
+        Validates user-provided initialisation parameters and
+        delegates to the ``_check_*_prior`` methods for Bayesian
+        hyper-parameters.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
         """
         n_samples, n_features = X.shape
         if self.cov_type not in ["spherical", "diagonal", "full"]:
@@ -337,7 +348,11 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self._check_covariance_prior(X)
 
     def _check_weights_prior(self):
-        """Checks and initializes weight concentration prior.
+        """Check and initialise the weight concentration prior.
+
+        If ``weight_concentration_prior`` is ``None``, sets a uniform
+        prior ``1 / n_components``.  Otherwise validates the shape
+        and broadcasts scalars to the component dimension.
         """
         if self.weight_concentration_prior is None:
             self.weight_concentration_prior_ = np.full(
@@ -364,7 +379,14 @@ class WeightedBayesianGaussianMixture(BaseMixture):
 
 
     def _check_means_prior(self, X):
-        """Checks and initializes mean priors.
+        """Check and initialise the mean priors.
+
+        If ``mean_prior`` is ``None``, sets it to the global data mean
+        (tiled for each component).  Also validates the ``mean_precision_prior``.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
         """
         _, n_features = X.shape
         
@@ -420,7 +442,14 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self.mean_precision_prior_ = beta
         
     def _check_covariance_prior(self, X):
-        """Checks and initializes covariance prior.
+        """Check and initialise the covariance prior.
+
+        If ``covariance_prior`` is ``None``, estimates it from the
+        sample covariance of ``X``.  Handles all ``cov_type`` shapes.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
         """
         _, n_features = X.shape        
         
@@ -474,7 +503,17 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self.covariance_prior_ = cov_prior       
 
     def _check_precisions_prior(self, n_features):
-        """Checks and initializes precision prior.
+        """Check and initialise the degrees-of-freedom (precision) prior.
+
+        Parameters
+        ----------
+        n_features : int
+            Number of features, used as the default lower bound.
+
+        Raises
+        ------
+        ValueError
+            If ``degrees_of_freedom_prior`` is less than ``n_features - 1``.
         """    
         if self.degrees_of_freedom_prior is None:
             self.degrees_of_freedom_prior_ = n_features
@@ -486,7 +525,14 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             )
 
     def _is_incomplete_init(self):
-        """Checks wether initialization is incomplete or not.
+        """Check whether initialization is incomplete.
+
+        Returns ``True`` if any of ``means_init``, ``counts_init``,
+        or ``covariance_init`` is ``None``.
+
+        Returns
+        -------
+        incomplete : bool
         """
         return (
             self.means_init is None
@@ -495,8 +541,17 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         )
         
     def _initialize_complete(self, X, resp, _):
-        """Initialization of the Gaussian mixture parameters from complete set of
-        means, covars and weights.
+        """Initialise Gaussian mixture parameters from a complete set of responsibilities.
+
+        When ``resp`` is provided, estimates nk, xk, sk and delegates
+        to the ``_estimate_*`` methods.  User-provided inits take
+        precedence.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        resp : ndarray of shape (n_samples, n_components) or None
+        _ : unused (placeholder for point_weights)
         """
         n_samples, _ = X.shape
         
@@ -582,7 +637,16 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         )
 
     def _estimate_wishart_full(self, nk, xk, sk):
-        """Estimate the full wishart distribution parameters
+        """Estimate the full Wishart distribution parameters.
+
+        Updates degrees of freedom and covariances for the
+        ``"full"`` covariance type.
+
+        Parameters
+        ----------
+        nk : ndarray of shape (n_components,)
+        xk : ndarray of shape (n_components, n_features)
+        sk : ndarray of shape (n_components, n_features, n_features)
         """
         _, n_features = xk.shape
         self.degrees_of_freedom_ = self.degrees_of_freedom_prior_ + nk
@@ -601,7 +665,16 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self.covariances_ /= self.degrees_of_freedom_[:, None, None]
                                
     def _estimate_wishart_diagonal(self, nk, xk, sk):
-        """Estimate the diagonal wishart distribution parameters
+        """Estimate the diagonal Wishart distribution parameters.
+
+        Updates degrees of freedom and covariances for the
+        ``"diagonal"`` covariance type.
+
+        Parameters
+        ----------
+        nk : ndarray of shape (n_components,)
+        xk : ndarray of shape (n_components, n_features)
+        sk : ndarray of shape (n_components, n_features)
         """
         _, n_features = xk.shape
         self.degrees_of_freedom_ = self.degrees_of_freedom_prior_ + nk
@@ -618,7 +691,16 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self.covariances_ /= self.degrees_of_freedom_[:, None]
                           
     def _estimate_wishart_spherical(self, nk, xk, sk):
-        """Estimate the spherical wishart distribution parameters
+        """Estimate the spherical Wishart distribution parameters.
+
+        Updates degrees of freedom and covariances for the
+        ``"spherical"`` covariance type.
+
+        Parameters
+        ----------
+        nk : ndarray of shape (n_components,)
+        xk : ndarray of shape (n_components, n_features)
+        sk : ndarray of shape (n_components,)
         """
         _, n_features = xk.shape
         self.degrees_of_freedom_ = self.degrees_of_freedom_prior_ + nk
@@ -635,7 +717,18 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self.covariances_ /= self.degrees_of_freedom_
 
     def _m_step(self, X, resp, _):
-        """M-step: update weights, means, and covariances."""
+        """M-step: update weights, means, and covariances.
+
+        Estimates Gaussian parameters from the current responsibilities,
+        then delegates to ``_estimate_weights``, ``_estimate_means``,
+        and ``_estimate_covariances``.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        resp : ndarray of shape (n_samples, n_components)
+        _ : unused (placeholder for point_weights)
+        """
         n_samples, _ = X.shape
 
         nk, xk, sk = _estimate_gaussian_parameters(
@@ -646,14 +739,30 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self._estimate_covariances(nk, xk, sk)
 
     def _estimate_log_weights(self):
-        """Estimate log concentrations
+        """Estimate log concentrations via the digamma function.
+
+        Returns
+        -------
+        log_weights : ndarray of shape (n_components,)
         """
         return digamma(self.weight_concentration_) - digamma(
             np.sum(self.weight_concentration_)
         )
 
     def _estimate_log_gaussian_prob(self, X):
-        """Compute log N(x | mean, cov) for all components."""
+        """Compute log N(x | mean, cov) for all components.
+
+        Incorporates the Wishart degrees-of-freedom and mean-precision
+        scaling for the Bayesian evidence.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+
+        Returns
+        -------
+        log_prob : ndarray of shape (n_samples, n_components)
+        """
         _, n_features = X.shape
 
         log_gauss = _estimate_log_gaussian_prob_pchol(
@@ -670,7 +779,21 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         return log_gauss + 0.5 * (log_lambda - n_features / self.mean_precision_)
 
     def _compute_lower_bound(self, log_resp, log_prob_norm, _):
-        """Compute the log-likelihood lower bound."""
+        """Compute the log-likelihood lower bound for variational inference.
+
+        Includes the expected log-weight term, the log-det of the
+        precision Cholesky factor, and the Wishart normalisation.
+
+        Parameters
+        ----------
+        log_resp : ndarray of shape (n_samples, n_components)
+        log_prob_norm : ndarray of shape (n_samples,)
+        _ : unused (placeholder for point_weights)
+
+        Returns
+        -------
+        lower_bound : float
+        """
         _, n_features = self.mean_prior_.shape
 
         log_norm_weight = _log_dirichlet_norm(self.weight_concentration_)

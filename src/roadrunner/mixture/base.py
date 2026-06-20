@@ -147,6 +147,9 @@ class BaseMixture(abc.ABC):
 
         Called at the end of ``fit()`` to compute ``weights_``,
         ``precisions_``, etc. from the current parameter state.
+
+        Subclasses must override to populate any cached attributes
+        that depend on the raw fitted parameters.
         """
 
     @abc.abstractmethod

@@ -71,7 +71,18 @@ class AssemblyTracker:
         visiting = set()
 
         def dfs(g):
-            """Recursive DFS for topological ordering."""
+            """Recursive DFS for topological ordering of galaxies.
+
+            Parameters
+            ----------
+            g : int
+                Galaxy ID to visit.
+
+            Raises
+            ------
+            CycleError
+                If a cycle is detected in the satellite graph.
+            """
             if g in visited:
                 return
             if g in visiting:

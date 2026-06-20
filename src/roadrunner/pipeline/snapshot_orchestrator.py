@@ -25,7 +25,12 @@ from roadrunner.postprocessing.tracking.birth import BirthTracker
 
 @dataclass
 class SnapshotResult:
-    """Result container for a single snapshot's processing and reduction."""
+    """Result container for a single snapshot's processing and reduction.
+
+    Holds the processed ensemble, assignment result, responsibility
+    matrix, galaxy properties, dynamical state, and satellite map
+    produced by the snapshot pipeline.
+    """
     ensemble: HaloEnsemble
     result: AssignmentResult
     previous_resp_sim: SparseCSC | None

@@ -15,24 +15,46 @@
 
 
 class RoadrunnerError(Exception):
-    """Base exception for all roadrunner-specific errors."""
+    """Base exception for all roadrunner-specific errors.
+
+    All custom exceptions in the roadrunner package inherit from this
+    class, enabling callers to catch ``RoadrunnerError`` to handle any
+    pipeline-level failure uniformly.
+    """
 
 
 class ConfigurationError(RoadrunnerError):
-    """Raised when the pipeline configuration is invalid or inconsistent."""
+    """Raised when the pipeline configuration is invalid or inconsistent.
+
+    Examples include missing required fields, incompatible parameter
+    combinations, or values outside the allowed range.
+    """
 
 
 class SnapshotLoadError(RoadrunnerError):
-    """Raised when a snapshot file cannot be read or parsed."""
+    """Raised when a snapshot file cannot be read or parsed.
+
+    This can occur when the file is missing, corrupt, or in an
+    unrecognised format.
+    """
 
 
 class NoBoundParticlesError(RoadrunnerError):
-    """Raised when a halo has no bound particles within the search radius."""
+    """Raised when a halo has no bound particles within the search radius.
+
+    Indicates that the particle search around a galaxy centre returned
+    an empty set after the boundness filter.
+    """
 
 
 class ConvergenceError(RoadrunnerError):
     """Raised when an iterative solver fails to converge within the allowed
-    number of iterations."""
+    number of iterations.
+
+    Applies to the EM loop in the GMM assigner and the SVI optimisation
+    when the maximum iteration count is reached without meeting the
+    convergence criterion.
+    """
 
 
 class RestartError(RoadrunnerError):

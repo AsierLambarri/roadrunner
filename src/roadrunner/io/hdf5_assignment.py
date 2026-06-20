@@ -58,7 +58,7 @@ class HDF5AssignmentWriter:
         return os.path.join(self._dir, f"snapshot{snapshot_id:04d}.hdf5")
 
     def _ts_path(self):
-        """Path to the timescales text file.
+        """Path to the timescales text file (``{dir}/assignment/timescales.txt``).
 
         Returns
         -------

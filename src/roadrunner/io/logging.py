@@ -162,6 +162,9 @@ class RunLogger:
             f.write(row + "\n")
 
     def write_summary(self):
-        """Write the run-complete summary line to the log."""
+        """Write the run-complete summary line to the log file.
+
+        Appends ``--- Run complete ---`` at the end of the log.
+        """
         with open(self._log_path, "a") as f:
             f.write("\n--- Run complete ---\n")
