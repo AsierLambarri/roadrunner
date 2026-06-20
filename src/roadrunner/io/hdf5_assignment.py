@@ -20,28 +20,55 @@ from roadrunner.helpers import select_float_dtype, select_uint_dtype
 
 
 class HDF5AssignmentWriter:
+    """Writes per-snapshot assignment data (responsibilities, parameters, hard labels) to HDF5.
+
+    Parameters
+    ----------
+    output_dir : str
+        Root output directory. Files are written to ``{output_dir}/assignment/``.
+    float_atol : float, default=1e-4
+        Absolute tolerance for selecting float storage dtype.
+    """
+
     def __init__(self, output_dir, float_atol=1e-4):
         os.makedirs(output_dir, exist_ok=True)
         self._dir = os.path.join(output_dir, "assignment")
         self._float_atol = float_atol
 
     def _snap_path(self, snapshot_id):
+        """Path to the HDF5 file for a given snapshot."""
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, f"snapshot{snapshot_id:04d}.hdf5")
 
     def _ts_path(self):
+        """Path to the timescales text file."""
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, "timescales.txt")
 
     def _gal_uint_dtype(self, gids):
+        """Smallest unsigned integer dtype that holds all galaxy IDs."""
         return select_uint_dtype(int(max(gids)) if len(gids) > 0 else 1)
 
     def _pick_float_dtype(self, arr):
+        """Smallest float dtype that preserves the data within ``float_atol``."""
         max_abs = float(np.abs(arr).max()) if arr.size > 0 else 1.0
         return select_float_dtype(max_abs, self._float_atol)
 
     def write_snapshot(self, snapshot_id, time,
                        assignment_result, boundness_csc):
+        """Write a snapshot's assignment data to an HDF5 file.
+
+        Parameters
+        ----------
+        snapshot_id : int
+            Snapshot identifier.
+        time : float
+            Cosmic time of the snapshot.
+        assignment_result : AssignmentResult
+            Result from the assigner (responsibilities, hard labels, etc.).
+        boundness_csc : SparseCSC
+            Boundness matrix for this snapshot.
+        """
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:
             hf.attrs["time"] = float(time)
@@ -126,6 +153,13 @@ class HDF5AssignmentWriter:
             )
 
     def write_timescales(self, particle_timescales):
+        """Write particle timescales to a text file.
+
+        Parameters
+        ----------
+        particle_timescales : ndarray of shape (n_particles,)
+            Structured array with ``particle_index`` and ``timescale`` fields.
+        """
         path = self._ts_path()
         np.savetxt(path, particle_timescales,
                    header="particle_index\ttimescale",

@@ -17,17 +17,48 @@ from roadrunner._defaults import COL_WIDTH_RUNTIME, COL_WIDTH_INT, COL_WIDTH_FLO
 
 
 def format_runtime(seconds):
+    """Format a time interval in seconds as ``HH:MM:SS.fff``.
+
+    Parameters
+    ----------
+    seconds : float
+        Time interval in seconds.
+
+    Returns
+    -------
+    formatted : str
+    """
     hours, rem = divmod(seconds, 3600)
     minutes, sec = divmod(rem, 60)
     return f"{int(hours):02d}:{int(minutes):02d}:{sec:06.3f}"
 
 
 class RunLogger:
+    """Structured run-log writer with formatted columns.
+
+    Writes a header and per-snapshot summary rows to a log file.
+
+    Parameters
+    ----------
+    log_path : str
+        Path to the log file.
+    logo_path : str, optional
+        Path to an ASCII-art logo file to include in the header.
+    """
+
     def __init__(self, log_path, logo_path=None):
         self._log_path = log_path
         self._logo_path = logo_path
 
     def write_header(self, config):
+        """Write the run header (configuration block) to the log.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary with keys like ``output_dir``,
+            ``halo_model``, ``cov_type``.
+        """
         with open(self._log_path, "w") as f:
             if self._logo_path:
                 try:
@@ -53,6 +84,14 @@ class RunLogger:
         return max(len(label), data_w)
 
     def write_snapshot(self, stats):
+        """Write a single snapshot's statistics row.
+
+        Parameters
+        ----------
+        stats : dict
+            Dictionary with keys ``runtime``, ``snap``, ``z``,
+            ``load``, ``process``, ``bound``, ``groups``, etc.
+        """
         col_defs = [
             ("runtime",    "RUNTIME",    "s"),
             ("snap",       "SNAP",       "d"),
@@ -103,5 +142,6 @@ class RunLogger:
             f.write(row + "\n")
 
     def write_summary(self):
+        """Write the run-complete summary line to the log."""
         with open(self._log_path, "a") as f:
             f.write("\n--- Run complete ---\n")
