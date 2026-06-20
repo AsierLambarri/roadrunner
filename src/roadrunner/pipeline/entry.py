@@ -36,6 +36,14 @@ from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
 
 
 def run_accretion_history(config: RunConfig | dict) -> None:
+    """Run the full accretion history pipeline from a configuration.
+
+    Parameters
+    ----------
+    config : RunConfig or dict
+        Pipeline configuration.  If a dict is passed it is converted
+        to a :class:`RunConfig` instance internally.
+    """
     if isinstance(config, dict):
         config = RunConfig(**config)
 

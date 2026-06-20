@@ -67,6 +67,12 @@ class RunConfig:
     float_atol: float = 1e-4
 
     def __post_init__(self):
+        """Validate and coerce configuration values.
+
+        Checks that ``reader_type`` is one of the allowed values,
+        and coerces numeric fields to the correct type when provided
+        as strings or other types.
+        """
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")
 
