@@ -21,10 +21,25 @@ from roadrunner._exceptions import SnapshotLoadError
 
 
 class HDF5CatalogueReader:
+    """Reads galaxy catalogue data from an HDF5 file.
+
+    Parameters
+    ----------
+    path : str
+        Path to the ``catalogue.hdf5`` file.
+    """
+
     def __init__(self, path):
         self._path = path
 
     def read_header(self):
+        """Read the catalogue header (accretion ID, snapshots, config).
+
+        Returns
+        -------
+        header : dict
+            Keys: ``accretion_id``, ``snapshots``, ``config``, ``last_snapshot``.
+        """
         with h5py.File(self._path, "r") as hf:
             hdr = hf["header"]
             return {
@@ -35,11 +50,18 @@ class HDF5CatalogueReader:
             }
 
     def read_last_snapshot(self):
+        """Read the most recently processed snapshot ID.
+
+        Returns
+        -------
+        last_snap : int or None
+        """
         with h5py.File(self._path, "r") as hf:
             val = hf["header"]["last_snapshot"][()]
             return int(val) if val >= 0 else None
 
     def _read_snapshot_dataset(self, snapshot_id, ds_name):
+        """Read a dataset for a specific snapshot as a DataFrame."""
         snap_key = f"/snapshots/{snapshot_id}/{ds_name}"
         with h5py.File(self._path, "r") as hf:
             if snap_key not in hf:
@@ -49,16 +71,19 @@ class HDF5CatalogueReader:
             return pd.DataFrame.from_records(hf[snap_key][()])
 
     def read_galaxy_properties(self, snapshot_id=None):
+        """Read galaxy properties for one or all snapshots."""
         return self._read_snapshot_dataset(
             snapshot_id, "galaxy_properties"
         ) if snapshot_id is not None else self._read_all_snapshots("galaxy_properties")
 
     def read_riley_criterion(self, snapshot_id=None):
+        """Read the Riley dynamical-state criterion for one or all snapshots."""
         return self._read_snapshot_dataset(
             snapshot_id, "riley_criterion"
         ) if snapshot_id is not None else self._read_all_snapshots("riley_criterion")
 
     def _read_all_snapshots(self, ds_name):
+        """Concatenate a dataset across all snapshots."""
         with h5py.File(self._path, "r") as hf:
             frames = []
             for snap_str in hf.get("snapshots", {}):
@@ -72,12 +97,14 @@ class HDF5CatalogueReader:
             return pd.concat(frames, ignore_index=True)
 
     def read_births(self):
+        """Read the final birth-tracker data."""
         with h5py.File(self._path, "r") as hf:
             if "final/births" not in hf:
                 return pd.DataFrame()
             return pd.DataFrame.from_records(hf["final/births"][()])
 
     def read_assembly(self):
+        """Read the final assembly-tracker data."""
         with h5py.File(self._path, "r") as hf:
             if "final/assembly" not in hf:
                 return pd.DataFrame()

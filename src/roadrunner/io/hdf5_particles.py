@@ -21,16 +21,40 @@ from roadrunner.physics.scaler import StandardScaler
 
 
 class HDF5ParticleWriter:
+    """Writes per-snapshot particle data (positions, velocities, masses) to HDF5.
+
+    Data is stored in scaled coordinates using a :class:`StandardScaler`.
+
+    Parameters
+    ----------
+    output_dir : str
+        Root output directory. Files go to ``{output_dir}/particle_data/``.
+    float_atol : float, default=1e-4
+        Tolerance for selecting float storage dtype.
+    """
+
     def __init__(self, output_dir, float_atol=1e-4):
         os.makedirs(output_dir, exist_ok=True)
         self._dir = os.path.join(output_dir, "particle_data")
         self._float_atol = float_atol
 
     def _snap_path(self, snapshot_id):
+        """Path to the HDF5 file for a given snapshot."""
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, f"snapshot{snapshot_id:04d}.hdf5")
 
     def write_snapshot(self, snapshot_id, time, redshift, snapshot_data):
+        """Write one snapshot's particle data to an HDF5 file.
+
+        Positions and velocities are stored in scaled coordinates.
+
+        Parameters
+        ----------
+        snapshot_id : int
+        time : float
+        redshift : float
+        snapshot_data : SnapshotData
+        """
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:
             header = hf.create_group("header")
