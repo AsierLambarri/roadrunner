@@ -1,3 +1,34 @@
+#############################################################################
+#
+# package:   roadrunner
+# file:      __init__.py
+# brief:     Public API and symbol exports for the roadrunner package.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   12 May 2026 - Created
+#
+#############################################################################
+
+"""roadrunner: Unravel the accretion history of simulated galaxies.
+
+This package provides tools for analysing the assembly history of
+simulated galaxies by combining halo merger trees with particle data.
+The pipeline supports multiple assignment methods (GMM, variational
+Bayesian GMM, and stochastic variational inference), track-based
+birth and assembly tracking, and a variety of I/O backends.
+
+Key modules
+-----------
+pipeline : Full accretion-history pipeline orchestration.
+mixture : Gaussian mixture models (standard, variational Bayesian, SVI).
+clustering : Sparse matrix formats, halo segmentation, and the XGMM assigner.
+physics : Halo models, potentials, boundness, and scaling relations.
+io : HDF5 writers and checkpoint serialization.
+readers : Data ingestion for merger trees, snapshot files, and equivalence tables.
+postprocessing : Galaxy property computation, centering, and dynamical state.
+"""
+
 from .pipeline import (
     run_accretion_history,
     RunConfig,

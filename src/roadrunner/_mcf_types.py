@@ -1,3 +1,32 @@
+#############################################################################
+#
+# package:   roadrunner
+# file:      _mcf_types.py
+# brief:     Core data contracts, protocols, and result types.
+#
+# Defines the fundamental data carriers used across the entire pipeline:
+# SnapshotData for particle-frame data, BoundnessResult for binding
+# information, AssignmentResult for mixture-model fitting output, and
+# runtime-checkable protocols (ParticleAssigner, PotentialModel,
+# AssignmentStatistics) that define the assigner and physics interfaces.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   12 May 2026 - Created
+#            21 May 2026 - Last edit
+#
+#############################################################################
+
+"""Core data types and runtime protocols for the roadrunner pipeline.
+
+.. highlight:: python
+
+The types in this module are used as internal contracts between
+pipeline stages. Every assigner must implement the ParticleAssigner
+protocol, and every potential must implement the PotentialModel
+protocol.
+"""
+
 from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
@@ -12,6 +41,30 @@ RespMap = dict[int, tuple[np.ndarray, np.ndarray]]
 
 
 class SnapshotData:
+    """Container for a single snapshot's particle data.
+
+    Stores indices, masses, 6-D phase-space coordinates, metallicity,
+    and cosmology metadata (redshift, cosmic time). The indices are
+    global simulation particle IDs that remain consistent across snapshots.
+
+    Parameters
+    ----------
+    indices : NDArray of int
+        Global simulation particle IDs.
+    masses : NDArray of float
+        Particle masses.
+    positions : NDArray of float, shape (n_particles, 3)
+        Spatial coordinates (comoving kpc if comoving cosmology).
+    velocities : NDArray of float, shape (n_particles, 3)
+        Velocities (km/s, peculiar).
+    redshift : float
+        Snapshot redshift.
+    time : float
+        Cosmic time (Gyr).
+    metallicities : NDArray of float or None, optional
+        Per-particle metallicities.
+    """
+
     indices: NDArray[np.integer]
     masses: NDArray[np.floating]
     positions: NDArray[np.floating]
@@ -40,6 +93,19 @@ class SnapshotData:
         self._index_sorter: np.ndarray | None = None
 
     def array_index(self, sim_ids: np.ndarray) -> np.ndarray:
+        """Map global simulation IDs to local array indices.
+
+        Parameters
+        ----------
+        sim_ids : ndarray of int
+            Global simulation particle IDs to look up.
+
+        Returns
+        -------
+        result : ndarray of int64
+            Local array indices for each queried ID; ``-1`` for IDs
+            that are not present in this snapshot.
+        """
         if self._index_sorter is None:
             self._index_sorter = np.argsort(self.indices)
         sorted_ids = self.indices[self._index_sorter]
@@ -50,14 +116,44 @@ class SnapshotData:
         return result
 
     def index_to_id_map(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return a mapping from array index to simulation ID.
+
+        Returns
+        -------
+        idx : ndarray of int64
+            Array indices.
+        ids : ndarray of int64
+            Corresponding simulation particle IDs.
+        """
         idx = np.arange(len(self.indices), dtype=np.int64)
         return idx, self.indices.astype(np.int64, copy=False)
 
     def id_to_index_map(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return a mapping from simulation ID to array index.
+
+        Returns
+        -------
+        ids : ndarray of int64
+            Simulation particle IDs.
+        idx : ndarray of int64
+            Corresponding array indices.
+        """
         return self.indices.astype(np.int64, copy=False), np.arange(len(self.indices), dtype=np.int64)
 
 
 class BoundnessResult:
+    """Result of a boundness computation for a set of halos.
+
+    Attributes
+    ----------
+    candidate_indices : NDArray of int
+        Array indices of particles considered as candidates.
+    boundness_values : NDArray of float
+        Boundness energy values (negative = bound).
+    dynamical_times : list of NDArray
+        Per-halo dynamical times for the bound particles.
+    """
+
     candidate_indices: NDArray[np.integer]
     boundness_values: NDArray[np.floating]
     dynamical_times: list[NDArray[np.floating]]
@@ -74,6 +170,22 @@ class BoundnessResult:
 
 
 class AssignmentResult:
+    """Result of a single assigner invocation.
+
+    Attributes
+    ----------
+    particle_df : DataFrame
+        Particle-level assignment data with at least a ``Sub_tree_id`` column.
+    responsibilities : object
+        Soft assignment matrix. At runtime this is a SparseCSC where
+        ``responsibilities[i, k]`` is the posterior probability that
+        particle ``i`` belongs to component ``k``.
+    fitted_parameters : dict
+        Per-component fitted mixture parameters (means, covariances, counts).
+    statistics : dict
+        Summary statistics from the assignment process.
+    """
+
     particle_df: pd.DataFrame
     responsibilities: object  # SparseCSC at runtime
     fitted_parameters: dict
@@ -94,6 +206,14 @@ class AssignmentResult:
 
 @runtime_checkable
 class ParticleAssigner(Protocol):
+    """Protocol for particle-to-halo assigners.
+
+    Any class implementing this protocol can be used as the
+    assigner in the roadrunner pipeline. The central method is
+    ``assign()`` which takes halo information, particle coordinates,
+    and group definitions and returns an AssignmentResult.
+    """
+
     def assign(
         self,
         halos: list,
@@ -106,6 +226,12 @@ class ParticleAssigner(Protocol):
 
 @runtime_checkable
 class PotentialModel(Protocol):
+    """Protocol for gravitational potential models.
+
+    Implementations provide potential energy, dynamical time, and
+    tidal denominator computations for a given radius or position array.
+    """
+
     def potential(self, r: np.ndarray) -> np.ndarray: ...
     def dynamical_time(self, x: np.ndarray) -> np.ndarray: ...
     def tidal_denominator(self, r: np.ndarray) -> np.ndarray: ...
@@ -113,5 +239,11 @@ class PotentialModel(Protocol):
 
 @runtime_checkable
 class AssignmentStatistics(Protocol):
+    """Protocol for assignment statistics trackers.
+
+    Provides a ``values`` property returning a dictionary of
+    summary metrics.
+    """
+
     @property
     def values(self) -> dict[str, Any]: ...

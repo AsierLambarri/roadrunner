@@ -1,3 +1,22 @@
+#############################################################################
+#
+# package:   roadrunner
+# file:      _defaults.py
+# brief:     Global algorithmic defaults and configuration constants.
+#
+# Constants are organised by subsystem (birth tracker, galaxy properties,
+# centering, GMM assignment, BGMM priors, coresets, k-means, I/O).
+# These values serve as module-level defaults and are imported where needed.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   16 Jun 2026 - Created
+#            18 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Module-level default constants for the roadrunner package."""
+
 # ── Birth tracker ──────────────────────────────────────────────────
 BIRTH_GAUSSIAN_WIDTH = 0.3        # width of the gaussian window function
 
