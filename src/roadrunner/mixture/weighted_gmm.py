@@ -1,3 +1,30 @@
+#############################################################################
+#
+# package:   roadrunner.mixture
+# file:      weighted_gmm.py
+# brief:     Standard (non-Bayesian) weighted Gaussian mixture with EM.
+#
+# Provides :class:`WeightedGaussianMixture` together with module-level
+# helpers for covariance estimation, Gaussian log-probability, and
+# parameter validation that are shared with the Bayesian and SVI
+# mixture types.
+#
+# copyright: GPLv3
+# author:    Asier Lambarri Martinez
+# changes:   13 May 2026 - Created
+#            17 Jun 2026 - Last edit
+#
+#############################################################################
+
+"""Standard (non-Bayesian) Gaussian mixture with weighted responsibilities.
+
+.. highlight:: python
+
+The :class:`WeightedGaussianMixture` class fits a Gaussian mixture
+via the EM algorithm, supporting per-particle ``point_weights`` and
+a ``latent_prior`` responsibility mask.  The module-level covariances
+estimation functions are also used by the Bayesian and SVI variants.
+"""
 
 import numpy as np
 from scipy.linalg import solve_triangular
@@ -286,6 +313,43 @@ def _estimate_log_gaussian_prob(X, means, covs, cov_type):
 
 
 class WeightedGaussianMixture(BaseMixture):
+    """Standard (non-Bayesian) Gaussian mixture with weighted responsibilities.
+
+    Fits a Gaussian mixture model via the Expectation-Maximisation (EM)
+    algorithm, supporting per-particle point weights and a
+    ``latent_prior`` that acts as a responsibility mask.  The model
+    can be initialised from pre-computed sufficient statistics
+    via ``counts_init``, ``means_init``, and ``covariance_init``.
+
+    Parameters
+    ----------
+    n_components : int, default=2
+        Number of mixture components.
+    means_init : ndarray of shape (n_components, n_features), optional
+        Initial means.
+    covariance_init : ndarray, optional
+        Initial covariances. Shape depends on ``cov_type``.
+    counts_init : ndarray of shape (n_components,), optional
+        Initial effective counts (sum of responsibilities).
+    cov_type : str, default='full'
+        Covariance type.
+    init_params : str, default='kmeans'
+        Initialisation method.
+    max_iter : int, default=10
+        Maximum EM iterations.
+    tol : float, default=1e-3
+        Convergence threshold (absolute change in lower bound).
+    verbose : bool or int, default=False
+        Verbosity flag.
+    random_state : int or RandomState, optional
+        Random state.
+    reg_covar : float, default=1e-6
+        Regularisation added to covariance diagonal.
+    cast_dtype : dtype, default=np.float64
+        Working precision.
+    **kwargs
+        Additional keyword arguments.
+    """
     def __init__(self, n_components=2, means_init=None, covariance_init=None, counts_init=None, cov_type="full",
                  init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6, cast_dtype=np.float64,
                  **kwargs):
