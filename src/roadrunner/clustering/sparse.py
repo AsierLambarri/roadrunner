@@ -17,6 +17,26 @@ from numba import njit, prange
 
 def build_dense_from_csc(matrix_shape, true_indices, column_indices, column_values,
                          fill_value=0.0):
+    """Build a dense (N, K) array from a column-major sparse representation.
+
+    Parameters
+    ----------
+    matrix_shape : tuple of int
+        ``(n_samples, n_components)`` target dense shape.
+    true_indices : ndarray of int64
+        Unique row IDs (particle indices) that appear across columns.
+    column_indices : list of ndarray
+        Per-column list of row IDs.
+    column_values : list of ndarray
+        Per-column list of values.
+    fill_value : float, default=0.0
+        Value for cells that are not stored in the sparse structure.
+
+    Returns
+    -------
+    dense : ndarray of shape ``matrix_shape``
+        Dense array.
+    """
     n_samples, n_components = matrix_shape
 
     flat_candidates = np.concatenate(column_indices)
@@ -37,6 +57,28 @@ def _csc_to_dense_kernel(
     matrix_shape, true_indices, flat_indices, flat_values, offsets,
     fill_value,
 ):
+    """Numba-accelerated CSC → dense conversion (parallel over columns).
+
+    Parameters
+    ----------
+    matrix_shape : tuple of int
+        ``(n_samples, n_components)``.
+    true_indices : ndarray of int64
+        Sorted unique row IDs.
+    flat_indices : ndarray of int64
+        Concatenated per-column row indices.
+    flat_values : ndarray of float32
+        Concatenated per-column values.
+    offsets : ndarray of int64, shape (n_components + 1,)
+        Cumulative per-column lengths into ``flat_indices`` / ``flat_values``.
+    fill_value : float
+        Default value for empty cells.
+
+    Returns
+    -------
+    dense : ndarray of shape ``matrix_shape``
+        Dense array.
+    """
     n_samples, n_components = matrix_shape
 
     imax = true_indices.max()
@@ -57,6 +99,22 @@ def _csc_to_dense_kernel(
 
 @njit(parallel=True, cache=True)
 def stitch_zero_rows(matrix1, matrix2):
+    """Fill rows of ``matrix2`` that sum to zero with the corresponding row from ``matrix1``.
+
+    Operates in-place on ``matrix2``.  Both matrices must have identical shape.
+
+    Parameters
+    ----------
+    matrix1 : ndarray of shape (N, K)
+        Source matrix.
+    matrix2 : ndarray of shape (N, K)
+        Target matrix, modified in place.
+
+    Returns
+    -------
+    matrix2 : ndarray of shape (N, K)
+        Modified target matrix.
+    """
     assert matrix1.shape == matrix2.shape, (
         f"Matrices cannot be stitched together: shape {matrix1.shape} "
         f"is incompatible with {matrix2.shape}."
@@ -72,6 +130,18 @@ def stitch_zero_rows(matrix1, matrix2):
 
 
 def _build_row_id(indices_list):
+    """Compute the sorted unique row IDs across all columns.
+
+    Parameters
+    ----------
+    indices_list : list of ndarray
+        Per-column row ID arrays.
+
+    Returns
+    -------
+    row_id : ndarray of uint64
+        Sorted unique row IDs.
+    """
     if len(indices_list) == 0:
         return np.array([], dtype=np.uint64)
     non_empty = [c for c in indices_list if c.size > 0]
@@ -82,6 +152,23 @@ def _build_row_id(indices_list):
 
 
 class SparseCSC:
+    """Compressed sparse column matrix with label-preserving operations.
+
+    Stores a matrix with labelled rows and columns.  Each column stores
+    its non-zero row indices and values as a pair of parallel arrays.
+    The :attr:`row_id` and :attr:`column_id` arrays define the external
+    labels that are preserved through conversions and alignments.
+
+    Parameters
+    ----------
+    column_indices : list of ndarray
+        Per-column list of row IDs (external labels).
+    column_values : list of ndarray
+        Per-column list of values.
+    column_id : ndarray of int64, optional
+        External column labels.  Defaults to ``arange(n_columns)``.
+    """
+
     def __init__(self, column_indices, column_values, column_id=None):
         self.column_indices = column_indices
         self.column_values = column_values
@@ -93,9 +180,32 @@ class SparseCSC:
         self.row_id = _build_row_id(column_indices)
 
     def __len__(self):
+        """Return the number of columns in the matrix.
+
+        Returns
+        -------
+        n : int
+            Number of columns.
+        """
         return len(self.column_indices)
 
     def to_dense(self, columns=None, col_func=None, fill_value=0.0):
+        """Convert a subset of columns to a dense matrix.
+
+        Parameters
+        ----------
+        columns : array-like of int64, optional
+            Subset of column IDs to include.  ``None`` means all columns.
+        col_func : callable, optional
+            Per-column transformation applied to values before densification.
+        fill_value : float, default=0.0
+            Fill value for empty cells.
+
+        Returns
+        -------
+        dense : ndarray of shape (n_rows, n_cols)
+            Dense matrix.
+        """
         if columns is None:
             col_idx_list = self.column_indices
             col_val_list = self.column_values
@@ -122,6 +232,23 @@ class SparseCSC:
         )
 
     def align(self, other, how="left"):
+        """Align two SparseCSC matrices to a common set of rows and columns.
+
+        Parameters
+        ----------
+        other : SparseCSC
+            The other matrix to align with.
+        how : str, default='left'
+            ``'left'`` keeps all rows/columns of ``self``;
+            ``'both'`` takes the union of both row and column sets.
+
+        Returns
+        -------
+        aligned_self : SparseCSC
+            ``self`` aligned to the new row/column set.
+        aligned_other : SparseCSC
+            ``other`` aligned to the new row/column set.
+        """
         if how == "left":
             new_rows = self.row_id.copy()
             new_cols = self.column_id.copy()
@@ -166,6 +293,20 @@ class SparseCSC:
         return _align_one(self), _align_one(other)
 
     def remap_rows(self, src_ids: np.ndarray, dst_ids: np.ndarray) -> "SparseCSC":
+        """Remap the row IDs stored in each column.
+
+        Parameters
+        ----------
+        src_ids : ndarray of int64
+            Current row IDs to replace.
+        dst_ids : ndarray of int64
+            New row IDs for the corresponding ``src_ids`` entries.
+
+        Returns
+        -------
+        remapped : SparseCSC
+            New matrix with updated row IDs.
+        """
         idx_order = np.argsort(src_ids)
         sorted_src = src_ids[idx_order]
         sorted_dst = dst_ids[idx_order]
@@ -186,7 +327,16 @@ class SparseCSC:
         return SparseCSC(new_indices, new_values, column_id=self.column_id.copy())
 
     def to_csr(self) -> "SparseCSR":
-        """Convert to SparseCSR for efficient row access."""
+        """Convert to SparseCSR for efficient row access.
+
+        This operation runs in O(nnz) via a counting-sort numba kernel.
+        External column labels are preserved.
+
+        Returns
+        -------
+        csr : SparseCSR
+            Row-major representation of the same data.
+        """
         if not self.column_indices or self.row_id.size == 0:
             return SparseCSR([], [], row_id=self.row_id.copy())
 
@@ -225,7 +375,33 @@ class SparseCSC:
 
 @njit(cache=True)
 def _csc_to_csr_kernel(flat_rows, flat_vals, col_offsets, n_rows, n_cols):
-    """CSC → CSR via three-pass counting sort. O(nnz), no sorting."""
+    """CSC → CSR via three-pass counting sort.
+
+    Performs an O(nnz) counting sort — no comparison sorting needed
+    because the row index space ``[0, n_rows)`` is known and bounded.
+
+    Parameters
+    ----------
+    flat_rows : ndarray of int64
+        Concatenated row indices from all columns.
+    flat_vals : ndarray of float32
+        Concatenated values from all columns.
+    col_offsets : ndarray of int64, shape (n_cols + 1,)
+        Cumulative per-column lengths into the flat arrays.
+    n_rows : int
+        Number of rows (determines output ``row_offsets`` size).
+    n_cols : int
+        Number of columns.
+
+    Returns
+    -------
+    row_offsets : ndarray of int64, shape (n_rows + 1,)
+        Cumulative per-row lengths.
+    csr_cols : ndarray of int64, shape (nnz,)
+        Column indices for each non-zero, in row-major order.
+    csr_vals : ndarray of float32, shape (nnz,)
+        Values for each non-zero, in row-major order.
+    """
     row_counts = np.zeros(n_rows, dtype=np.int64)
     for i in range(len(flat_rows)):
         row_counts[flat_rows[i]] += 1
@@ -251,7 +427,33 @@ def _csc_to_csr_kernel(flat_rows, flat_vals, col_offsets, n_rows, n_cols):
 
 @njit(cache=True)
 def _csr_to_csc_kernel(flat_cols, flat_vals, row_offsets, n_cols, n_rows):
-    """CSR → CSC via three-pass counting sort. O(nnz), no sorting."""
+    """CSR → CSC via three-pass counting sort.
+
+    Mirror of :func:`_csc_to_csr_kernel`.  Counts per column, builds
+    column offsets, then scatters values into column-major order.
+
+    Parameters
+    ----------
+    flat_cols : ndarray of int64
+        Concatenated column indices from all rows.
+    flat_vals : ndarray of float32
+        Concatenated values from all rows.
+    row_offsets : ndarray of int64, shape (n_rows + 1,)
+        Cumulative per-row lengths.
+    n_cols : int
+        Number of columns.
+    n_rows : int
+        Number of rows.
+
+    Returns
+    -------
+    col_offsets : ndarray of int64, shape (n_cols + 1,)
+        Cumulative per-column lengths.
+    csc_rows : ndarray of int64, shape (nnz,)
+        Row indices for each non-zero, in column-major order.
+    csc_vals : ndarray of float32, shape (nnz,)
+        Values for each non-zero, in column-major order.
+    """
     col_counts = np.zeros(n_cols, dtype=np.int64)
     for i in range(len(flat_cols)):
         col_counts[flat_cols[i]] += 1
@@ -275,6 +477,18 @@ def _csr_to_csc_kernel(flat_cols, flat_vals, row_offsets, n_cols, n_rows):
     return col_offsets, csc_rows, csc_vals
 
 def _build_column_id(row_indices):
+    """Compute the sorted unique column IDs across all rows.
+
+    Parameters
+    ----------
+    row_indices : list of ndarray
+        Per-row column ID arrays.
+
+    Returns
+    -------
+    column_id : ndarray of uint64
+        Sorted unique column IDs.
+    """
     if len(row_indices) == 0:
         return np.array([], dtype=np.uint64)
     non_empty = [r for r in row_indices if r.size > 0]
@@ -286,6 +500,26 @@ def _build_column_id(row_indices):
 
 def build_dense_from_csr(matrix_shape, true_indices, row_indices, row_values,
                          fill_value=0.0):
+    """Build a dense (N, K) array from a row-major sparse representation.
+
+    Parameters
+    ----------
+    matrix_shape : tuple of int
+        ``(n_rows, n_columns)`` target dense shape.
+    true_indices : ndarray of int64
+        Unique column IDs that appear across rows.
+    row_indices : list of ndarray
+        Per-row list of column IDs.
+    row_values : list of ndarray
+        Per-row list of values.
+    fill_value : float, default=0.0
+        Value for cells that are not stored.
+
+    Returns
+    -------
+    dense : ndarray of shape ``matrix_shape``
+        Dense array.
+    """
     n_rows, n_columns = matrix_shape
 
     flat_indices = np.concatenate(row_indices)
@@ -306,6 +540,28 @@ def _csr_to_dense_kernel(
     matrix_shape, true_indices, flat_indices, flat_values, offsets,
     fill_value,
 ):
+    """Numba-accelerated CSR → dense conversion (parallel over rows).
+
+    Parameters
+    ----------
+    matrix_shape : tuple of int
+        ``(n_rows, n_columns)``.
+    true_indices : ndarray of int64
+        Sorted unique column IDs.
+    flat_indices : ndarray of int64
+        Concatenated per-row column indices.
+    flat_values : ndarray of float32
+        Concatenated per-row values.
+    offsets : ndarray of int64, shape (n_rows + 1,)
+        Cumulative per-row lengths into ``flat_indices`` / ``flat_values``.
+    fill_value : float
+        Default value for empty cells.
+
+    Returns
+    -------
+    dense : ndarray of shape ``matrix_shape``
+        Dense array.
+    """
     n_rows, n_columns = matrix_shape
 
     imax = true_indices.max()
@@ -325,6 +581,23 @@ def _csr_to_dense_kernel(
 
 
 class SparseCSR:
+    """Compressed sparse row matrix — row-major mirror of :class:`SparseCSC`.
+
+    Stores a matrix with labelled rows and columns.  Each row stores
+    its non-zero column indices and values as a pair of parallel arrays.
+    The :attr:`row_id` and :attr:`column_id` arrays define the external
+    labels that are preserved through conversions and alignments.
+
+    Parameters
+    ----------
+    row_indices : list of ndarray
+        Per-row list of column IDs (external labels).
+    row_values : list of ndarray
+        Per-row list of values.
+    row_id : ndarray of int64, optional
+        External row labels.  Defaults to ``arange(n_rows)``.
+    """
+
     def __init__(self, row_indices, row_values, row_id=None):
         self.row_indices = row_indices
         self.row_values = row_values
@@ -336,9 +609,32 @@ class SparseCSR:
         self.column_id = _build_column_id(row_indices)
 
     def __len__(self):
+        """Return the number of rows in the matrix.
+
+        Returns
+        -------
+        n : int
+            Number of rows.
+        """
         return len(self.row_indices)
 
     def to_dense(self, rows=None, row_func=None, fill_value=0.0):
+        """Convert a subset of rows to a dense matrix.
+
+        Parameters
+        ----------
+        rows : array-like of int64, optional
+            Subset of row IDs to include.  ``None`` means all rows.
+        row_func : callable, optional
+            Per-row transformation applied to values before densification.
+        fill_value : float, default=0.0
+            Fill value for empty cells.
+
+        Returns
+        -------
+        dense : ndarray of shape (n_rows, n_cols)
+            Dense matrix.
+        """
         if rows is None:
             row_idx_list = self.row_indices
             row_val_list = self.row_values
@@ -365,6 +661,23 @@ class SparseCSR:
         )
 
     def align(self, other, how="left"):
+        """Align two SparseCSR matrices to a common set of rows and columns.
+
+        Parameters
+        ----------
+        other : SparseCSR
+            The other matrix to align with.
+        how : str, default='left'
+            ``'left'`` keeps all rows/columns of ``self``;
+            ``'both'`` takes the union of both row and column sets.
+
+        Returns
+        -------
+        aligned_self : SparseCSR
+            ``self`` aligned to the new row/column set.
+        aligned_other : SparseCSR
+            ``other`` aligned to the new row/column set.
+        """
         if how == "left":
             new_rows = self.row_id.copy()
             new_cols = self.column_id.copy()
@@ -408,6 +721,20 @@ class SparseCSR:
         return _align_one(self), _align_one(other)
 
     def remap_rows(self, src_ids: np.ndarray, dst_ids: np.ndarray) -> "SparseCSR":
+        """Remap the external row labels.
+
+        Parameters
+        ----------
+        src_ids : ndarray of int64
+            Current row IDs to replace.
+        dst_ids : ndarray of int64
+            New row IDs for the corresponding ``src_ids`` entries.
+
+        Returns
+        -------
+        remapped : SparseCSR
+            New matrix with updated row labels.
+        """
         idx_order = np.argsort(src_ids)
         sorted_src = src_ids[idx_order]
         sorted_dst = dst_ids[idx_order]
@@ -421,7 +748,16 @@ class SparseCSR:
         return SparseCSR(self.row_indices, self.row_values, row_id=new_row_id)
 
     def to_csc(self) -> "SparseCSC":
-        """Convert to SparseCSC for efficient column access."""
+        """Convert to SparseCSC for efficient column access.
+
+        This operation runs in O(nnz) via a counting-sort numba kernel.
+        External row labels are preserved.
+
+        Returns
+        -------
+        csc : SparseCSC
+            Column-major representation of the same data.
+        """
         if not self.row_indices or self.column_id.size == 0:
             return SparseCSC([], [], column_id=self.column_id.copy())
 
