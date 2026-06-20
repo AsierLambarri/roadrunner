@@ -27,6 +27,28 @@ from roadrunner._defaults import FRAGMENT_THRESHOLD
 
 
 class GMMAssignerStatistics:
+    """Tracks per-snapshot assignment statistics (fragments, confusion, entropy, condition).
+
+    Statistics are computed from the particle DataFrame, the
+    responsibility map, and the fitted parameters after each
+    :meth:`XGMMAssigner.assign` call.
+
+    Attributes
+    ----------
+    unassigned : int
+        Number of particles with ``Sub_tree_id == -1``.
+    fragments : int
+        Number of components with fewer than ``FRAGMENT_THRESHOLD`` particles.
+    avg_conf : float
+        Average maximum responsibility across all assigned particles.
+    avg_entropy : float
+        Average normalised entropy of responsibilities.
+    avg_cond : float
+        Average condition number of fitted covariance matrices.
+    avg_retention : float
+        Average ratio of observed to expected particle retention (bound vs tagged).
+    """
+
     def __init__(self):
         self.unassigned = 0
         self.fragments = 0
@@ -36,6 +58,24 @@ class GMMAssignerStatistics:
         self.avg_retention = float("nan")
 
     def compute(self, particle_df, resp_map, fitted_parameters, boundness_csc=None):
+        """Compute all statistics from the assignment results.
+
+        Parameters
+        ----------
+        particle_df : DataFrame
+            Particle-level assignment data with ``Sub_tree_id`` and ``array_index`` columns.
+        resp_map : dict of (indices, values)
+            Responsibility map keyed by Sub_tree_id.
+        fitted_parameters : dict
+            Per-component fitted parameters with ``covariance_condition`` entries.
+        boundness_csc : SparseCSC, optional
+            Boundness matrix for computing retention statistics.
+
+        Returns
+        -------
+        self : GMMAssignerStatistics
+            The statistics object with updated attributes.
+        """
         N = len(particle_df)
         self.unassigned = int((particle_df["Sub_tree_id"] == -1).sum())
 
@@ -112,6 +152,14 @@ class GMMAssignerStatistics:
 
     @property
     def values(self):
+        """Return all statistics as a flat dictionary.
+
+        Returns
+        -------
+        stats : dict of str → float
+            Keys: ``unassigned``, ``fragments``, ``avg_conf``,
+            ``avg_entropy``, ``avg_cond``, ``avg_retention``.
+        """
         return {
             "unassigned": self.unassigned,
             "fragments": self.fragments,
