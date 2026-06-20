@@ -1,21 +1,54 @@
 #############################################################################
 #
-# package:   accme.mixture
+# package:   roadrunner.mixture
 # file:      _kmeans_plusplus.py
-# brief:     Implementation of kmeans++ that extends the per-sample weights 
-#            to be cluster dependent.
+# brief:     K-means++ initialisation with cluster-dependent per-sample weights.
+#
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez
 # changes:   15 Apr 2025 - Created
-#            03 Sep 2025 - Final
+#            13 May 2026 - Last edit
+#
 #############################################################################
+
+"""K-means++ seeding with cluster-dependent per-sample weights.
+
+Extends the standard k-means++ algorithm by allowing the sampling
+weights of each data point to depend on the cluster (component)
+being seeded.  This is required for initialising mixture models
+with a non-uniform latent prior.
+"""
 
 import numpy as np
 
 from ._math import row_squared_norms
     
 def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=None):
-    X = np.asarray(X, dtype=float)
+    """K-means++ seeding with cluster-dependent per-point weights.
+
+    The probability of selecting point ``i`` as the next center for
+    cluster ``k`` is proportional to
+    ``cluster_weights[i, k] * distance_to_nearest_center[i]``.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples, n_features)
+        Input data.
+    n_clusters : int
+        Number of clusters to seed.
+    cluster_weights : ndarray of shape (n_samples, n_clusters), optional
+        Per-point, per-cluster sampling weights.  If ``None``,
+        standard uniform k-means++ is used.
+    random_state : int or RandomState, optional
+        Random state for reproducibility.
+
+    Returns
+    -------
+    centers : ndarray of shape (n_clusters, n_features)
+        Seeded cluster centers.
+    indices : ndarray of shape (n_clusters,)
+        Indices of the selected centers in ``X``.
+    """
     n_samples, n_features = X.shape
 
     if isinstance(random_state, (int, np.integer)):
