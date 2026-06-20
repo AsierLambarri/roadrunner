@@ -11,6 +11,13 @@
 #
 #############################################################################
 
+"""Structured run-log writer and runtime formatter.
+
+Provides :func:`format_runtime` for human-readable time formatting and
+:class:`RunLogger` for writing per-snapshot statistics to a log file
+with aligned, labelled columns.
+"""
+
 import numpy as np
 
 from roadrunner._defaults import COL_WIDTH_RUNTIME, COL_WIDTH_INT, COL_WIDTH_FLOAT
@@ -75,6 +82,19 @@ class RunLogger:
             f.write("\n\n")
 
     def _col_width(self, label, fmt_spec):
+        """Compute the display width for a log column.
+
+        Parameters
+        ----------
+        label : str
+            Column header label.
+        fmt_spec : str
+            Format specification (``"s"``, ``"d"``, or float format).
+
+        Returns
+        -------
+        width : int
+        """
         if fmt_spec == "s":
             data_w = COL_WIDTH_RUNTIME
         elif fmt_spec == "d":

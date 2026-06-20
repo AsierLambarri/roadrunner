@@ -11,6 +11,12 @@
 #
 #############################################################################
 
+"""HDF5 writer for per-snapshot assignment data.
+
+Writes responsibilities, fitted mixture parameters, hard labels,
+boundness values, and particle timescales to per-snapshot HDF5 files.
+"""
+
 import os
 
 import h5py
@@ -22,12 +28,14 @@ from roadrunner.helpers import select_float_dtype, select_uint_dtype
 class HDF5AssignmentWriter:
     """Writes per-snapshot assignment data (responsibilities, parameters, hard labels) to HDF5.
 
+    Files are written to ``{output_dir}/assignment/snapshot{id:04d}.hdf5``.
+
     Parameters
     ----------
     output_dir : str
-        Root output directory. Files are written to ``{output_dir}/assignment/``.
+        Root output directory.
     float_atol : float, default=1e-4
-        Absolute tolerance for selecting float storage dtype.
+        Tolerance for selecting float storage dtype.
     """
 
     def __init__(self, output_dir, float_atol=1e-4):
@@ -36,21 +44,53 @@ class HDF5AssignmentWriter:
         self._float_atol = float_atol
 
     def _snap_path(self, snapshot_id):
-        """Path to the HDF5 file for a given snapshot."""
+        """Path to the HDF5 file for a given snapshot.
+
+        Parameters
+        ----------
+        snapshot_id : int
+
+        Returns
+        -------
+        path : str
+        """
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, f"snapshot{snapshot_id:04d}.hdf5")
 
     def _ts_path(self):
-        """Path to the timescales text file."""
+        """Path to the timescales text file.
+
+        Returns
+        -------
+        path : str
+        """
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, "timescales.txt")
 
     def _gal_uint_dtype(self, gids):
-        """Smallest unsigned integer dtype that holds all galaxy IDs."""
+        """Smallest unsigned integer dtype that holds all galaxy IDs.
+
+        Parameters
+        ----------
+        gids : array-like of int
+
+        Returns
+        -------
+        dtype : numpy.dtype
+        """
         return select_uint_dtype(int(max(gids)) if len(gids) > 0 else 1)
 
     def _pick_float_dtype(self, arr):
-        """Smallest float dtype that preserves the data within ``float_atol``."""
+        """Smallest float dtype that preserves the data within ``float_atol``.
+
+        Parameters
+        ----------
+        arr : ndarray
+
+        Returns
+        -------
+        dtype : numpy.dtype
+        """
         max_abs = float(np.abs(arr).max()) if arr.size > 0 else 1.0
         return select_float_dtype(max_abs, self._float_atol)
 

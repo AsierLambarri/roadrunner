@@ -1,3 +1,5 @@
+"""I/O backends for catalogue, particle, assignment, checkpoint, and logging."""
+
 from .hdf5_catalogue import HDF5CatalogueWriter
 from .hdf5_particles import HDF5ParticleWriter
 from .hdf5_assignment import HDF5AssignmentWriter

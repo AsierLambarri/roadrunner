@@ -11,6 +11,11 @@
 #
 #############################################################################
 
+"""Checkpoint save/load with zstd-compressed pickle.
+
+Supports version migration for backward compatibility.
+"""
+
 import pickle
 import os
 

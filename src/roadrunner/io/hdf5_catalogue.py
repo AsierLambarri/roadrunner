@@ -11,6 +11,13 @@
 #
 #############################################################################
 
+"""HDF5 writer for the galaxy catalogue.
+
+Writes per-snapshot galaxy properties, dynamical-state data, satellite
+relations, and final birth/assembly tables into a single ``catalogue.hdf5``
+file with a header containing the merger tree and equivalence table.
+"""
+
 import json
 import os
 
@@ -35,7 +42,13 @@ class HDF5CatalogueWriter:
         self._path = os.path.join(output_dir, "catalogue.hdf5")
 
     def _del_existing(self, group, name):
-        """Delete a dataset from an HDF5 group if it exists."""
+        """Delete a dataset from an HDF5 group if it exists.
+
+        Parameters
+        ----------
+        group : h5py.Group
+        name : str
+        """
         if name in group:
             del group[name]
 

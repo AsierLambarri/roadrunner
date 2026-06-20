@@ -11,6 +11,13 @@
 #
 #############################################################################
 
+"""HDF5 writer for per-snapshot particle data.
+
+Writes positions, velocities, masses, and indices to per-snapshot HDF5
+files.  Positions and velocities are stored in scaled coordinates using
+:class:`StandardScaler`.
+"""
+
 import os
 
 import h5py
@@ -39,7 +46,16 @@ class HDF5ParticleWriter:
         self._float_atol = float_atol
 
     def _snap_path(self, snapshot_id):
-        """Path to the HDF5 file for a given snapshot."""
+        """Path to the HDF5 file for a given snapshot.
+
+        Parameters
+        ----------
+        snapshot_id : int
+
+        Returns
+        -------
+        path : str
+        """
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, f"snapshot{snapshot_id:04d}.hdf5")
 
