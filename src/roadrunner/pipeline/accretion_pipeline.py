@@ -34,6 +34,23 @@ from roadrunner.pipeline.snapshot_orchestrator import SnapshotOrchestrator
 
 
 class AccretionPipeline:
+    """Orchestrates the full accretion-history pipeline over multiple snapshots.
+
+    Manages snapshot iteration, checkpoint/resume, logging, and I/O
+    delegation to catalogue, particle, and assignment writers.
+
+    Parameters
+    ----------
+    merger_handler : MergerTreeHandlerCSV
+    snapshot_reader : SnapshotReader
+    equiv_table : EquivalenceTable
+    orchestrator : SnapshotOrchestrator
+    cat_writer : HDF5CatalogueWriter
+    part_writer : HDF5ParticleWriter or None
+    assign_writer : HDF5AssignmentWriter or None
+    logger : RunLogger
+    """
+
     def __init__(
         self,
         merger_handler: MergerTreeHandlerCSV,
@@ -56,6 +73,19 @@ class AccretionPipeline:
 
     def run(self, output_dir: str, *, start_snapshot: int | None = None,
             end_snapshot: int | None = None, resume: bool = False) -> None:
+        """Run the pipeline over the specified snapshot range.
+
+        Parameters
+        ----------
+        output_dir : str
+            Directory for all output files.
+        start_snapshot : int or None, optional
+            First snapshot to process (defaults to the earliest known).
+        end_snapshot : int or None, optional
+            Last snapshot to process (defaults to the latest known).
+        resume : bool, default=False
+            If ``True``, try to resume from a previously saved checkpoint.
+        """
         snapshot_ids = self._filter_snapshots(start_snapshot, end_snapshot)
         if not snapshot_ids:
             print("No snapshots to process.")
@@ -100,6 +130,18 @@ class AccretionPipeline:
         self._finalize(t_start)
 
     def _filter_snapshots(self, start_snapshot, end_snapshot):
+        """Filter the full snapshot list to the requested range.
+
+        Parameters
+        ----------
+        start_snapshot : int or None
+        end_snapshot : int or None
+
+        Returns
+        -------
+        ids : list of int
+            Filtered snapshot IDs.
+        """
         ids = self.merger_handler.snapshots
         start = ids[start_snapshot] if start_snapshot is not None and start_snapshot < 0 else start_snapshot
         end = ids[end_snapshot] if end_snapshot is not None and end_snapshot < 0 else end_snapshot
@@ -110,6 +152,19 @@ class AccretionPipeline:
         return ids
 
     def _resolve_snap_indices(self, raw, all_snaps):
+        """Resolve snapshot specifications (int, list, str, None) to a set of IDs.
+
+        Parameters
+        ----------
+        raw : int, list, str, or None
+            Snapshot specification.
+        all_snaps : list of int
+            All available snapshot IDs.
+
+        Returns
+        -------
+        resolved : set of int or None
+        """
         if raw is None:
             return None
         if isinstance(raw, str):
@@ -125,6 +180,18 @@ class AccretionPipeline:
         return resolved
 
     def _try_resume(self, snapshot_ids):
+        """Attempt to load a checkpoint and determine the resume start index.
+
+        Parameters
+        ----------
+        snapshot_ids : list of int
+
+        Returns
+        -------
+        previous_resp_sim : SparseCSC or None
+        start_idx : int
+            Index in ``snapshot_ids`` to resume from.
+        """
         try:
             ckpt = load_checkpoint(self._checkpoint_path)
         except (RestartError, Exception):
@@ -155,6 +222,7 @@ class AccretionPipeline:
         return previous_resp_sim, next_idx
 
     def _ensure_merger_columns(self):
+        """Ensure merger tree columns (scale radius, host, distance) are computed."""
         self.merger_handler.compute_scale_radii()
         self.merger_handler.compute_most_bound_satellite()
         self.merger_handler.compute_distance_to_host()
@@ -163,6 +231,7 @@ class AccretionPipeline:
         self.merger_handler.compute_distance_to_host(column="acc_id")
 
     def _initialize_run(self, snapshot_ids):
+        """Write the catalogue header and initialise the run log."""
         self.logger.write_header({
             "output_dir": os.path.dirname(self._log_path) or ".",
             "halo_model": self.orchestrator.processing_config.halo_model,
@@ -181,6 +250,30 @@ class AccretionPipeline:
         )
 
     def _process_snapshot(self, snap_id, idx, total, previous_resp_sim, t_start, dyn_snaps):
+        """Process a single snapshot end-to-end.
+
+        Parameters
+        ----------
+        snap_id : int
+        idx : int
+            Index in the snapshot list.
+        total : int
+            Total number of snapshots.
+        previous_resp_sim : SparseCSC or None
+        t_start : float
+            Wall-clock start of the run.
+        dyn_snaps : set of int or None
+            Snapshots on which to compute dynamical state.
+
+        Returns
+        -------
+        snap_result : SnapshotResult
+
+        Raises
+        ------
+        Exception
+            Propagated after logging the error and saving checkpoint.
+        """
         try:
             t0 = time.time()
             snap_df = self.merger_handler.select_snapshots(snap_id)
@@ -245,6 +338,13 @@ class AccretionPipeline:
             raise
 
     def _finalize(self, t_start):
+        """Finalise the pipeline: finalise trackers and write the final catalogue.
+
+        Parameters
+        ----------
+        t_start : float
+            Wall-clock start of the run (for runtime reporting).
+        """
         print("\nFinalizing...")
         bt = self.orchestrator.birth_tracker
         at = self.orchestrator.assembly_tracker
@@ -265,6 +365,16 @@ class AccretionPipeline:
         print(f"Pipeline complete in {format_runtime(time.time() - t_start)}")
 
     def _log_snapshot(self, snap_id, elapsed, snap_result, snap_data, time_stats):
+        """Write snapshot log entry.
+
+        Parameters
+        ----------
+        snap_id : int
+        elapsed : float
+        snap_result : SnapshotResult
+        snap_data : SnapshotData
+        time_stats : dict
+        """
         stats = {
             "snap": snap_id,
             "runtime": format_runtime(elapsed),
@@ -278,6 +388,13 @@ class AccretionPipeline:
         self.logger.write_snapshot(stats)
 
     def _log_error(self, snap_id, exc):
+        """Write error details to the error log file.
+
+        Parameters
+        ----------
+        snap_id : int
+        exc : Exception
+        """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         tb_str = traceback.format_exc()
         with open(self._error_log_path, "a") as f:

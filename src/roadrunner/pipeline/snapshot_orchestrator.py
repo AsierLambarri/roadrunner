@@ -46,6 +46,25 @@ class SnapshotResult:
 
 
 class SnapshotOrchestrator:
+    """Coordinates per-snapshot processing and reduction.
+
+    Manages the assigner, birth tracker, assembly tracker, and the
+    pipeline stages for a single snapshot.
+
+    Parameters
+    ----------
+    processing_config : ProcessingConfig
+        Boundness and segmentation configuration.
+    reduction_config : ReductionConfig
+        Galaxy property and dynamical-state configuration.
+    assigner : ParticleAssigner
+        The assigner (GMM, BGMM, or SVI-BGMM).
+    birth_tracker : BirthTracker or None, optional
+        Tracks birth events of particles.
+    assembly_tracker : AssemblyTracker or None, optional
+        Tracks galaxy assembly histories.
+    """
+
     def __init__(
         self,
         processing_config: ProcessingConfig,
@@ -69,6 +88,29 @@ class SnapshotOrchestrator:
         previous_resp_sim: SparseCSC | None = None,
         compute_dynstate: bool = True,
     ) -> SnapshotResult:
+        """Run processing and reduction for a single snapshot.
+
+        Parameters
+        ----------
+        snap_id : int
+            Snapshot identifier.
+        snap_df : DataFrame
+            Merger-tree data for this snapshot.
+        snap_data : SnapshotData
+            Particle data.
+        satellites : dict
+            Satellite membership map.
+        previous_resp_sim : SparseCSC or None, optional
+            Responsibilities from the previous snapshot.
+        compute_dynstate : bool, default=True
+            If ``True``, compute the dynamical-state classification.
+
+        Returns
+        -------
+        result : SnapshotResult
+            Processed snapshot data including assignment, properties,
+            and dynamical state.
+        """
         previous_resp = responsibilities_from_sim(previous_resp_sim, snap_data)
         newborn = detect_newborns(previous_resp, snap_data.positions.shape[0])
 
