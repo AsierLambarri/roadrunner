@@ -29,6 +29,19 @@ from roadrunner.physics.timescales import compute_particle_dynamical_timescales
 
 @dataclass(frozen=True)
 class ProcessingConfig:
+    """Configuration for per-snapshot processing.
+
+    Parameters
+    ----------
+    halo_model : str, default='kepler'
+        Potential model name.
+    search_factor : float, default=1.0
+        Virial radius multiplier for boundness search.
+    min_particles : int, default=10
+        Minimum particles for a group to be kept.
+    comoving : bool, default=True
+        Whether coordinates are in comoving kpc.
+    """
     halo_model: str = "kepler"
     search_factor: float = 1.0
     min_particles: int = 10
@@ -43,6 +56,30 @@ def process_snapshot(
     assigner: ParticleAssigner,
     config: ProcessingConfig,
 ) -> tuple[HaloEnsemble, AssignmentResult]:
+    """Process a single snapshot through boundness, segmentation, and assignment.
+
+    Parameters
+    ----------
+    snap_data : SnapshotData
+        Particle data for this snapshot.
+    snap_df : DataFrame
+        Merger-tree data for this snapshot.
+    newborn : ndarray
+        Indices of newborn particles.
+    previous_resp : SparseCSC or None
+        Responsibilities from the previous snapshot.
+    assigner : ParticleAssigner
+        The assigner to use for this snapshot.
+    config : ProcessingConfig
+        Processing configuration.
+
+    Returns
+    -------
+    ensemble : HaloEnsemble
+        The ensemble with boundness computed.
+    result : AssignmentResult
+        The assignment result from the assigner.
+    """
     particle_coords = np.column_stack([
         snap_data.positions, snap_data.velocities,
     ])
