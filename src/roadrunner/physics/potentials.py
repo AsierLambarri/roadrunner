@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      potentials.py
-# brief:     <TODO>
+# brief:     Kepler and NFW gravitational potential implementations.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

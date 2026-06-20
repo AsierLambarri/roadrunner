@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.pipeline
 # file:      entry.py
-# brief:     <TODO>
+# brief:     Convenience entry point tying pipeline components together.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

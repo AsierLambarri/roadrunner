@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      halo_ensemble.py
-# brief:     <TODO>
+# brief:     Ensemble of HaloModel objects with sparse particle access.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

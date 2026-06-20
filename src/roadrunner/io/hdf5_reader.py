@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.io
 # file:      hdf5_reader.py
-# brief:     <TODO>
+# brief:     HDF5 reader for particle data.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

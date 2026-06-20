@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      birth_assignment.py
-# brief:     <TODO>
+# brief:     Birth-tag assignment for star particles.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

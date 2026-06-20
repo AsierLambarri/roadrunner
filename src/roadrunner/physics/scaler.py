@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      scaler.py
-# brief:     <TODO>
+# brief:     StandardScaler for 6-D phase-space coordinates.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.readers
 # file:      npz_reader.py
-# brief:     <TODO>
+# brief:     NPZ-based snapshot reader for mock simulations.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

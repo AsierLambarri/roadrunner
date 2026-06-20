@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      halo_model.py
-# brief:     <TODO>
+# brief:     Single-halo model with potential and boundness storage.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

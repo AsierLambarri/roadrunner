@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.io
 # file:      serialization.py
-# brief:     <TODO>
+# brief:     Checkpoint serialization (zstd-compressed pickle).
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

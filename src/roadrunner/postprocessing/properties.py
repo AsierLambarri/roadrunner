@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.postprocessing
 # file:      properties.py
-# brief:     <TODO>
+# brief:     Galaxy property computation (mass, half-mass radius, velocity dispersion).
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.pipeline
 # file:      snapshot_orchestrator.py
-# brief:     <TODO>
+# brief:     Snapshot-level orchestrator coordinating processing and reduction.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

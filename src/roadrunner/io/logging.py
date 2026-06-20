@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.io
 # file:      logging.py
-# brief:     <TODO>
+# brief:     Structured run-log writer with formatted columns.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

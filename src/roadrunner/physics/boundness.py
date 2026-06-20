@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      boundness.py
-# brief:     <TODO>
+# brief:     Gravitational boundness computation for halo particles.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

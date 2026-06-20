@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.readers
 # file:      equivalence.py
-# brief:     <TODO>
+# brief:     Snapshot-equivalence table (snapshot ID / path / time / redshift).
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

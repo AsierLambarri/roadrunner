@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.clustering
 # file:      sparse.py
-# brief:     <TODO>
+# brief:     SparseCSC and SparseCSR matrix classes with label-preserving operations.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

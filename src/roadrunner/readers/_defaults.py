@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.readers
 # file:      _defaults.py
-# brief:     <TODO>
+# brief:     Default metallicity conversion for mock snapshot readers.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.pipeline
 # file:      translation.py
-# brief:     <TODO>
+# brief:     Coordinate and ID translation utilities between simulation and array space.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

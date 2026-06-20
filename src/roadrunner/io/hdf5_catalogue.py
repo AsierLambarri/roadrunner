@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.io
 # file:      hdf5_catalogue.py
-# brief:     <TODO>
+# brief:     HDF5 writer for the galaxy catalogue (snapshot and final).
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

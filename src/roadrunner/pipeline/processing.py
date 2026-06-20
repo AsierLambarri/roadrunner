@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.pipeline
 # file:      processing.py
-# brief:     <TODO>
+# brief:     Per-snapshot processing: boundness, segmentation, and assignment.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

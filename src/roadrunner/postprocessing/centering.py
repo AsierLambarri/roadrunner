@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.postprocessing
 # file:      centering.py
-# brief:     <TODO>
+# brief:     Shrink-sphere centering (SSC) and GMM-based center estimation.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

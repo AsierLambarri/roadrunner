@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.pipeline
 # file:      accretion_pipeline.py
-# brief:     <TODO>
+# brief:     Full accretion-history pipeline orchestration with checkpoint/resume.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

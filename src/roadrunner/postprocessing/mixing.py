@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.postprocessing
 # file:      mixing.py
-# brief:     <TODO>
+# brief:     Dynamical-state classification via the Riley criterion.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

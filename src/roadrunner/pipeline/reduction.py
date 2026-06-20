@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.pipeline
 # file:      reduction.py
-# brief:     <TODO>
+# brief:     Per-snapshot reduction: galaxy properties and dynamical state.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

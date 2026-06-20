@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      merger_tree.py
-# brief:     <TODO>
+# brief:     Merger-tree CSV reader and handler with accretion-host logic.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

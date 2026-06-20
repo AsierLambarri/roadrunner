@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.postprocessing.tracking
 # file:      birth.py
-# brief:     <TODO>
+# brief:     Birth-tagging tracker for newborn particles.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

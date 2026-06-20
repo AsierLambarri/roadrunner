@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.readers
 # file:      merger_tree.py
-# brief:     <TODO>
+# brief:     Merger-tree CSV reader.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

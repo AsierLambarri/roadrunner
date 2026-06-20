@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.pipeline
 # file:      config.py
-# brief:     <TODO>
+# brief:     RunConfig frozen dataclass for pipeline configuration.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

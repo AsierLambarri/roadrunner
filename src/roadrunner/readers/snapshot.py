@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.readers
 # file:      snapshot.py
-# brief:     <TODO>
+# brief:     YT-based snapshot reader for cosmological simulations.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

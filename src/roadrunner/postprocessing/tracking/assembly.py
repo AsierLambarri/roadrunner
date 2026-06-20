@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.postprocessing.tracking
 # file:      assembly.py
-# brief:     <TODO>
+# brief:     Assembly and accretion history tracker.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

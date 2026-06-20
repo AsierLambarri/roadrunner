@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.readers
 # file:      particle_data_reader.py
-# brief:     <TODO>
+# brief:     Particle-data snapshot reader for custom binary formats.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

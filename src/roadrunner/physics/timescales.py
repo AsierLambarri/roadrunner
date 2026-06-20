@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      timescales.py
-# brief:     <TODO>
+# brief:     Dynamical time-scale computation for bound particles.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

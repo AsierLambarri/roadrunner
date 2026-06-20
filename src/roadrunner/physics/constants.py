@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      constants.py
-# brief:     <TODO>
+# brief:     Physical and numerical constants.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez

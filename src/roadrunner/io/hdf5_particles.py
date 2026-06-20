@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.io
 # file:      hdf5_particles.py
-# brief:     <TODO>
+# brief:     HDF5 writer for per-snapshot particle data.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez
