@@ -18,7 +18,10 @@ fields:
   mass: particle_mass
   position: coordinates
   velocity: particle_velocity
-  # metallicity: metallicity     # optional
+  # metallicity: metallicity     # extra → saved to output, not in assigner
+
+# ── Assigner fields (which loaded fields the assigner receives) ──────────────
+assign_fields: [positions, velocities]     # default if omitted
 
 # ── Unit base (YT scaling, optional) ─────────────────────────────────────────
 # unit_base:                    # Uncomment if needed

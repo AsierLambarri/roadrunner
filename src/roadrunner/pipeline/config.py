@@ -26,6 +26,7 @@ class RunConfig:
         "velocity": "particle_velocity",
     })
     unit_base: dict | None = None
+    assign_fields: list | None = None
 
     accretion_id: int | None = None
     start_snapshot: int | None = None

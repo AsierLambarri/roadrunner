@@ -122,3 +122,14 @@ class HDF5ParticleWriter:
                 data=snapshot_data.indices.astype(idx_dtype, copy=False),
                 compression="gzip",
             )
+
+            for name in snapshot_data.extra_fields:
+                arr = getattr(snapshot_data, name)
+                if np.issubdtype(arr.dtype, np.floating):
+                    dtype = select_float_dtype(float(arr.max()), self._float_atol)
+                else:
+                    dtype = arr.dtype
+                data.create_dataset(
+                    name, data=np.asarray(arr).astype(dtype, copy=False),
+                    compression="gzip",
+                )

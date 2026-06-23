@@ -19,7 +19,7 @@ class TestSnapshotData:
             redshift=0.5,
             time=1.0,
         )
-        assert data.metallicity is None
+        assert not hasattr(data, "metallicity")
         assert len(data.indices) == 2
 
     def test_construction_with_metallicity(self):

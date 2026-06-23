@@ -69,9 +69,7 @@ def process_snapshot(
     result : AssignmentResult
         The assignment result from the assigner.
     """
-    particle_coords = np.column_stack([
-        snap_data.positions, snap_data.velocities,
-    ])
+    particle_coords = snap_data.data
 
     ensemble = HaloEnsemble([
         HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving)
