@@ -75,10 +75,10 @@ class SnapshotData:
         ``assign_fields``.
     """
 
-    indices: NDArray[np.integer]
-    masses: NDArray[np.floating]
-    positions: NDArray[np.floating]
-    velocities: NDArray[np.floating]
+    index: NDArray[np.integer]
+    mass: NDArray[np.floating]
+    position: NDArray[np.floating]
+    velocity: NDArray[np.floating]
     redshift: float
     time: float
     fields: list[str]
@@ -88,19 +88,19 @@ class SnapshotData:
     def __init__(
         self,
         *,
-        indices,
-        masses,
-        positions,
-        velocities,
+        index,
+        mass,
+        position,
+        velocity,
         redshift,
         time,
         assign_fields=None,
         **kwargs,
     ):
-        self.indices = np.asarray(indices)
-        self.masses = np.asarray(masses)
-        self.positions = np.asarray(positions)
-        self.velocities = np.asarray(velocities)
+        self.index = np.asarray(index)
+        self.mass = np.asarray(mass)
+        self.position = np.asarray(position)
+        self.velocity = np.asarray(velocity)
         self.redshift = float(redshift)
         self.time = float(time)
 
@@ -108,15 +108,15 @@ class SnapshotData:
             setattr(self, name, np.asarray(arr))
 
         # ── Field registries ──────────────────────────────────────────
-        all_fields = ["indices", "masses", "positions", "velocities"] + list(kwargs.keys())
+        all_fields = ["index", "mass", "position", "velocity"] + list(kwargs.keys())
         self.fields = all_fields
 
         if assign_fields is not None:
             self._assign_fields = list(assign_fields)
         else:
-            self._assign_fields = ["positions", "velocities"]
+            self._assign_fields = ["position", "velocity"]
 
-        _internal = {"indices", "masses"}
+        _internal = {"index", "mass"}
         self.extra_fields = [
             f for f in self.fields
             if f not in self._assign_fields and f not in _internal
@@ -152,8 +152,8 @@ class SnapshotData:
             that are not present in this snapshot.
         """
         if self._index_sorter is None:
-            self._index_sorter = np.argsort(self.indices)
-        sorted_ids = self.indices[self._index_sorter]
+            self._index_sorter = np.argsort(self.index)
+        sorted_ids = self.index[self._index_sorter]
         pos = np.clip(np.searchsorted(sorted_ids, sim_ids), 0, len(sorted_ids) - 1)
         found = sorted_ids[pos] == sim_ids
         result = np.full(len(sim_ids), -1, dtype=np.int64)
@@ -170,8 +170,8 @@ class SnapshotData:
         ids : ndarray of int64
             Corresponding simulation particle IDs.
         """
-        idx = np.arange(len(self.indices), dtype=np.int64)
-        return idx, self.indices.astype(np.int64, copy=False)
+        idx = np.arange(len(self.index), dtype=np.int64)
+        return idx, self.index.astype(np.int64, copy=False)
 
     def id_to_index_map(self) -> tuple[np.ndarray, np.ndarray]:
         """Return a mapping from simulation ID to array index.
@@ -183,7 +183,7 @@ class SnapshotData:
         idx : ndarray of int64
             Corresponding array indices.
         """
-        return self.indices.astype(np.int64, copy=False), np.arange(len(self.indices), dtype=np.int64)
+        return self.index.astype(np.int64, copy=False), np.arange(len(self.index), dtype=np.int64)
 
 
 class BoundnessResult:

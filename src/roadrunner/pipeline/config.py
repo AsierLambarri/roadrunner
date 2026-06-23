@@ -65,11 +65,21 @@ class RunConfig:
         """Validate and coerce configuration values.
 
         Checks that ``reader_type`` is one of the allowed values,
-        and coerces numeric fields to the correct type when provided
+        that the ``fields`` dict contains the four required keys
+        (``index``, ``mass``, ``position``, ``velocity``), and
+        coerces numeric fields to the correct type when provided
         as strings or other types.
         """
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")
+
+        _required = {"index", "mass", "position", "velocity"}
+        given = set(self.fields.keys())
+        missing = _required - given
+        if missing:
+            raise ValueError(
+                f"fields must contain {_required}, missing: {missing}"
+            )
 
         for field_name in (
             "accretion_id", "max_iter", "n_los", "min_particles",

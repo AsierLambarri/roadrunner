@@ -308,14 +308,14 @@ class AccretionPipeline:
                 )
             if self.assign_writer:
                 if "timescale" in snap_result.result.particle_df.columns:
-                    sim_ids = snap_data.indices[snap_result.result.particle_df["array_index"].values]
+                    sim_ids = snap_data.index[snap_result.result.particle_df["array_index"].values]
                     recs = np.array(
                         list(zip(sim_ids, snap_result.result.particle_df["timescale"].values)),
                         dtype=[("particle_index", np.uint64), ("timescale", np.float32)],
                     )
                     self.assign_writer.write_timescales(recs)
 
-                snap_result.result.particle_df["particle_index"] = snap_data.indices[
+                snap_result.result.particle_df["particle_index"] = snap_data.index[
                     snap_result.result.particle_df["array_index"].values
                 ]
                 snap_result.result.particle_df.drop(

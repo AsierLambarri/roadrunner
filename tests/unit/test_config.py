@@ -61,7 +61,12 @@ class TestRunConfigFromDict:
             equivalence_path="/path/equiv.csv",
             code="GEAR",
             ptype="star",
-            fields={"index": "my_index"},
+            fields={
+                "index": "my_index",
+                "mass": "my_mass",
+                "position": "my_position",
+                "velocity": "my_velocity",
+            },
             unit_base={"length": 1.0},
             accretion_id=42,
             start_snapshot=10,

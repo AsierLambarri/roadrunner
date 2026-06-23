@@ -22,10 +22,10 @@ def _load_mock():
     coords = particles["coords"]
     masses = particles["masses"]
     snap_data = SnapshotData(
-        indices=np.arange(coords.shape[0], dtype=np.uint64),
-        masses=masses,
-        positions=coords[:, :3],
-        velocities=coords[:, 3:6],
+        index=np.arange(coords.shape[0], dtype=np.uint64),
+        mass=masses,
+        position=coords[:, :3],
+        velocity=coords[:, 3:6],
         redshift=0.0,
         time=13.8,
     )

@@ -12,22 +12,22 @@ from roadrunner._mcf_types import (
 class TestSnapshotData:
     def test_construction_defaults(self):
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5,
             time=1.0,
         )
         assert not hasattr(data, "metallicity")
-        assert len(data.indices) == 2
+        assert len(data.index) == 2
 
     def test_construction_with_metallicity(self):
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5,
             time=1.0,
             metallicity=np.array([0.01, 0.02]),
@@ -36,17 +36,17 @@ class TestSnapshotData:
 
     def test_fields_accessible(self):
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5,
             time=1.0,
         )
-        assert "indices" in dir(data)
-        assert "masses" in dir(data)
-        assert "positions" in dir(data)
-        assert "velocities" in dir(data)
+        assert "index" in dir(data)
+        assert "mass" in dir(data)
+        assert "position" in dir(data)
+        assert "velocity" in dir(data)
         assert "redshift" in dir(data)
         assert "time" in dir(data)
 
@@ -152,10 +152,10 @@ class TestPotentialModelProtocol:
 class TestSnapshotDataArrayIndex:
     def test_contiguous_indices(self):
         sd = SnapshotData(
-            indices=np.arange(100, dtype=np.uint64),
-            masses=np.ones(100),
-            positions=np.zeros((100, 3)),
-            velocities=np.zeros((100, 3)),
+            index=np.arange(100, dtype=np.uint64),
+            mass=np.ones(100),
+            position=np.zeros((100, 3)),
+            velocity=np.zeros((100, 3)),
             redshift=0.0, time=13.8,
         )
         result = sd.array_index(np.array([0, 50, 99], dtype=np.uint64))
@@ -164,10 +164,10 @@ class TestSnapshotDataArrayIndex:
     def test_sparse_indices(self):
         ids = np.array([1000, 2000, 3000, 4000], dtype=np.uint64)
         sd = SnapshotData(
-            indices=ids,
-            masses=np.ones(4),
-            positions=np.zeros((4, 3)),
-            velocities=np.zeros((4, 3)),
+            index=ids,
+            mass=np.ones(4),
+            position=np.zeros((4, 3)),
+            velocity=np.zeros((4, 3)),
             redshift=0.0, time=13.8,
         )
         result = sd.array_index(np.array([2000, 999, 4000], dtype=np.uint64))
@@ -177,10 +177,10 @@ class TestSnapshotDataArrayIndex:
 
     def test_empty_query(self):
         sd = SnapshotData(
-            indices=np.arange(10, dtype=np.uint64),
-            masses=np.ones(10),
-            positions=np.zeros((10, 3)),
-            velocities=np.zeros((10, 3)),
+            index=np.arange(10, dtype=np.uint64),
+            mass=np.ones(10),
+            position=np.zeros((10, 3)),
+            velocity=np.zeros((10, 3)),
             redshift=0.0, time=13.8,
         )
         result = sd.array_index(np.array([], dtype=np.uint64))

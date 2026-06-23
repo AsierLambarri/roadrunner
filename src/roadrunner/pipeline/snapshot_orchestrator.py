@@ -106,7 +106,7 @@ class SnapshotOrchestrator:
             and dynamical state.
         """
         previous_resp = responsibilities_from_sim(previous_resp_sim, snap_data)
-        newborn = detect_newborns(previous_resp, snap_data.positions.shape[0])
+        newborn = detect_newborns(previous_resp, snap_data.position.shape[0])
 
         ensemble, result = process_snapshot(
             snap_data, snap_df, newborn, previous_resp,

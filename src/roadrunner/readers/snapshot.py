@@ -118,8 +118,8 @@ class SnapshotReader:
         velocities = rng.uniform(-200, 200, (n_particles, 3)).astype(np.float64)
         metallicity = rng.uniform(-2.0, 0.5, n_particles).astype(np.float64)
         return SnapshotData(
-            indices=indices, masses=masses, positions=positions,
-            velocities=velocities, redshift=0.0, time=13.8,
+            index=indices, mass=masses, position=positions,
+            velocity=velocities, redshift=0.0, time=13.8,
             metallicity=metallicity,
         )
 
@@ -225,8 +225,8 @@ class SnapshotReader:
                 extra[key] = ad[ptype, yt_field].value.astype(np.float64)
 
         return SnapshotData(
-            indices=indices, masses=masses, positions=positions,
-            velocities=velocities, redshift=redshift, time=time,
+            index=indices, mass=masses, position=positions,
+            velocity=velocities, redshift=redshift, time=time,
             assign_fields=self._assign_fields,
             **extra,
         )

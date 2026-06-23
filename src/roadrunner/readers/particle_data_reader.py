@@ -74,8 +74,8 @@ class ParticleDataSnapshotReader:
         velocities = vel_scaled * inv_s[3:6] + mean[3:6]
 
         return SnapshotData(
-            indices=indices, masses=masses, positions=positions,
-            velocities=velocities, redshift=redshift, time=time,
+            index=indices, mass=masses, position=positions,
+            velocity=velocities, redshift=redshift, time=time,
             assign_fields=self._assign_fields,
             **extra,
         )

@@ -84,7 +84,7 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     """
     df = result.particle_df
     arr_idx = df["array_index"].values
-    sim_ids = snap_data.indices[arr_idx]
+    sim_ids = snap_data.index[arr_idx]
     if "timescale" in df.columns:
         timescales = df["timescale"].values
     else:
@@ -115,7 +115,7 @@ def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotD
     assignment_map = {}
     for sid, group in result.particle_df.groupby("Sub_tree_id"):
         arr_idx = group["array_index"].values
-        assignment_map[int(sid)] = set(snap_data.indices[arr_idx].tolist())
+        assignment_map[int(sid)] = set(snap_data.index[arr_idx].tolist())
     birth_map = birth_tracker.current_birth_map() if birth_tracker is not None else {}
     assembly_tracker.update(snap_id, assignment_map, birth_map, satellites)
 

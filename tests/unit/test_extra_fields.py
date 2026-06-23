@@ -10,23 +10,23 @@ class TestSnapshotDataRegistries:
     def test_fields_default(self):
         """Default assign_fields = [positions, velocities]."""
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5, time=1.0,
         )
-        assert data.fields == ["indices", "masses", "positions", "velocities"]
-        assert data._assign_fields == ["positions", "velocities"]
+        assert data.fields == ["index", "mass", "position", "velocity"]
+        assert data._assign_fields == ["position", "velocity"]
         assert data.extra_fields == []
 
     def test_extra_fields_populated(self):
         """Metallicity passed as kwarg ends up in extra_fields."""
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5, time=1.0,
             metallicity=np.array([0.01, 0.02]),
         )
@@ -37,10 +37,10 @@ class TestSnapshotDataRegistries:
     def test_extra_fields_appears_on_instance(self):
         """Extra fields are accessible as attributes."""
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5, time=1.0,
             metallicity=np.array([0.01, 0.02]),
         )
@@ -49,39 +49,39 @@ class TestSnapshotDataRegistries:
     def test_data_property_shape(self):
         """.data column-concatenates assign_fields."""
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
-            velocities=np.array([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
+            velocity=np.array([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]),
             redshift=0.5, time=1.0,
         )
         assert data.data.shape == (2, 6)
-        np.testing.assert_array_equal(data.data[:, :3], data.positions)
-        np.testing.assert_array_equal(data.data[:, 3:], data.velocities)
+        np.testing.assert_array_equal(data.data[:, :3], data.position)
+        np.testing.assert_array_equal(data.data[:, 3:], data.velocity)
 
     def test_custom_assign_fields(self):
         """Overriding assign_fields changes what .data returns."""
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5, time=1.0,
-            assign_fields=["positions"],
+            assign_fields=["position"],
         )
         assert data.data.shape == (2, 3)
-        # velocities is not in assign_fields and not internal → is extra
-        assert data.extra_fields == ["velocities"]
+        # velocity is not in assign_fields and not internal → is extra
+        assert data.extra_fields == ["velocity"]
 
     def test_assign_fields_listed_in_extra_excluded(self):
         """A field in both assign_fields and kwargs is not extra."""
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5, time=1.0,
-            assign_fields=["positions", "velocities", "metallicity"],
+            assign_fields=["position", "velocity", "metallicity"],
             metallicity=np.array([0.01, 0.02]),
         )
         assert "metallicity" not in data.extra_fields
@@ -89,14 +89,14 @@ class TestSnapshotDataRegistries:
     def test_indices_and_masses_never_extra(self):
         """Internal fields indices/masses are never marked extra."""
         data = SnapshotData(
-            indices=np.array([0, 1]),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1]),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5, time=1.0,
         )
-        assert "indices" not in data.extra_fields
-        assert "masses" not in data.extra_fields
+        assert "index" not in data.extra_fields
+        assert "mass" not in data.extra_fields
 
 
 class TestExtraFieldsHDF5Roundtrip:
@@ -106,10 +106,10 @@ class TestExtraFieldsHDF5Roundtrip:
         import h5py
 
         data = SnapshotData(
-            indices=np.array([0, 1], dtype=np.uint64),
-            masses=np.array([1.0, 2.0]),
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocities=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            index=np.array([0, 1], dtype=np.uint64),
+            mass=np.array([1.0, 2.0]),
+            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
             redshift=0.5, time=1.0,
             metallicity=np.array([0.0, 0.5]),
         )

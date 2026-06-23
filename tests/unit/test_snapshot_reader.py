@@ -13,10 +13,10 @@ class TestMockData:
     def test_correct_shapes(self):
         n = 50
         data = SnapshotReader.mock_data(n)
-        assert data.indices.shape == (n,)
-        assert data.masses.shape == (n,)
-        assert data.positions.shape == (n, 3)
-        assert data.velocities.shape == (n, 3)
+        assert data.index.shape == (n,)
+        assert data.mass.shape == (n,)
+        assert data.position.shape == (n, 3)
+        assert data.velocity.shape == (n, 3)
         assert data.metallicity is not None
         assert data.metallicity.shape == (n,)
         assert data.redshift == 0.0
@@ -25,23 +25,23 @@ class TestMockData:
     def test_reproducible_seed(self):
         a = SnapshotReader.mock_data(10, seed=42)
         b = SnapshotReader.mock_data(10, seed=42)
-        assert np.array_equal(a.indices, b.indices)
-        assert np.array_equal(a.masses, b.masses)
+        assert np.array_equal(a.index, b.index)
+        assert np.array_equal(a.mass, b.mass)
 
     def test_different_seed_different(self):
         a = SnapshotReader.mock_data(10, seed=42)
         b = SnapshotReader.mock_data(10, seed=99)
-        assert not np.array_equal(a.masses, b.masses)
+        assert not np.array_equal(a.mass, b.mass)
 
     def test_zero_particles(self):
         data = SnapshotReader.mock_data(0)
-        assert len(data.indices) == 0
-        assert data.positions.shape == (0, 3)
+        assert len(data.index) == 0
+        assert data.position.shape == (0, 3)
         assert data.metallicity is not None and len(data.metallicity) == 0
 
     def test_single_particle(self):
         data = SnapshotReader.mock_data(1)
-        assert data.positions.shape == (1, 3)
+        assert data.position.shape == (1, 3)
 
 
 class TestConstruction:

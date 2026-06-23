@@ -80,7 +80,7 @@ def reduce_snapshot(
     dynstate : DataFrame
         Dynamical-state classification (empty if not computed).
     """
-    coords = np.column_stack([snap_data.positions, snap_data.velocities])
+    coords = np.column_stack([snap_data.position, snap_data.velocity])
 
     galaxy_table = snap_df[["Sub_tree_id", "host_id", "mass", "distance_to_acc_id"]].copy()
     galaxy_table.set_index("Sub_tree_id", inplace=True)
@@ -100,7 +100,7 @@ def reduce_snapshot(
 
     properties = compute_galaxy_properties(
         accretion_id=config.accretion_id,
-        particle_masses=snap_data.masses,
+        particle_masses=snap_data.mass,
         particle_coords=coords,
         galaxy_particles=galaxy_particles,
         galaxy_table=galaxy_table,
@@ -117,7 +117,7 @@ def reduce_snapshot(
     dynstate = (
         compute_riley_criterion(
             main_id=config.accretion_id,
-            particle_masses=snap_data.masses,
+            particle_masses=snap_data.mass,
             particle_coords=coords,
             galaxy_allowed=galaxy_particles,
             galaxy_bound=galaxy_bound,

@@ -82,8 +82,8 @@ class NPZSnapshotReader:
                 extra["metallicity"] = arr[:, 8].astype(np.float64)
 
         return SnapshotData(
-            indices=indices, masses=masses, positions=positions,
-            velocities=velocities, redshift=redshift, time=time,
+            index=indices, mass=masses, position=positions,
+            velocity=velocities, redshift=redshift, time=time,
             assign_fields=self._assign_fields,
             **extra,
         )

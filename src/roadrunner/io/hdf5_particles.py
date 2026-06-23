@@ -81,8 +81,8 @@ class HDF5ParticleWriter:
             data = hf.create_group("data")
 
             coords = np.column_stack([
-                snapshot_data.positions,
-                snapshot_data.velocities,
+                snapshot_data.position,
+                snapshot_data.velocity,
             ])
 
             scaler = StandardScaler()
@@ -108,18 +108,18 @@ class HDF5ParticleWriter:
             )
 
             mass_dtype = select_float_dtype(
-                float(snapshot_data.masses.max()), self._float_atol
+                float(snapshot_data.mass.max()), self._float_atol
             )
             data.create_dataset(
                 "masses",
-                data=snapshot_data.masses.astype(mass_dtype, copy=False),
+                data=snapshot_data.mass.astype(mass_dtype, copy=False),
                 compression="gzip",
             )
 
-            idx_dtype = select_uint_dtype(int(snapshot_data.indices.max()))
+            idx_dtype = select_uint_dtype(int(snapshot_data.index.max()))
             data.create_dataset(
                 "indices",
-                data=snapshot_data.indices.astype(idx_dtype, copy=False),
+                data=snapshot_data.index.astype(idx_dtype, copy=False),
                 compression="gzip",
             )
 

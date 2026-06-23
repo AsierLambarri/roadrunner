@@ -21,10 +21,10 @@ from roadrunner.pipeline.translation import (
 
 def _make_snap_data(n=10, start_id=0):
     return SnapshotData(
-        indices=np.arange(start_id, start_id + n, dtype=np.uint64),
-        masses=np.ones(n, dtype=np.float64),
-        positions=np.zeros((n, 3), dtype=np.float64),
-        velocities=np.zeros((n, 3), dtype=np.float64),
+        index=np.arange(start_id, start_id + n, dtype=np.uint64),
+        mass=np.ones(n, dtype=np.float64),
+        position=np.zeros((n, 3), dtype=np.float64),
+        velocity=np.zeros((n, 3), dtype=np.float64),
         redshift=0.0,
         time=1.0,
     )
