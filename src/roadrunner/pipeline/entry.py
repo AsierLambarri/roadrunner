@@ -55,8 +55,12 @@ def run_accretion_history(config: RunConfig | dict) -> None:
             assign_fields=config.assign_fields,
         )
     elif config.reader_type == "pdata":
+        _required = {"index", "mass", "position", "velocity"}
+        _extra_field_names = [k for k in config.fields if k not in _required]
         snapshot_reader = ParticleDataSnapshotReader(
             equiv_table, base_dir=config.particle_data_dir,
+            assign_fields=config.assign_fields,
+            extra_fields=_extra_field_names,
         )
     else:
         raise ValueError(f"Unknown reader_type: {config.reader_type}")
