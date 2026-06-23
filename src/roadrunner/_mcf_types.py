@@ -43,9 +43,13 @@ RespMap = dict[int, tuple[np.ndarray, np.ndarray]]
 class SnapshotData:
     """Container for a single snapshot's particle data.
 
-    Stores indices, masses, 6-D phase-space coordinates, metallicity,
-    and cosmology metadata (redshift, cosmic time). The indices are
-    global simulation particle IDs that remain consistent across snapshots.
+    Stores per-particle data as attributes and maintains two registries:
+    ``.fields`` (all particle-field names) and ``.extra_fields`` (field
+    names that are saved to disk but not passed to the assigner).  The
+    ``.data`` property returns the column-concatenated array of whichever
+    fields are designated for assignment.
+
+    All parameters are keyword-only for clarity.
 
     Parameters
     ----------
@@ -53,44 +57,85 @@ class SnapshotData:
         Global simulation particle IDs.
     masses : NDArray of float
         Particle masses.
-    positions : NDArray of float, shape (n_particles, 3)
-        Spatial coordinates (comoving kpc if comoving cosmology).
-    velocities : NDArray of float, shape (n_particles, 3)
-        Velocities (km/s, peculiar).
+    positions : NDArray of float, shape (n, 3)
+        Spatial coordinates.
+    velocities : NDArray of float, shape (n, 3)
+        Velocities.
     redshift : float
         Snapshot redshift.
     time : float
-        Cosmic time (Gyr).
-    metallicities : NDArray of float or None, optional
-        Per-particle metallicities.
+        Cosmic time.
+    assign_fields : list of str, optional
+        Attribute names that make up the assigner input array
+        (``.data``).  Defaults to ``["positions", "velocities"]``.
+    **kwargs : NDArray
+        Arbitrary additional per-particle fields (e.g. ``metallicity``,
+        ``birth_density``).  Each becomes an instance attribute and is
+        automatically tracked in ``.extra_fields`` unless listed in
+        ``assign_fields``.
     """
 
     indices: NDArray[np.integer]
     masses: NDArray[np.floating]
     positions: NDArray[np.floating]
     velocities: NDArray[np.floating]
-    metallicity: NDArray[np.floating] | None
     redshift: float
     time: float
+    fields: list[str]
+    extra_fields: list[str]
+    _assign_fields: list[str]
 
     def __init__(
         self,
-        indices: NDArray[np.integer],
-        masses: NDArray[np.floating],
-        positions: NDArray[np.floating],
-        velocities: NDArray[np.floating],
-        redshift: float,
-        time: float,
-        metallicity: NDArray[np.floating] | None = None,
-    ) -> None:
-        self.indices = indices
-        self.masses = masses
-        self.positions = positions
-        self.velocities = velocities
-        self.metallicity = metallicity
-        self.redshift = redshift
-        self.time = time
+        *,
+        indices,
+        masses,
+        positions,
+        velocities,
+        redshift,
+        time,
+        assign_fields=None,
+        **kwargs,
+    ):
+        self.indices = np.asarray(indices)
+        self.masses = np.asarray(masses)
+        self.positions = np.asarray(positions)
+        self.velocities = np.asarray(velocities)
+        self.redshift = float(redshift)
+        self.time = float(time)
+
+        for name, arr in kwargs.items():
+            setattr(self, name, np.asarray(arr))
+
+        # ── Field registries ──────────────────────────────────────────
+        all_fields = ["indices", "masses", "positions", "velocities"] + list(kwargs.keys())
+        self.fields = all_fields
+
+        if assign_fields is not None:
+            self._assign_fields = list(assign_fields)
+        else:
+            self._assign_fields = ["positions", "velocities"]
+
+        _internal = {"indices", "masses"}
+        self.extra_fields = [
+            f for f in self.fields
+            if f not in self._assign_fields and f not in _internal
+        ]
+
         self._index_sorter: np.ndarray | None = None
+
+    @property
+    def data(self) -> np.ndarray:
+        """Column-concatenated array of fields used by the assigner.
+
+        Returns
+        -------
+        coords : ndarray of shape (n_particles, D)
+            Where D is the sum of the last dimensions of each field
+            in ``assign_fields``.
+        """
+        arrays = [getattr(self, f) for f in self._assign_fields]
+        return np.column_stack(arrays)
 
     def array_index(self, sim_ids: np.ndarray) -> np.ndarray:
         """Map global simulation IDs to local array indices.
