@@ -46,11 +46,13 @@ def run_accretion_history(config: RunConfig | dict) -> None:
     if config.reader_type == "yt":
         snapshot_reader = SnapshotReader(
             config.code, config.ptype, config.fields, config.unit_base,
+            assign_fields=config.assign_fields,
         )
     elif config.reader_type == "npz":
         snapshot_reader = NPZSnapshotReader(
             equiv_table, base_dir=config.particle_data_dir,
             mock_sim=config.npz_mock_sim,
+            assign_fields=config.assign_fields,
         )
     elif config.reader_type == "pdata":
         snapshot_reader = ParticleDataSnapshotReader(

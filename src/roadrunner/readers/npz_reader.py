@@ -1,4 +1,11 @@
-"""NPZ-based snapshot reader for mock simulations."""
+"""NPZ-based snapshot reader for mock simulations.
+
+Supports two NPZ formats:
+- Mock format (``mock_sim=True``): expects ``indices``, ``masses``,
+  ``coords`` keys with 6-D coordinates.
+- Generic format: expects a 2-D array with columns
+  ``[id, mass, x, y, z, vx, vy, vz, metallicity]``.
+"""
 
 from __future__ import annotations
 
@@ -13,12 +20,6 @@ from roadrunner.readers.equivalence import EquivalenceTable
 class NPZSnapshotReader:
     """Snapshot reader for NPZ files (mock simulations).
 
-    Supports two NPZ formats:
-    - Mock format (``mock_sim=True``): expects ``indices``, ``masses``,
-      ``coords`` keys with 6-D coordinates.
-    - Generic format: expects a 2-D array with columns
-      ``[id, mass, x, y, z, vx, vy, vz, metallicity]``.
-
     Parameters
     ----------
     equiv_table : EquivalenceTable
@@ -27,6 +28,8 @@ class NPZSnapshotReader:
         Base directory for snapshot files.
     mock_sim : bool, default=False
         If ``True``, read the roadrunner mock NPZ format.
+    assign_fields : list of str or None, optional
+        Attribute names for the assigner input.
     """
 
     def __init__(
@@ -34,8 +37,10 @@ class NPZSnapshotReader:
         equiv_table: EquivalenceTable,
         base_dir: str = "",
         mock_sim: bool = False,
+        assign_fields=None,
     ):
         self._mock_sim = mock_sim
+        self._assign_fields = assign_fields
         self._snap_info: dict[str, tuple[float, float]] = {}
         df = equiv_table.dataframe
         for _, row in df.iterrows():
@@ -58,22 +63,27 @@ class NPZSnapshotReader:
         redshift, time = self._snap_info[file_path]
         raw = np.load(file_path, allow_pickle=False)
 
+        extra = {}
         if self._mock_sim:
             indices = raw["indices"]
             masses = raw["masses"]
             coords = raw["coords"]
             positions = coords[:, :3]
             velocities = coords[:, 3:6]
-            metallicity = raw.get("metallicity", None)
+            if "metallicity" in raw:
+                extra["metallicity"] = raw["metallicity"]
         else:
             arr = raw if isinstance(raw, np.ndarray) else raw[raw.files[0]]
             indices = arr[:, 0].astype(np.uint64)
             masses = arr[:, 1].astype(np.float64)
             positions = arr[:, 2:5].astype(np.float64)
             velocities = arr[:, 5:8].astype(np.float64)
-            metallicity = arr[:, 8].astype(np.float64) if arr.shape[1] >= 9 else None
+            if arr.shape[1] >= 9:
+                extra["metallicity"] = arr[:, 8].astype(np.float64)
 
         return SnapshotData(
-            indices, masses, positions, velocities,
-            redshift, time, metallicity,
+            indices=indices, masses=masses, positions=positions,
+            velocities=velocities, redshift=redshift, time=time,
+            assign_fields=self._assign_fields,
+            **extra,
         )

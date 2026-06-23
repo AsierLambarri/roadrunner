@@ -20,13 +20,18 @@ class SnapshotReader:
         Mapping from canonical names to YT field names.
     unit_base : dict or None, optional
         YT unit base.
+    assign_fields : list of str or None, optional
+        Attribute names for the assigner input.  Default preserved
+        in :class:`SnapshotData` (``["positions", "velocities"]``).
     """
 
-    def __init__(self, code: str, ptype: str, fields: dict, unit_base=None):
+    def __init__(self, code: str, ptype: str, fields: dict, unit_base=None,
+                 assign_fields=None):
         self.code = code.upper()
         self.ptype = ptype
         self.fields = fields
         self.unit_base = unit_base
+        self._assign_fields = assign_fields
 
     def load(self, file_path: str) -> SnapshotData:
         """Open and extract particle data from a snapshot file.
@@ -113,8 +118,9 @@ class SnapshotReader:
         velocities = rng.uniform(-200, 200, (n_particles, 3)).astype(np.float64)
         metallicity = rng.uniform(-2.0, 0.5, n_particles).astype(np.float64)
         return SnapshotData(
-            indices, masses, positions, velocities,
-            redshift=0.0, time=13.8, metallicity=metallicity,
+            indices=indices, masses=masses, positions=positions,
+            velocities=velocities, redshift=0.0, time=13.8,
+            metallicity=metallicity,
         )
 
     def _open(self, file_path: str):
@@ -212,11 +218,15 @@ class SnapshotReader:
         redshift = ds.current_redshift
         time = ds.current_time.to("Gyr").value
 
-        metallicity = None
-        if "metallicity" in f:
-            metallicity = ad[ptype, f["metallicity"]].value.astype(np.float64)
+        _required = {"index", "mass", "position", "velocity"}
+        extra = {}
+        for key, yt_field in f.items():
+            if key not in _required:
+                extra[key] = ad[ptype, yt_field].value.astype(np.float64)
 
         return SnapshotData(
-            indices, masses, positions, velocities,
-            redshift, time, metallicity,
+            indices=indices, masses=masses, positions=positions,
+            velocities=velocities, redshift=redshift, time=time,
+            assign_fields=self._assign_fields,
+            **extra,
         )
