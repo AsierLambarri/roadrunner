@@ -97,6 +97,7 @@ def _no_transform(values):
     values : ndarray
         Same array, unchanged.
     """
+    return values
 
 
 def _rank_transform(values, func_rank=np.log1p):

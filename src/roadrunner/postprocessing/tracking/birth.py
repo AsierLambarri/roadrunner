@@ -282,3 +282,13 @@ class BirthTracker:
         ----------
         state : dict
         """
+        self._active = state["active"]
+        self._finalized = state["finalized"]
+        self._heap = state["heap"]
+        heapq.heapify(self._heap)
+        self._birth_map = defaultdict(
+            set, {k: set(v) for k, v in state["birth_map"].items()}
+        )
+        self.factor = state["factor"]
+        self._last_snapshot = state["last_snapshot"]
+        self.enforce_initial_hosts = state["enforce_initial_hosts"]

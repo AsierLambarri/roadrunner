@@ -176,6 +176,12 @@ def _check_parameter_shapes(weights, means, covariances,
     -------
     weights, means, covariances : tuple of ndarray
     """
+    weights = _check_weights(weights, n_components)
+    means = _check_means(means, n_components, n_features)
+    covariances = _check_covariances(
+        covariances, cov_type, n_components, n_features
+    )
+    return weights, means, covariances
 
 
 
