@@ -49,6 +49,7 @@ def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=N
     indices : ndarray of shape (n_clusters,)
         Indices of the selected centers in ``X``.
     """
+    X = np.asarray(X, dtype=float)
     n_samples, n_features = X.shape
 
     if isinstance(random_state, (int, np.integer)):

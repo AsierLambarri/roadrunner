@@ -164,6 +164,7 @@ class HaloEnsemble:
         -------
         idx : ndarray of int64
         """
+        csc, _ = self.get_particles()
         return np.array(
             [i for i, col in enumerate(csc.column_indices) if col.size == 0],
             dtype=np.int64,
