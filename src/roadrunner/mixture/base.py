@@ -454,7 +454,7 @@ class BaseMixture(abc.ABC):
             dt = time() - tx
             if self.verbose > 1:
                 print(f"Iter {i}: time lapse {dt:.6f}, lower bound={ll:.6f}, change={change:.6f}")
-            if abs(change) < self.tol:
+            if abs(change) < self.tol * max(abs(lower_bound), 1.0):
                 self.converged_ = True
                 break
 
