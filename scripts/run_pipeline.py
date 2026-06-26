@@ -25,6 +25,17 @@ from roadrunner.pipeline import run_accretion_history, RunConfig
 
 
 def build_config_from_args(args):
+    extra_fields = {}
+    for ef in args.extra_fields or []:
+        parts = ef.split(":", 1)
+        name = parts[0].strip()
+        field = parts[1].strip() if len(parts) > 1 else name
+        extra_fields[name] = field
+
+    assign_fields = args.assign_fields
+    if assign_fields is not None:
+        assign_fields = [f.strip() for f in assign_fields]
+
     return RunConfig(
         merger_tree_path=args.merger_tree,
         particle_data_dir=args.particle_dir or args.output_dir,
@@ -37,13 +48,9 @@ def build_config_from_args(args):
             "mass": args.mass_field,
             "position": args.position_field,
             "velocity": args.velocity_field,
-            "metallicity": args.metallicity_field,
-        } if args.metallicity_field else {
-            "index": args.index_field,
-            "mass": args.mass_field,
-            "position": args.position_field,
-            "velocity": args.velocity_field,
+            **extra_fields,
         },
+        assign_fields=assign_fields,
         accretion_id=args.halo_id,
         start_snapshot=args.start_snapshot,
         end_snapshot=args.end_snapshot,
@@ -94,7 +101,12 @@ def main():
     parser.add_argument("--mass-field", type=str, default="particle_mass")
     parser.add_argument("--position-field", type=str, default="coordinates")
     parser.add_argument("--velocity-field", type=str, default="particle_velocity")
-    parser.add_argument("--metallicity-field", type=str, default=None)
+    parser.add_argument("--extra-field", action="append", dest="extra_fields",
+                        default=[], metavar="NAME:YT_FIELD",
+                        help="Extra particle field to save (not used in assigner)")
+    parser.add_argument("--assign-field", action="append", dest="assign_fields",
+                        default=None, metavar="ATTR_NAME",
+                        help="SnapshotData attr for assigner (repeatable; default: position,velocity)")
 
     # Target
     parser.add_argument("--halo-id", type=int, default=None,

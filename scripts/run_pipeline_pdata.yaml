@@ -1,0 +1,38 @@
+# Roadrunner pipeline configuration — particle data source
+# ========================================================
+# Run with: python scripts/run_pipeline_yaml_pdata.py
+#           python scripts/run_pipeline_yaml.py --config scripts/run_pipeline_pdata.yaml
+
+reader_type: pdata
+
+merger_tree_path: halo685x12_bgmm/New_tree_expanded_685x12.csv
+equivalence_path: halo685x12_bgmm/equivalence.csv
+particle_data_dir: halo685x12_bgmm
+
+assignment_method: bgmm
+use_bgmm_priors: true
+dtype_math: float64
+cov_type: full
+max_iter: 10
+tol: 1e-2
+min_particles: 10
+reg_covar: 1e-6
+
+halo_model: kepler
+n_los: 15
+search_factor: 1.0
+comoving: true
+
+use_gmm_centers: true
+min_particles_structural: 30
+ssc_nmin: 30
+ssc_alpha: 0.9
+dynstate_snapshots: [-2, -1]
+
+birth_window_factor: 5.0
+enforce_initial_hosts: true
+
+output_dir: test_output/halo685x12_pdata
+save_particles: true
+save_assignment: true
+float_atol: 1e-4

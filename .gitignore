@@ -31,12 +31,8 @@ htmlcov/
 # Test data (potentially large files)
 test_data/
 
-# Test script output
-test_output/
-
 # Scripts (development-only, not distributed)
-scripts/
-!scripts/run_pipeline.py
+scripts/.gitkeep
 
 # Planning documents (not part of source code)
 planning/
@@ -45,9 +41,3 @@ re-planning/
 # Draft development files
 _XGMMAssigner.py
 semiempirical.py
-test_scripts/generate_mock_priors.py
-test_scripts/check_initial_params_vs_catalogue.py
-test_scripts/generate_mock_mass_loss.py
-test_scripts/test_bgmm_vs_sklearn.py
-test_scripts/mixtures.py
-test_scripts/test_bayes_priors.py
