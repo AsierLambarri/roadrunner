@@ -110,10 +110,14 @@ class AccretionPipeline:
                 snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
             )
             previous_resp_sim = snap_result.previous_resp_sim
+            bt = self.orchestrator.birth_tracker
+            at = self.orchestrator.assembly_tracker
             save_checkpoint(self._checkpoint_path, {
                 "last_snapshot": snap_id,
                 "previous_resp": previous_resp_sim,
                 "previous_parameters": snap_result.result.fitted_parameters,
+                "birth_tracker": bt._get_state() if bt is not None else None,
+                "assembly_tracker": at._get_state() if at is not None else None,
             })
 
         self._finalize(t_start)
@@ -204,6 +208,14 @@ class AccretionPipeline:
         previous_parameters = ckpt.get("previous_parameters")
         if previous_parameters is not None:
             self.orchestrator.assigner.parameters = previous_parameters
+
+        bt_state = ckpt.get("birth_tracker")
+        if bt_state is not None and self.orchestrator.birth_tracker is not None:
+            self.orchestrator.birth_tracker._set_state(bt_state)
+        at_state = ckpt.get("assembly_tracker")
+        if at_state is not None and self.orchestrator.assembly_tracker is not None:
+            self.orchestrator.assembly_tracker._set_state(at_state)
+
         if next_idx >= len(snapshot_ids):
             print(f"Snapshot {last_completed} was the last snapshot. Nothing to resume.")
             return previous_resp_sim, len(snapshot_ids)

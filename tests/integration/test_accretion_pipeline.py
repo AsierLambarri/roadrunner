@@ -73,10 +73,10 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers
         def load(self, path):
             p = np.load(os.path.join(DATA_DIR, "particles.npz"))
             return SnapshotData(
-                indices=np.arange(p["coords"].shape[0], dtype=np.uint64),
-                masses=p["masses"],
-                positions=p["coords"][:, :3],
-                velocities=p["coords"][:, 3:6],
+                index=np.arange(p["coords"].shape[0], dtype=np.uint64),
+                mass=p["masses"],
+                position=p["coords"][:, :3],
+                velocity=p["coords"][:, 3:6],
                 redshift=0.0, time=13.8,
             )
 

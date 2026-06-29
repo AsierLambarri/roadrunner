@@ -2,15 +2,15 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._mcf_types import AssignmentStatistics
-from roadrunner.clustering.assignment.statistics import XGMMAssignerStatistics
+from roadrunner.clustering.assignment.statistics import GMMAssignerStatistics
 
 
-class TestXGMMAssignerStatistics:
+class TestGMMAssignerStatistics:
     def test_protocol_conformance(self):
-        assert isinstance(XGMMAssignerStatistics(), AssignmentStatistics)
+        assert isinstance(GMMAssignerStatistics(), AssignmentStatistics)
 
     def test_initial_state(self):
-        s = XGMMAssignerStatistics()
+        s = GMMAssignerStatistics()
         assert s.unassigned == 0
         assert s.fragments == 0
         assert np.isnan(s.avg_conf)
@@ -19,7 +19,7 @@ class TestXGMMAssignerStatistics:
 
     def test_all_assigned_no_soft(self):
         df = pd.DataFrame({"array_index": np.arange(100), "Sub_tree_id": [1] * 100})
-        s = XGMMAssignerStatistics().compute(df, {}, {})
+        s = GMMAssignerStatistics().compute(df, {}, {})
         assert s.unassigned == 0
         assert s.fragments == 0
         assert np.isnan(s.avg_conf)
@@ -31,7 +31,7 @@ class TestXGMMAssignerStatistics:
             "array_index": np.arange(110),
             "Sub_tree_id": [1] * 100 + [-1] * 10,
         })
-        s = XGMMAssignerStatistics().compute(df, {}, {})
+        s = GMMAssignerStatistics().compute(df, {}, {})
         assert s.unassigned == 10
         # Sub_tree_id 1 has 100 particles → not a fragment
         assert s.fragments == 0
@@ -41,7 +41,7 @@ class TestXGMMAssignerStatistics:
             "array_index": np.arange(15),
             "Sub_tree_id": [1] * 10 + [2] * 3 + [3] * 2,
         })
-        s = XGMMAssignerStatistics().compute(df, {}, {})
+        s = GMMAssignerStatistics().compute(df, {}, {})
         assert s.fragments == 2  # ids 2 and 3 have < 10
 
     def test_avg_conf_and_entropy(self):
@@ -53,7 +53,7 @@ class TestXGMMAssignerStatistics:
             1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
             2: (np.array([2, 3], dtype=np.uint64), np.array([0.7, 0.6], dtype=np.float32)),
         }
-        s = XGMMAssignerStatistics().compute(df, resp_map, {})
+        s = GMMAssignerStatistics().compute(df, resp_map, {})
         # avg_conf = mean([0.9, 0.8, 0.7, 0.6]) = 0.75
         assert np.isclose(s.avg_conf, 0.75)
         assert not np.isnan(s.avg_entropy)
@@ -68,7 +68,7 @@ class TestXGMMAssignerStatistics:
             1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
         }
         params = {1: {"covariance_condition": 1000.0}}
-        s = XGMMAssignerStatistics().compute(df, resp_map, params)
+        s = GMMAssignerStatistics().compute(df, resp_map, params)
         assert np.isclose(s.avg_cond, 1000.0, atol=1.0)
 
     def test_avg_cond_from_full_cov(self):
@@ -80,7 +80,7 @@ class TestXGMMAssignerStatistics:
             1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
         }
         params = {1: {"covariance_condition": 10.0}, 2: {"covariance_condition": 15.0}}
-        s = XGMMAssignerStatistics().compute(df, resp_map, params)
+        s = GMMAssignerStatistics().compute(df, resp_map, params)
         assert np.isclose(s.avg_cond, 12.5, atol=0.5)  # mean(10, 15) = 12.5
 
     def test_avg_retention(self):
@@ -98,11 +98,11 @@ class TestXGMMAssignerStatistics:
             [np.ones(50, dtype=np.float32), np.ones(50, dtype=np.float32)],
             column_id=np.array([1, 2], dtype=np.int64),
         )
-        s = XGMMAssignerStatistics().compute(df, resp_map, {}, boundness_csc=bound_csc)
+        s = GMMAssignerStatistics().compute(df, resp_map, {}, boundness_csc=bound_csc)
         assert not np.isnan(s.avg_retention)
 
     def test_values_property(self):
-        s = XGMMAssignerStatistics()
+        s = GMMAssignerStatistics()
         df = pd.DataFrame({"array_index": np.arange(5), "Sub_tree_id": [1] * 5})
         s.compute(df, {}, {})
         v = s.values
@@ -115,4 +115,4 @@ class TestXGMMAssignerStatistics:
     def test_gmm_assigner_integration(self):
         from roadrunner.clustering.assignment.gmm import XGMMAssigner
         a = XGMMAssigner(cov_type="diagonal", max_iter=1)
-        assert isinstance(a.statistics, XGMMAssignerStatistics)
+        assert isinstance(a.statistics, GMMAssignerStatistics)

@@ -18,10 +18,10 @@ def _make_snap_data(n_particles=200, redshift=0.0, time=13.8):
     velocities = _RNG.uniform(-10, 10, (n_particles, 3)).astype(np.float64)
     masses = _RNG.uniform(1e4, 1e6, n_particles).astype(np.float64)
     return SnapshotData(
-        indices=np.arange(n_particles, dtype=np.uint64),
-        masses=masses,
-        positions=positions,
-        velocities=velocities,
+        index=np.arange(n_particles, dtype=np.uint64),
+        mass=masses,
+        position=positions,
+        velocity=velocities,
         redshift=redshift,
         time=time,
     )
