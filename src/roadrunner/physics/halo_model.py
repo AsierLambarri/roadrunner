@@ -142,6 +142,41 @@ class HaloModel:
             r = xyz_or_r * self._1plusz
         return self._inner.tidal_denominator(r)
 
+    def compute_energy(self, xyz_or_r, vxyz_or_mag, relative=True):
+        """Total specific orbital energy ``E = Φ + ½v²``.
+
+        Parameters
+        ----------
+        xyz_or_r : ndarray of shape (n, 3) or (n,)
+            Positions or radii.  If 2-D and ``relative=True`` they are
+            already relative to the halo centre; if ``relative=False``
+            ``self.xcen`` is subtracted.
+        vxyz_or_mag : ndarray of shape (n, 3) or (n,)
+            Velocities or speed magnitudes.  If 2-D and ``relative=True``
+            they are already relative to the halo bulk velocity; if
+            ``relative=False`` ``self.velocity`` is subtracted.
+        relative : bool, default=True
+            Whether the 3-D inputs are already relative to the halo.
+
+        Returns
+        -------
+        E : ndarray
+            Specific orbital energy (negative = bound).
+        """
+        if xyz_or_r.ndim == 2:
+            pos = xyz_or_r if relative else xyz_or_r - self.xcen
+            r = np.linalg.norm(pos, axis=1) * self._1plusz
+        else:
+            r = xyz_or_r * self._1plusz
+
+        if vxyz_or_mag.ndim == 2:
+            vel = vxyz_or_mag if relative else vxyz_or_mag - self.velocity
+            v2 = np.sum(vel**2, axis=1)
+        else:
+            v2 = vxyz_or_mag**2
+
+        return self._inner.potential(r) + 0.5 * v2
+
     @classmethod
     def from_snapshot_row(cls, row, model="kepler", comoving=True):
         """Construct a HaloModel from a merger-tree row.

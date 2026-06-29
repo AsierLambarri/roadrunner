@@ -17,6 +17,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from roadrunner.physics.constants import G_KM
+from roadrunner.physics.potentials import KeplerPotential
 
 
 def compute_halo_bound_particles(
@@ -28,9 +29,14 @@ def compute_halo_bound_particles(
 
     Uses a KD-tree to efficiently find particles within ``search_factor``
     times the virial radius of each halo, then evaluates boundness
-    by comparing the total particle energy (kinetic + potential) to
-    the escape velocity.  Bound particles are stored on each halo
-    via :meth:`HaloModel.set_boundness`.
+    via the total specific orbital energy ``E = Φ + ½v²``.
+    Bound particles are stored on each halo via
+    :meth:`HaloModel.set_boundness`.
+
+    For Keplerian potentials the dynamical time is computed from the
+    orbital semi-major axis derived from the orbital energy, giving
+    the correct timescale for elliptical orbits.  For NFW potentials
+    the instantaneous radius is used.
 
     Parameters
     ----------
@@ -53,6 +59,8 @@ def compute_halo_bound_particles(
     empty_indices = np.array([], dtype=np.uint64)
     empty_values = np.array([], dtype=np.float32)
 
+    _2PI = 2 * np.pi
+
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
@@ -66,15 +74,22 @@ def compute_halo_bound_particles(
         rel_pos = positions[local] - halo.xcen
         rel_vel = velocities[local] - halo.velocity
         dist = np.linalg.norm(rel_pos, axis=1)
-        vel_mags = np.linalg.norm(rel_vel, axis=1)
 
+        E = halo.compute_energy(rel_pos, rel_vel, relative=True)
         v_vir_sq = G_KM * halo._inner.M / halo.virial_radius * (1 + halo.redshift)
-        phi = halo.potential(dist)
-        v_esc = np.sqrt(2 * np.abs(phi))
-        boundness = 0.5 * (v_esc**2 - vel_mags**2) / v_vir_sq
-        tdyns = halo.dynamical_time(dist)
+        boundness = -E / v_vir_sq
 
-        bound = vel_mags <= v_esc
+        if isinstance(halo._inner, KeplerPotential):
+            a = -0.5 * halo._inner.G * halo._inner.M / np.maximum(-E, 1e-30)
+            tdyns = np.zeros_like(a, dtype=np.float32)
+            bound_a = a > 0
+            tdyns[bound_a] = (_2PI * np.sqrt(
+                a[bound_a]**3 / (halo._inner.G * halo._inner.M)
+            )).astype(np.float32)
+        else:
+            tdyns = halo.dynamical_time(dist).astype(np.float32)
+
+        bound = E < 0
         valid = local[bound]
         if valid.size == 0:
             halo.set_boundness(empty_indices, empty_values, empty_values)
@@ -82,7 +97,7 @@ def compute_halo_bound_particles(
             halo.set_boundness(
                 valid.astype(np.uint64),
                 boundness[bound].astype(np.float32),
-                tdyns[bound].astype(np.float32),
+                tdyns[bound],
             )
 
     return halos
