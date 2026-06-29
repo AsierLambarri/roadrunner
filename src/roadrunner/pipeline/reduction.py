@@ -102,7 +102,7 @@ def reduce_snapshot(
         accretion_id=config.accretion_id,
         particle_masses=snap_data.mass,
         particle_coords=coords,
-        galaxy_particles=galaxy_particles,
+        galaxy_bound=galaxy_bound,
         galaxy_table=galaxy_table,
         host_props=host_props,
         halo_model=config.halo_model,

@@ -259,7 +259,7 @@ def compute_galaxy_properties(
     accretion_id,
     particle_masses,
     particle_coords,
-    galaxy_particles,
+    galaxy_bound,
     galaxy_table,
     host_props,
     halo_model,
@@ -283,7 +283,8 @@ def compute_galaxy_properties(
         Host galaxy ID.
     particle_masses : ndarray of shape (n,)
     particle_coords : ndarray of shape (n, 6)
-    galaxy_particles : dict of {int: ndarray}
+    galaxy_bound : dict of {int: ndarray}
+        Bound particle array indices per galaxy.
     galaxy_table : DataFrame
         Merger-tree rows indexed by ``Sub_tree_id``.
     host_props : dict
@@ -330,11 +331,11 @@ def compute_galaxy_properties(
         host_c = host_props["virial_radius"] / host_props["scale_radius"]
         host_potential = get_potential(halo_model, M=host_mass, Rs=host_Rs, c=host_c)
 
-    if -1 in galaxy_particles:
-        del galaxy_particles[-1]
+    if -1 in galaxy_bound:
+        del galaxy_bound[-1]
 
     records = []
-    for sid, indices in galaxy_particles.items():
+    for sid, indices in galaxy_bound.items():
         if indices.size == 0:
             continue
 
