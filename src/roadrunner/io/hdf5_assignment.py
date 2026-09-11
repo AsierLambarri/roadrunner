@@ -78,7 +78,8 @@ class HDF5AssignmentWriter:
         -------
         dtype : numpy.dtype
         """
-        return select_uint_dtype(int(max(gids)) if len(gids) > 0 else 1)
+        return select_uint_dtype(
+            int(max(gids)) if len(gids) > 0 else 1, "(galaxy ids)")
 
     def _pick_float_dtype(self, arr):
         """Smallest float dtype that preserves the data within ``float_atol``.
@@ -92,7 +93,7 @@ class HDF5AssignmentWriter:
         dtype : numpy.dtype
         """
         max_abs = float(np.abs(arr).max()) if arr.size > 0 else 1.0
-        return select_float_dtype(max_abs, self._float_atol)
+        return select_float_dtype(max_abs, self._float_atol, msg="(assignment values)")
 
     def write_snapshot(self, snapshot_id, time,
                        assignment_result, boundness_csc):
@@ -138,7 +139,8 @@ class HDF5AssignmentWriter:
                 grp = galaxies_grp.require_group(str(gid))
 
                 pid_dtype = select_uint_dtype(
-                    int(resp_idx.max()) if resp_idx.size > 0 else 1
+                    int(resp_idx.max()) if resp_idx.size > 0 else 1,
+                    "(particle indices)",
                 )
                 grp.create_dataset(
                     "indices",
@@ -168,7 +170,8 @@ class HDF5AssignmentWriter:
                 weight = params.get("weight")
                 if weight is not None:
                     w = float(weight)
-                    w_dtype = select_float_dtype(w, self._float_atol)
+                    w_dtype = select_float_dtype(
+                        w, self._float_atol, msg="(component weights)")
                     grp.create_dataset(
                         "weight",
                         data=np.array([w], dtype=w_dtype),

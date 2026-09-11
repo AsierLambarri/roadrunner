@@ -18,13 +18,15 @@ import warnings
 import numpy as np
 
 
-def select_uint_dtype(max_val):
+def select_uint_dtype(max_val, msg=None):
     """Return the smallest unsigned integer dtype that can hold ``max_val``.
 
     Parameters
     ----------
     max_val : int
         Maximum value to be stored.
+    msg : str, optional
+        Extra context appended to the warning when no dtype suffices.
 
     Returns
     -------
@@ -40,17 +42,20 @@ def select_uint_dtype(max_val):
         return np.uint32
     elif bits <= 64:
         return np.uint64
-    warnings.warn("uint64 insufficient for requested precision")
+    detail = f" {msg}" if msg else ""
+    warnings.warn(f"uint64 insufficient for requested precision{detail}")
     return np.uint64
 
 
-def select_int_dtype(max_val):
+def select_int_dtype(max_val, msg=None):
     """Return the smallest signed integer dtype that can hold ``max_val``.
 
     Parameters
     ----------
     max_val : int
         Maximum absolute value to be stored.
+    msg : str, optional
+        Extra context appended to the warning when no dtype suffices.
 
     Returns
     -------
@@ -66,11 +71,12 @@ def select_int_dtype(max_val):
         return np.int32
     elif bits <= 64:
         return np.int64
-    warnings.warn("int64 insufficient for requested precision")
+    detail = f" {msg}" if msg else ""
+    warnings.warn(f"int64 insufficient for requested precision{detail}")
     return np.int64
 
 
-def select_float_dtype(max_value, abs_tol=1e-4):
+def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None):
     """Return the smallest floating-point dtype with sufficient precision.
 
     Parameters
@@ -79,19 +85,31 @@ def select_float_dtype(max_value, abs_tol=1e-4):
         Maximum absolute value to be represented.
     abs_tol : float, default=1e-4
         Required absolute tolerance (half the spacing at ``max_value``).
+    f128 : bool, default=False
+        Include ``float128`` at the top of the precision ladder.
+    msg : str, optional
+        Extra context appended to the warning when no dtype suffices.
 
     Returns
     -------
     dtype : np.dtype
-        One of ``float16``, ``float32``, ``float64``, or ``float128``.
+        One of ``float16``, ``float32``, ``float64`` (or ``float128``
+        when ``f128=True``).
     """
     max_value = abs(max_value)
-    for dtype in (np.float16, np.float32, np.float64, np.float128):
+    ladder = [np.float16, np.float32, np.float64]
+    if f128:
+        float128 = getattr(np, "float128", None)
+        if float128 is not None:
+            ladder.append(float128)
+    for dtype in ladder:
         with np.errstate(all='ignore'):
             x = dtype(max_value)
             if np.spacing(x) / 2 <= abs_tol:
                 return dtype
-    warnings.warn("float128 insufficient for requested precision")
+    limit = "float128" if f128 else "float64"
+    detail = f" {msg}" if msg else ""
+    warnings.warn(f"{limit} insufficient for requested precision{detail}")
     return np.float64
 
 

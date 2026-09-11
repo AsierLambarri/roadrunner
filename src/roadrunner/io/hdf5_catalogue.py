@@ -74,7 +74,8 @@ class HDF5CatalogueWriter:
             self._del_existing(hdr, "accretion_id")
             hdr.create_dataset("accretion_id", data=accretion_id)
             self._del_existing(hdr, "snapshots")
-            snap_arr = np.asarray(snapshots, dtype=select_uint_dtype(max(snapshots)))
+            snap_arr = np.asarray(
+                snapshots, dtype=select_uint_dtype(max(snapshots), "(snapshot ids)"))
             hdr.create_dataset("snapshots", data=snap_arr, compression="gzip")
             self._del_existing(hdr, "config")
             config_json = json.dumps(config_dict, default=str)

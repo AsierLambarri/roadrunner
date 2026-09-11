@@ -93,7 +93,8 @@ class HDF5ParticleWriter:
             scaler_grp.create_dataset("scale", data=scaler.scale_)
 
             float_dtype = select_float_dtype(
-                max(abs(scaled).max(), 1e-10), self._float_atol
+                max(abs(scaled).max(), 1e-10), self._float_atol,
+                msg="(scaled positions/velocities)",
             )
 
             data.create_dataset(
@@ -108,7 +109,8 @@ class HDF5ParticleWriter:
             )
 
             mass_dtype = select_float_dtype(
-                float(snapshot_data.mass.max()), self._float_atol
+                float(snapshot_data.mass.max()), self._float_atol,
+                msg="(particle masses)",
             )
             data.create_dataset(
                 "masses",
@@ -116,7 +118,8 @@ class HDF5ParticleWriter:
                 compression="gzip",
             )
 
-            idx_dtype = select_uint_dtype(int(snapshot_data.index.max()))
+            idx_dtype = select_uint_dtype(
+                int(snapshot_data.index.max()), "(particle indices)")
             data.create_dataset(
                 "indices",
                 data=snapshot_data.index.astype(idx_dtype, copy=False),
@@ -126,7 +129,10 @@ class HDF5ParticleWriter:
             for name in snapshot_data.extra_fields:
                 arr = getattr(snapshot_data, name)
                 if np.issubdtype(arr.dtype, np.floating):
-                    dtype = select_float_dtype(float(arr.max()), self._float_atol)
+                    dtype = select_float_dtype(
+                        float(arr.max()), self._float_atol,
+                        msg=f"(extra field {name!r})",
+                    )
                 else:
                     dtype = arr.dtype
                 data.create_dataset(
