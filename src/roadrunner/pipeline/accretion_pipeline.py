@@ -1,4 +1,4 @@
-"""Full accretion-history pipeline orchestration with checkpoint/resume."""
+"""Full accretion-history pipeline orchestration with error-checkpoint/resume."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from roadrunner.pipeline.snapshot_orchestrator import SnapshotOrchestrator
 class AccretionPipeline:
     """Orchestrates the full accretion-history pipeline over multiple snapshots.
 
-    Manages snapshot iteration, checkpoint/resume, logging, and I/O
+    Manages snapshot iteration, error-checkpoint/resume, logging, and I/O
     delegation to catalogue, particle, and assignment writers.
 
     Parameters
@@ -103,24 +103,53 @@ class AccretionPipeline:
             self._initialize_run(snapshot_ids)
 
         t_start = time.time()
+        last_good = None  # (snap_id, previous_resp_sim, fitted_parameters)
         for idx in range(start_idx, len(snapshot_ids)):
             snap_id = snapshot_ids[idx]
             print(f"\nSnapshot {snap_id}  ({idx + 1}/{len(snapshot_ids)})")
-            snap_result = self._process_snapshot(
-                snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
-            )
+            try:
+                snap_result = self._process_snapshot(
+                    snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
+                )
+            except (Exception, KeyboardInterrupt):
+                self._save_error_checkpoint(last_good)
+                raise
             previous_resp_sim = snap_result.previous_resp_sim
-            bt = self.orchestrator.birth_tracker
-            at = self.orchestrator.assembly_tracker
+            last_good = (
+                snap_id, previous_resp_sim, snap_result.result.fitted_parameters,
+            )
+
+        self._finalize(t_start)
+
+    def _save_error_checkpoint(self, last_good) -> None:
+        """Persist resume state after a snapshot failure (best effort).
+
+        Builds the checkpoint payload exactly as the former per-snapshot
+        save did (same keys, same :func:`save_checkpoint` call) for the
+        last fully completed snapshot, using live tracker state. Never
+        raises: a failing error-save (e.g. ``MemoryError`` while pickling)
+        must not mask the original failure; it only prints a warning.
+
+        Note: if the failure struck after the failed snapshot had already
+        mutated the trackers, resuming reprocesses that snapshot and its
+        in-flight particles' birth weights are counted twice. Failures
+        before tracker updates resume exactly.
+        """
+        if last_good is None:
+            return  # nothing completed; a fresh rerun is equivalent
+        snap_id, previous_resp_sim, fitted_parameters = last_good
+        bt = self.orchestrator.birth_tracker
+        at = self.orchestrator.assembly_tracker
+        try:
             save_checkpoint(self._checkpoint_path, {
                 "last_snapshot": snap_id,
                 "previous_resp": previous_resp_sim,
-                "previous_parameters": snap_result.result.fitted_parameters,
+                "previous_parameters": fitted_parameters,
                 "birth_tracker": bt._get_state() if bt is not None else None,
                 "assembly_tracker": at._get_state() if at is not None else None,
             })
-
-        self._finalize(t_start)
+        except Exception as exc:
+            print(f"WARNING: error checkpoint could not be saved: {exc}")
 
     def _filter_snapshots(self, start_snapshot, end_snapshot):
         """Filter the full snapshot list to the requested range.
@@ -285,7 +314,8 @@ class AccretionPipeline:
         Raises
         ------
         Exception
-            Propagated after logging the error and saving checkpoint.
+            Propagated after logging the error; the caller persists an
+            error checkpoint before it reaches the user.
         """
         try:
             t0 = time.time()
@@ -344,10 +374,10 @@ class AccretionPipeline:
 
             return snap_result
 
-        except Exception as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             self._log_error(snap_id, exc)
             print(f"FATAL: {type(exc).__name__} on snapshot {snap_id}: {exc}")
-            print(f"Checkpoint saved. See {self._error_log_path} for traceback.")
+            print(f"Error checkpoint will be saved. See {self._error_log_path} for traceback.")
             raise
 
     def _finalize(self, t_start):

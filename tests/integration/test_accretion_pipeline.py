@@ -194,6 +194,51 @@ class TestAccretionPipeline:
         last_snap = cat_reader.read_last_snapshot()
         assert last_snap is not None
 
+    def test_successful_run_writes_no_checkpoint(self, tmp_path):
+        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        pipeline.run(str(tmp_path))
+
+        assert not os.path.exists(os.path.join(str(tmp_path), "checkpoint.zst"))
+
+    def test_keyboard_interrupt_saves_checkpoint(self, tmp_path):
+        from roadrunner.io.serialization import load_checkpoint
+
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_load = mock_reader.load
+
+        call_count = [0]
+
+        def interrupting_load(path):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise KeyboardInterrupt("Simulated user interrupt on snapshot 1")
+            return original_load(path)
+
+        mock_reader.load = interrupting_load
+
+        with pytest.raises(KeyboardInterrupt, match="Simulated user interrupt"):
+            pipeline.run(str(tmp_path))
+
+        error_log_path = os.path.join(str(tmp_path), "error.log")
+        assert os.path.exists(error_log_path)
+        with open(error_log_path) as f:
+            content = f.read()
+        assert "KeyboardInterrupt" in content
+        assert "Snapshot 1" in content
+
+        ckpt_path = os.path.join(str(tmp_path), "checkpoint.zst")
+        assert os.path.exists(ckpt_path)
+        ckpt = load_checkpoint(ckpt_path)
+        assert ckpt["last_snapshot"] == 0
+
+        call_count[0] = 0
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        resume_pipeline.run(str(tmp_path), resume=True)
+
+        cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
+        last_snap = cat_reader.read_last_snapshot()
+        assert last_snap is not None
+
     def test_corrupt_checkpoint_raises(self, tmp_path):
         output_dir = str(tmp_path)
         os.makedirs(output_dir, exist_ok=True)
