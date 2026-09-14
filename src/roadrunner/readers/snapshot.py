@@ -7,6 +7,9 @@ from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers._defaults import METALLICITY_COEFF0, METALLICITY_COEFF1, SOLAR_METALLICITY
 
 
+_TRACK_FILTER_NAME = "_rr_track"
+
+
 class SnapshotReader:
     """YT-based snapshot reader for cosmological simulations.
 
@@ -32,69 +35,99 @@ class SnapshotReader:
         self.fields = fields
         self.unit_base = unit_base
         self._assign_fields = assign_fields
+        self._particle_filter = None
+        self._filter_name = f"{_TRACK_FILTER_NAME}_{id(self):x}"
+        self._active_ptype = self.ptype
 
-    def load(self, file_path: str) -> SnapshotData:
+    @property
+    def particle_filter(self) -> np.ndarray | None:
+        """Currently configured persistent particle-ID filter (or None)."""
+        return self._particle_filter
+
+    def load(self, file_path: str,
+             particle_indices: np.ndarray | None = None) -> SnapshotData:
         """Open and extract particle data from a snapshot file.
 
         Parameters
         ----------
         file_path : str
             Path to the snapshot file.
+        particle_indices : ndarray or None, optional
+            If given, keep only these simulation IDs for this call only,
+            overriding any persistent filter.
 
         Returns
         -------
         snap_data : SnapshotData
         """
+        ids = (particle_indices if particle_indices is not None
+               else self._particle_filter)
         ds = self._open(file_path)
+        self._active_ptype = self.ptype
+        if ids is not None:
+            self._active_ptype = self._attach_index_filter(ds, ids)
         return self._extract(ds)
 
-    def load_with_filter(
-        self, file_path: str, particle_indices: np.ndarray
-    ) -> SnapshotData:
-        """Load a snapshot but only keep specified particles.
+    def set_particle_filter(self, particle_indices: np.ndarray) -> None:
+        """Set a persistent ID filter applied to every subsequent load()."""
+        self._particle_filter = np.asarray(particle_indices, dtype=np.uint64)
+
+    def erase_particle_filter(self) -> None:
+        """Remove the persistent ID filter (back to loading all particles)."""
+        self._particle_filter = None
+
+    def select_indices(self, file_path: str, sphere=None, bbox=None) -> np.ndarray:
+        """Return simulation IDs inside a comoving region (YT-native).
 
         Parameters
         ----------
         file_path : str
             Path to the snapshot file.
-        particle_indices : ndarray
-            Indices of particles to keep.
+        sphere : tuple or None, optional
+            Sphere selection ``((cx, cy, cz), radius)`` in comoving kpc.
+        bbox : tuple or None, optional
+            Box selection ``((xlo, ylo, zlo), (xhi, yhi, zhi))`` in comoving kpc.
 
         Returns
         -------
-        snap_data : SnapshotData
+        indices : ndarray of uint64
+            Simulation IDs of the particles inside the region.
         """
+        if (sphere is None) == (bbox is None):
+            raise ValueError("Provide exactly one of `sphere` or `bbox`.")
         ds = self._open(file_path)
-        ds = self.apply_particle_filter(ds, particle_indices)
-        return self._extract(ds)
+        if sphere is not None:
+            (cx, cy, cz), radius = sphere
+            container = ds.sphere(ds.arr((cx, cy, cz), "kpccm"),
+                                  ds.arr(radius, "kpccm"))
+        else:
+            (xlo, ylo, zlo), (xhi, yhi, zhi) = bbox
+            container = ds.box(ds.arr((xlo, ylo, zlo), "kpccm"),
+                               ds.arr((xhi, yhi, zhi), "kpccm"))
+        return container[self.ptype, self.fields["index"]].value.astype(np.uint64)
 
-    def apply_particle_filter(self, ds, particle_indices):
-        """Apply a YT particle filter to select a subset of particles.
+    def _attach_index_filter(self, ds, particle_indices: np.ndarray) -> str:
+        """Register and attach a YT particle filter for the given IDs.
 
-        Parameters
-        ----------
-        ds : yt.Dataset
-            The open dataset.
-        particle_indices : ndarray
-            Indices of particles to include.
+        Layers on top of the code-specific ``self.ptype`` filter installed
+        by ``_open``; re-created on every opened dataset.
 
         Returns
         -------
-        ds : yt.Dataset
-            Dataset with the filter applied.
+        ptype : str
+            Name of the active filtered particle type.
         """
-        filter_name = f"_snap_filter_{id(particle_indices)}"
+        ids = np.asarray(particle_indices, dtype=np.uint64)
+        index_field = self.fields["index"]
         yt.add_particle_filter(
-            filter_name,
+            self._filter_name,
             function=lambda pfilter, data: np.isin(
-                data[pfilter.filtered_type, self.fields["index"]],
-                particle_indices,
-            ),
+                data[pfilter.filtered_type, index_field], ids),
+            requires=[index_field],
             filtered_type=self.ptype,
-            requires=[self.fields["index"]],
         )
-        ds.add_particle_filter(filter_name)
-        return ds
+        ds.add_particle_filter(self._filter_name)
+        return self._filter_name
 
     @staticmethod
     def mock_data(n_particles: int, seed: int = 42) -> SnapshotData:
@@ -194,6 +227,9 @@ class SnapshotReader:
     def _extract(self, ds) -> SnapshotData:
         """Extract particle data from an opened YT dataset.
 
+        Reads from ``self._active_ptype``: the raw type, or the tracking
+        filter name when a particle-ID filter is active.
+
         Parameters
         ----------
         ds : yt.Dataset
@@ -204,7 +240,7 @@ class SnapshotReader:
         snap_data : SnapshotData
         """
         ad = ds.all_data()
-        ptype = self.ptype
+        ptype = self._active_ptype
         f = self.fields
 
         indices = ad[ptype, f["index"]].value.astype(np.uint64)

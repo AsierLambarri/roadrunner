@@ -47,6 +47,9 @@ def main():
     print(f"  Output dir:   {config.output_dir}")
     print(f"  Snapshots:    {config.start_snapshot or 'first'} \u2192 "
           f"{config.end_snapshot or 'last'}")
+    if config.selection_snapshot is not None:
+        print(f"  Selection:    snapshot {config.selection_snapshot} "
+              f"sphere={config.selection_sphere} bbox={config.selection_bbox}")
 
     run_accretion_history(config)
     print(f"\nDone. Output in {config.output_dir}")

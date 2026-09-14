@@ -23,6 +23,8 @@ n_los: 15
 search_factor: 1.0
 comoving: true
 
+# Particle selection (selection_snapshot/sphere/bbox) is supported by all readers (comoving kpc).
+
 use_gmm_centers: true
 min_particles_structural: 30
 ssc_nmin: 30

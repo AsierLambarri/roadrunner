@@ -41,6 +41,14 @@ npz_mock_sim: false             # true for roadrunner mock NPZ format
 # start_snapshot: 0             # First snapshot (or -5 for "5th from last")
 # end_snapshot: 100             # Last snapshot (or -1 for "last")
 
+# ── Particle selection (all readers) ─────────────────────────────────────────
+# Select particle IDs at one snapshot, then track only those across the run.
+# Coordinates are comoving kpc (same units the YT reader uses).
+# Provide exactly one of selection_sphere or selection_bbox.
+# selection_snapshot: 100                               # reference snapshot
+# selection_sphere: [[0.0, 0.0, 0.0], 50.0]             # [[cx, cy, cz], radius]
+# selection_bbox: [[-50, -50, -50], [50, 50, 50]]       # [lo, hi] corners
+
 # ── Assigner ──────────────────────────────────────────────────────────────────
 assignment_method: gmm          # gmm (standard EM) or bgmm (variational Bayesian)
 use_bgmm_priors: true           # Use previous snapshot as BGMM prior (bgmm only)

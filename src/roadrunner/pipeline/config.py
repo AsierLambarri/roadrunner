@@ -32,6 +32,10 @@ class RunConfig:
     start_snapshot: int | None = None
     end_snapshot: int | None = None
 
+    selection_snapshot: int | None = None
+    selection_sphere: list | None = None
+    selection_bbox: list | None = None
+
     assignment_method: str = "gmm"
     use_bgmm_priors: bool = True
     dtype_math: str = "float64"
@@ -96,3 +100,32 @@ class RunConfig:
             val = getattr(self, field_name, None)
             if val is not None:
                 object.__setattr__(self, field_name, float(val))
+
+        if self.selection_snapshot is not None:
+            object.__setattr__(self, "selection_snapshot",
+                               int(self.selection_snapshot))
+            _modes = sum(m is not None for m in
+                         (self.selection_sphere, self.selection_bbox))
+            if _modes != 1:
+                raise ValueError(
+                    "selection_snapshot requires exactly one of "
+                    "selection_sphere or selection_bbox")
+            if self.selection_sphere is not None:
+                s = self.selection_sphere
+                if (len(s) != 2 or len(s[0]) != 3
+                        or not all(isinstance(v, (int, float)) for v in s[0])
+                        or s[1] <= 0):
+                    raise ValueError(
+                        "selection_sphere must be [[cx, cy, cz], radius] "
+                        "with radius > 0")
+            if self.selection_bbox is not None:
+                b = self.selection_bbox
+                if (len(b) != 2 or any(len(c) != 3 for c in b)
+                        or any(lo >= hi for lo, hi in zip(*b))):
+                    raise ValueError(
+                        "selection_bbox must be [[xlo, ylo, zlo], "
+                        "[xhi, yhi, zhi]] with lo < hi")
+        elif (self.selection_sphere is not None
+              or self.selection_bbox is not None):
+            raise ValueError(
+                "selection_sphere/selection_bbox require selection_snapshot")

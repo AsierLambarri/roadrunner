@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.snapshot import SnapshotReader
@@ -64,6 +65,27 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         )
     else:
         raise ValueError(f"Unknown reader_type: {config.reader_type}")
+
+    if config.selection_snapshot is not None:
+        snaps = merger_handler.snapshots
+        sel = config.selection_snapshot
+        if sel < 0:
+            sel = snaps[sel]
+        ref_path = equiv_table.snapshot_path(sel)
+        selected = snapshot_reader.select_indices(
+            ref_path,
+            sphere=config.selection_sphere,
+            bbox=config.selection_bbox,
+        )
+        snapshot_reader.set_particle_filter(selected)
+
+        end = config.end_snapshot
+        end_id = snaps[-1] if end is None else (snaps[end] if end < 0 else end)
+        if sel < end_id:
+            warnings.warn(
+                f"Selection snapshot {sel} precedes the last processed "
+                f"snapshot {end_id}; particles formed after it will not be "
+                "tracked.")
 
     accretion_id = config.accretion_id
     if accretion_id is None:
