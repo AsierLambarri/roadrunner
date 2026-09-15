@@ -239,6 +239,90 @@ class TestAccretionPipeline:
         last_snap = cat_reader.read_last_snapshot()
         assert last_snap is not None
 
+    def test_resume_snapshot_mismatch_raises(self, tmp_path):
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_load = mock_reader.load
+
+        call_count = [0]
+
+        def failing_load(path):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise RuntimeError("Simulated crash on snapshot 1")
+            return original_load(path)
+
+        mock_reader.load = failing_load
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            pipeline.run(str(tmp_path))
+
+        wider_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=3)
+        with pytest.raises(RestartError, match="do not match"):
+            wider_pipeline.run(str(tmp_path), resume=True)
+
+    def test_progress_file_tracks_run(self, tmp_path):
+        import json
+
+        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        pipeline.run(str(tmp_path))
+
+        progress_path = os.path.join(str(tmp_path), "progress.json")
+        assert os.path.exists(progress_path)
+        with open(progress_path) as f:
+            progress = json.load(f)
+        assert progress["snapshots"] == [0, 1]
+        assert progress["last_completed_snapshot"] == 1
+        assert progress["is_finished"] is True
+
+    def test_stale_checkpoint_after_success_refuses(self, tmp_path):
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_load = mock_reader.load
+
+        call_count = [0]
+
+        def failing_load(path):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise RuntimeError("Simulated crash on snapshot 1")
+            return original_load(path)
+
+        mock_reader.load = failing_load
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            pipeline.run(str(tmp_path))
+
+        call_count[0] = 0
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        resume_pipeline.run(str(tmp_path), resume=True)
+
+        stale_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        with pytest.raises(RestartError, match="finished successfully"):
+            stale_pipeline.run(str(tmp_path), resume=True)
+
+    def test_sigint_guard_installed_during_save(self, tmp_path, monkeypatch):
+        import signal as signal_mod
+
+        import roadrunner.pipeline.accretion_pipeline as ap_mod
+
+        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=1)
+        pipeline._checkpoint_path = os.path.join(str(tmp_path), "checkpoint.zst")
+        pipeline._progress_path = os.path.join(str(tmp_path), "progress.json")
+
+        before = signal_mod.getsignal(signal_mod.SIGINT)
+        seen = {}
+        real_save = ap_mod.save_checkpoint
+
+        def spy_save(path, data, *a, **k):
+            seen["during"] = signal_mod.getsignal(signal_mod.SIGINT)
+            return real_save(path, data, *a, **k)
+
+        monkeypatch.setattr(ap_mod, "save_checkpoint", spy_save)
+        pipeline._save_error_checkpoint((0, None, {}), [0])
+
+        assert seen["during"] is not before
+        assert signal_mod.getsignal(signal_mod.SIGINT) is before
+        assert os.path.exists(os.path.join(str(tmp_path), "checkpoint.zst"))
+
     def test_corrupt_checkpoint_raises(self, tmp_path):
         output_dir = str(tmp_path)
         os.makedirs(output_dir, exist_ok=True)

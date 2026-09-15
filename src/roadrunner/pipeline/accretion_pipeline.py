@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import signal
 import time
 import traceback
 
@@ -81,6 +83,7 @@ class AccretionPipeline:
             return
 
         self._checkpoint_path = os.path.join(output_dir, "checkpoint.zst")
+        self._progress_path = os.path.join(output_dir, "progress.json")
         self._log_path = self.logger._log_path
         self._error_log_path = os.path.join(output_dir, "error.log")
 
@@ -102,6 +105,12 @@ class AccretionPipeline:
             os.makedirs(output_dir, exist_ok=True)
             self._initialize_run(snapshot_ids)
 
+        self._write_progress(
+            snapshot_ids,
+            snapshot_ids[start_idx - 1] if start_idx > 0 else None,
+            False,
+        )
+
         t_start = time.time()
         last_good = None  # (snap_id, previous_resp_sim, fitted_parameters)
         for idx in range(start_idx, len(snapshot_ids)):
@@ -112,44 +121,99 @@ class AccretionPipeline:
                     snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
                 )
             except (Exception, KeyboardInterrupt):
-                self._save_error_checkpoint(last_good)
+                self._save_error_checkpoint(last_good, snapshot_ids)
                 raise
             previous_resp_sim = snap_result.previous_resp_sim
             last_good = (
                 snap_id, previous_resp_sim, snap_result.result.fitted_parameters,
             )
+            self._write_progress(snapshot_ids, snap_id, False)
 
         self._finalize(t_start)
+        self._write_progress(snapshot_ids, snapshot_ids[-1], True)
 
-    def _save_error_checkpoint(self, last_good) -> None:
+    def _save_error_checkpoint(self, last_good, snapshot_ids) -> None:
         """Persist resume state after a snapshot failure (best effort).
 
         Builds the checkpoint payload exactly as the former per-snapshot
-        save did (same keys, same :func:`save_checkpoint` call) for the
-        last fully completed snapshot, using live tracker state. Never
-        raises: a failing error-save (e.g. ``MemoryError`` while pickling)
+        save did (same keys plus the run's ``snapshots`` list, same
+        :func:`save_checkpoint` call) for the last fully completed
+        snapshot, using live tracker state. Never raises from the save
+        itself: a failing error-save (e.g. ``MemoryError`` while pickling)
         must not mask the original failure; it only prints a warning.
 
-        Note: if the failure struck after the failed snapshot had already
-        mutated the trackers, resuming reprocesses that snapshot and its
-        in-flight particles' birth weights are counted twice. Failures
-        before tracker updates resume exactly.
+        ``SIGINT`` is deferred while the checkpoint is written (re-raised
+        afterwards), so a second Ctrl-C cannot skip or tear the save.
+        Requires the main thread, like all signal handling.
+
+        Note: both trackers guard reprocessing with ``_last_snapshot``
+        and apply idempotent set operations, so resuming is exact unless
+        the failure struck inside ``birth._add_update_particles``'s
+        per-particle loop (double-added weights on resume) or inside
+        ``assembly._update``'s galaxy loop (partial infall lists stand).
         """
         if last_good is None:
             return  # nothing completed; a fresh rerun is equivalent
         snap_id, previous_resp_sim, fitted_parameters = last_good
         bt = self.orchestrator.birth_tracker
         at = self.orchestrator.assembly_tracker
+        deferred = {}
+
+        def _defer(signum, frame):
+            deferred["hit"] = True
+
         try:
-            save_checkpoint(self._checkpoint_path, {
-                "last_snapshot": snap_id,
-                "previous_resp": previous_resp_sim,
-                "previous_parameters": fitted_parameters,
-                "birth_tracker": bt._get_state() if bt is not None else None,
-                "assembly_tracker": at._get_state() if at is not None else None,
-            })
+            try:
+                old_handler = signal.signal(signal.SIGINT, _defer)
+            except ValueError:
+                old_handler = None  # non-main thread: proceed unguarded
+            try:
+                save_checkpoint(self._checkpoint_path, {
+                    "last_snapshot": snap_id,
+                    "snapshots": list(snapshot_ids),
+                    "previous_resp": previous_resp_sim,
+                    "previous_parameters": fitted_parameters,
+                    "birth_tracker": bt._get_state() if bt is not None else None,
+                    "assembly_tracker": at._get_state() if at is not None else None,
+                })
+            finally:
+                if old_handler is not None:
+                    signal.signal(signal.SIGINT, old_handler)
+            if deferred.get("hit"):
+                raise KeyboardInterrupt
         except Exception as exc:
             print(f"WARNING: error checkpoint could not be saved: {exc}")
+
+    def _write_progress(self, snapshot_ids, last_completed, is_finished) -> None:
+        """Record run progress in a small human-readable JSON file.
+
+        Parameters
+        ----------
+        snapshot_ids : list of int
+            All snapshot IDs in this run.
+        last_completed : int or None
+            Last fully completed snapshot ID (``None`` before the first).
+        is_finished : bool
+            ``True`` once the run (including finalisation) completed.
+        """
+        with open(self._progress_path, "w") as f:
+            json.dump(
+                {
+                    "snapshots": list(snapshot_ids),
+                    "last_completed_snapshot": last_completed,
+                    "is_finished": bool(is_finished),
+                },
+                f,
+                indent=2,
+            )
+
+    def _read_progress(self):
+        """Load the progress file, or ``None`` when absent (legacy runs)."""
+        try:
+            with open(self._progress_path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
 
     def _filter_snapshots(self, start_snapshot, end_snapshot):
         """Filter the full snapshot list to the requested range.
@@ -217,6 +281,12 @@ class AccretionPipeline:
         try:
             ckpt = load_checkpoint(self._checkpoint_path)
         except (RestartError, Exception):
+            progress = self._read_progress()
+            if progress is not None and progress.get("is_finished", False):
+                raise RestartError(
+                    f"Run already finished successfully; nothing to resume. "
+                    f"Start a fresh run without 'resume' to recompute."
+                )
             raise RestartError(
                 f"Checkpoint at '{self._checkpoint_path}' is corrupt or unreadable. "
                 f"Delete it and start a fresh run."
@@ -232,6 +302,26 @@ class AccretionPipeline:
                 f"Checkpoint snapshot {last_completed} not in snapshot range. "
                 f"Delete the checkpoint and start a fresh run."
             )
+        if "snapshots" in ckpt and list(ckpt["snapshots"]) != list(snapshot_ids):
+            raise RestartError(
+                f"Checkpoint snapshots {list(ckpt['snapshots'])} do not match "
+                f"requested {list(snapshot_ids)}. "
+                f"Delete the checkpoint and start a fresh run."
+            )
+        progress = self._read_progress()
+        if progress is not None:
+            if progress.get("is_finished", False):
+                raise RestartError(
+                    f"Run already finished successfully; checkpoint is stale. "
+                    f"Start a fresh run without 'resume' to recompute."
+                )
+            if progress.get("last_completed_snapshot") != last_completed:
+                raise RestartError(
+                    f"Checkpoint snapshot {last_completed} does not match "
+                    f"progress file snapshot {progress.get('last_completed_snapshot')}; "
+                    f"the checkpoint is stale. "
+                    f"Delete the checkpoint and start a fresh run."
+                )
         next_idx = snapshot_ids.index(last_completed) + 1
         previous_resp_sim = ckpt.get("previous_resp")
         previous_parameters = ckpt.get("previous_parameters")
