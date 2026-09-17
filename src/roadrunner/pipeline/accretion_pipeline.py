@@ -8,6 +8,7 @@ import shutil
 import signal
 import time
 import traceback
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -87,6 +88,7 @@ class AccretionPipeline:
         self._progress_path = os.path.join(output_dir, "progress.json")
         self._log_path = self.logger._log_path
         self._error_log_path = os.path.join(output_dir, "error.log")
+        self._warning_log_path = os.path.join(output_dir, "warnings.log")
 
         dyn_snaps = self._resolve_snap_indices(
             self.orchestrator.reduction_config.dynstate_snapshots,
@@ -117,13 +119,17 @@ class AccretionPipeline:
         for idx in range(start_idx, len(snapshot_ids)):
             snap_id = snapshot_ids[idx]
             print(f"\nSnapshot {snap_id}  ({idx + 1}/{len(snapshot_ids)})")
-            try:
-                snap_result = self._process_snapshot(
-                    snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
-                )
-            except (Exception, KeyboardInterrupt):
-                self._save_error_checkpoint(last_good, snapshot_ids)
-                raise
+            showwarning = warnings.showwarning
+            with warnings.catch_warnings(record=True) as records:
+                try:
+                    snap_result = self._process_snapshot(
+                        snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
+                    )
+                except (Exception, KeyboardInterrupt):
+                    self._save_error_checkpoint(last_good, snapshot_ids)
+                    raise
+                finally:
+                    self._flush_warnings(snap_id, records, showwarning)
             previous_resp_sim = snap_result.previous_resp_sim
             last_good = (
                 snap_id, previous_resp_sim, snap_result.result.fitted_parameters,
@@ -551,3 +557,51 @@ class AccretionPipeline:
             f.write(f"[{timestamp}] Snapshot {snap_id}: {type(exc).__name__}\n")
             f.write(tb_str)
             f.write("---\n")
+
+    def _log_warning(self, snap_id, category, message, filename, lineno):
+        """Write one non-fatal warning to the warnings log.
+
+        Mirrors :meth:`_log_error` (timestamp, snapshot scope,
+        ``---`` separator, append mode), but is best effort: a
+        failing warning save must never mask real work.
+
+        Parameters
+        ----------
+        snap_id : int
+        category : type
+        message : Warning
+        filename : str
+        lineno : int
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self._warning_log_path, "a", encoding="utf-8") as f:
+                f.write(
+                    f"[{timestamp}] Snapshot {snap_id}: "
+                    f"{category.__name__}: {message} "
+                    f"({filename}:{lineno})\n---\n"
+                )
+        except OSError as exc:
+            print(f"WARNING: could not append to warnings log: {exc}")
+
+    def _flush_warnings(self, snap_id, records, showwarning):
+        """Persist captured warnings, then replay them to the console.
+
+        Parameters
+        ----------
+        snap_id : int
+        records : list of warnings.WarningMessage
+        showwarning : callable
+            The original ``warnings.showwarning`` saved before
+            entering the ``catch_warnings`` context.
+        """
+        for record in records:
+            self._log_warning(
+                snap_id, record.category, record.message,
+                record.filename, record.lineno,
+            )
+            showwarning(
+                record.message, record.category,
+                record.filename, record.lineno,
+                record.file, record.line,
+            )

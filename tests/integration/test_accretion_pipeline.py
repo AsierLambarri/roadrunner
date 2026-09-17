@@ -162,6 +162,36 @@ class TestAccretionPipeline:
         assert "RuntimeError" in content
         assert "Snapshot 1" in content
 
+    def test_warnings_log_created_on_warning(self, tmp_path):
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_showwarning = warnings.showwarning
+        original_load = mock_reader.load
+        call_count = [0]
+
+        def warning_load(path):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                warnings.warn("Simulated unresolved group", UserWarning)
+            return original_load(path)
+
+        mock_reader.load = warning_load
+        old_filters = warnings.filters[:]
+        warnings.simplefilter("always")
+        try:
+            pipeline.run(str(tmp_path))
+        finally:
+            warnings.filters[:] = old_filters
+
+        assert warnings.showwarning is original_showwarning
+
+        warnings_log_path = os.path.join(str(tmp_path), "warnings.log")
+        assert os.path.exists(warnings_log_path)
+        with open(warnings_log_path) as f:
+            content = f.read()
+        assert "Snapshot 0" in content
+        assert "UserWarning" in content
+        assert "Simulated unresolved group" in content
+
     def test_checkpoint_restart(self, tmp_path):
         from roadrunner.io.serialization import load_checkpoint
 
