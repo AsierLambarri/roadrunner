@@ -31,7 +31,7 @@ class TestBirthTracker:
                        timescales=np.array([2.0]))
         assert len(tracker._active) == 0
         assert len(tracker._finalized) == 1
-        assert tracker._finalized[1]["birth_id"] == 10
+        assert tracker._finalized[1].birth_id == 10
 
     def test_competition_between_hosts(self):
         tracker = BirthTracker(factor=5, window="gaussian")

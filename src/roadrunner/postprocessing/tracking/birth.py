@@ -6,6 +6,7 @@ association once ``factor × timescale`` snapshots have elapsed.
 
 import heapq
 from collections import defaultdict
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -92,6 +93,19 @@ class ActiveParticleInfo:
     def leader_score(self):
         """Highest accumulated window score."""
         return np.float32(max(self.counts.values()))
+
+
+class FinalizedInfo(NamedTuple):
+    """Per-particle finalized record.
+
+    Tuple footprint (~100 B) instead of a per-particle dict (~350 B).
+    The particle index is the ``_finalized`` dict key, not stored here.
+    """
+
+    birth_id: np.uint64
+    birth_time: np.float32
+    birth_snap: np.uint32
+    timescale: np.float32
 
 
 class BirthTracker:
@@ -218,13 +232,12 @@ class BirthTracker:
             info = self._active.pop(p_to_finalize)
             birth_id = info.leader_host
 
-            self._finalized[p_to_finalize] = {
-                "particle_index": p_to_finalize,
-                "birth_time": info.t0,
-                "birth_snap": info.snap0,
-                "birth_id": birth_id,
-                "timescale": info.tau,
-            }
+            self._finalized[p_to_finalize] = FinalizedInfo(
+                birth_id=birth_id,
+                birth_time=info.t0,
+                birth_snap=info.snap0,
+                timescale=info.tau,
+            )
 
             self._birth_map[birth_id].add(p_to_finalize)
 
@@ -258,7 +271,7 @@ class BirthTracker:
         """
         self._finalize_particles(np.inf)
         records = [
-            {"particle_index": p, "birth_id": self._finalized[p]["birth_id"]}
+            {"particle_index": p, "birth_id": self._finalized[p].birth_id}
             for particles in self._birth_map.values()
             for p in particles
         ]
@@ -318,7 +331,16 @@ class BirthTracker:
                 )
             active[p] = info
         self._active = active
-        self._finalized = state["finalized"]
+        # Normalise pre-B3 checkpoints whose finalized records are plain dicts.
+        finalized = {}
+        for p, rec in state["finalized"].items():
+            if isinstance(rec, dict):
+                rec = FinalizedInfo(
+                    rec["birth_id"], rec["birth_time"],
+                    rec["birth_snap"], rec["timescale"],
+                )
+            finalized[p] = rec
+        self._finalized = finalized
         self._heap = state["heap"]
         heapq.heapify(self._heap)
         self._birth_map = defaultdict(
