@@ -5,6 +5,7 @@ import yt
 
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers._defaults import METALLICITY_COEFF0, METALLICITY_COEFF1, SOLAR_METALLICITY
+from roadrunner._defaults import SIM_ID, data_dtype
 
 
 _TRACK_FILTER_NAME = "_rr_track"
@@ -70,7 +71,7 @@ class SnapshotReader:
 
     def set_particle_filter(self, particle_indices: np.ndarray) -> None:
         """Set a persistent ID filter applied to every subsequent load()."""
-        self._particle_filter = np.asarray(particle_indices, dtype=np.uint64)
+        self._particle_filter = np.asarray(particle_indices, dtype=SIM_ID)
 
     def erase_particle_filter(self) -> None:
         """Remove the persistent ID filter (back to loading all particles)."""
@@ -104,7 +105,7 @@ class SnapshotReader:
             (xlo, ylo, zlo), (xhi, yhi, zhi) = bbox
             container = ds.box(ds.arr((xlo, ylo, zlo), "kpccm"),
                                ds.arr((xhi, yhi, zhi), "kpccm"))
-        return container[self.ptype, self.fields["index"]].value.astype(np.uint64)
+        return container[self.ptype, self.fields["index"]].value.astype(SIM_ID)
 
     def _attach_index_filter(self, ds, particle_indices: np.ndarray) -> str:
         """Register and attach a YT particle filter for the given IDs.
@@ -117,7 +118,7 @@ class SnapshotReader:
         ptype : str
             Name of the active filtered particle type.
         """
-        ids = np.asarray(particle_indices, dtype=np.uint64)
+        ids = np.asarray(particle_indices, dtype=SIM_ID)
         index_field = self.fields["index"]
         yt.add_particle_filter(
             self._filter_name,
@@ -145,11 +146,12 @@ class SnapshotReader:
         snap_data : SnapshotData
         """
         rng = np.random.default_rng(seed)
-        indices = np.arange(n_particles, dtype=np.uint64)
-        masses = rng.uniform(0.1, 10.0, n_particles).astype(np.float64)
-        positions = rng.uniform(-100, 100, (n_particles, 3)).astype(np.float64)
-        velocities = rng.uniform(-200, 200, (n_particles, 3)).astype(np.float64)
-        metallicity = rng.uniform(-2.0, 0.5, n_particles).astype(np.float64)
+        indices = np.arange(n_particles, dtype=SIM_ID)
+        dt = data_dtype()
+        masses = rng.uniform(0.1, 10.0, n_particles).astype(dt)
+        positions = rng.uniform(-100, 100, (n_particles, 3)).astype(dt)
+        velocities = rng.uniform(-200, 200, (n_particles, 3)).astype(dt)
+        metallicity = rng.uniform(-2.0, 0.5, n_particles).astype(dt)
         return SnapshotData(
             index=indices, mass=masses, position=positions,
             velocity=velocities, redshift=0.0, time=13.8,
@@ -243,13 +245,14 @@ class SnapshotReader:
         ptype = self._active_ptype
         f = self.fields
 
-        indices = ad[ptype, f["index"]].value.astype(np.uint64)
-        masses = ad[ptype, f["mass"]].to("Msun").value.astype(np.float64)
+        indices = ad[ptype, f["index"]].value.astype(SIM_ID)
+        dt = data_dtype()
+        masses = ad[ptype, f["mass"]].to("Msun").value.astype(dt)
         positions = (
-            ad[ptype, f["position"]].to("kpccm").value.astype(np.float64)
+            ad[ptype, f["position"]].to("kpccm").value.astype(dt)
         )
         velocities = (
-            ad[ptype, f["velocity"]].to("km/s").value.astype(np.float64)
+            ad[ptype, f["velocity"]].to("km/s").value.astype(dt)
         )
         redshift = ds.current_redshift
         time = ds.current_time.to("Gyr").value
@@ -258,7 +261,7 @@ class SnapshotReader:
         extra = {}
         for key, yt_field in f.items():
             if key not in _required:
-                extra[key] = ad[ptype, yt_field].value.astype(np.float64)
+                extra[key] = ad[ptype, yt_field].value.astype(dt)
 
         return SnapshotData(
             index=indices, mass=masses, position=positions,

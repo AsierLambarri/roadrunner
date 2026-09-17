@@ -67,20 +67,6 @@ class HDF5AssignmentWriter:
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, "timescales.txt")
 
-    def _gal_uint_dtype(self, gids):
-        """Smallest unsigned integer dtype that holds all galaxy IDs.
-
-        Parameters
-        ----------
-        gids : array-like of int
-
-        Returns
-        -------
-        dtype : numpy.dtype
-        """
-        return select_uint_dtype(
-            int(max(gids)) if len(gids) > 0 else 1, "(galaxy ids)")
-
     def _pick_float_dtype(self, arr):
         """Smallest float dtype that preserves the data within ``float_atol``.
 

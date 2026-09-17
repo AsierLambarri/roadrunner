@@ -38,7 +38,8 @@ assign_fields: [positions, velocities]     # default if omitted
 # ── Assigner ──────────────────────────────────────────────────────────────────
 assignment_method: gmm          # XGMM method: gmm, bgmm (variational), or svi-bgmm (stochastic)
 use_bgmm_priors: true           # Use previous snapshot as BGMM prior (bgmm only)
-dtype_math: float64             # XGMM math precision: float32, float64, float128
+data_precision: single          # data precision: single, double
+math_precision: single          # XGMM math precision: single, double
 svi_iters: 1000                # Maximum SVI iterations (svi-bgmm only)
 svi_batch_size: 10000           # SVI mini-batch size (svi-bgmm only)
 cov_type: full                 # Covariance type: full, diagonal, spherical

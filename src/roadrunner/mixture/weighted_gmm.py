@@ -265,7 +265,7 @@ def _estimate_covariances_full(resp, X, nk, means, reg_covar):
     for k in range(n_components):
         diff = X - means[k]
         covariances[k] = ( (resp[:, k] * diff.T) @ diff ) / nk[k]
-        covariances[k] += reg_covar * np.eye(n_features)
+        covariances[k] += reg_covar * np.eye(n_features, dtype=covariances.dtype)
     return covariances
 
 def _estimate_gaussian_parameters(X, resp, point_weights, cov_type, reg_covar):
@@ -409,13 +409,11 @@ class WeightedGaussianMixture(BaseMixture):
         Random state.
     reg_covar : float, default=1e-6
         Regularisation added to covariance diagonal.
-    cast_dtype : dtype, default=np.float64
-        Working precision.
     **kwargs
         Additional keyword arguments.
     """
     def __init__(self, n_components=2, means_init=None, covariance_init=None, counts_init=None, cov_type="full",
-                 init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6, cast_dtype=np.float64,
+                 init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6,
                  **kwargs):
 
         super().__init__(
@@ -426,7 +424,6 @@ class WeightedGaussianMixture(BaseMixture):
             verbose=verbose,
             random_state=random_state,
             reg_covar=reg_covar,
-            cast_dtype=cast_dtype,
             **kwargs
         )
 

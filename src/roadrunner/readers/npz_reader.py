@@ -15,6 +15,7 @@ import numpy as np
 
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers.equivalence import EquivalenceTable
+from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
 
 
 class NPZSnapshotReader:
@@ -56,7 +57,7 @@ class NPZSnapshotReader:
 
     def set_particle_filter(self, particle_indices) -> None:
         """Set a persistent ID filter applied to every subsequent load()."""
-        self._particle_filter = np.asarray(particle_indices, dtype=np.uint64)
+        self._particle_filter = np.asarray(particle_indices, dtype=SIM_ID)
 
     def erase_particle_filter(self) -> None:
         """Remove the persistent ID filter (back to loading all particles)."""
@@ -67,11 +68,11 @@ class NPZSnapshotReader:
         if (sphere is None) == (bbox is None):
             raise ValueError("Provide exactly one of `sphere` or `bbox`.")
         if sphere is not None:
-            center = np.asarray(sphere[0], dtype=np.float64)
+            center = np.asarray(sphere[0], dtype=math_dtype())
             radius = float(sphere[1])
             return np.sum((positions - center) ** 2, axis=1) <= radius ** 2
-        lower = np.asarray(bbox[0], dtype=np.float64)
-        upper = np.asarray(bbox[1], dtype=np.float64)
+        lower = np.asarray(bbox[0], dtype=math_dtype())
+        upper = np.asarray(bbox[1], dtype=math_dtype())
         return np.all((positions >= lower) & (positions <= upper), axis=1)
 
     def select_indices(self, file_path: str, sphere=None, bbox=None) -> np.ndarray:
@@ -120,22 +121,23 @@ class NPZSnapshotReader:
         raw = np.load(file_path, allow_pickle=False)
 
         extra = {}
+        dt = data_dtype()
         if self._mock_sim:
             indices = raw["indices"]
-            masses = raw["masses"]
-            coords = raw["coords"]
+            masses = np.asarray(raw["masses"], dtype=dt)
+            coords = np.asarray(raw["coords"], dtype=dt)
             positions = coords[:, :3]
             velocities = coords[:, 3:6]
             if "metallicity" in raw:
-                extra["metallicity"] = raw["metallicity"]
+                extra["metallicity"] = np.asarray(raw["metallicity"], dtype=dt)
         else:
             arr = raw if isinstance(raw, np.ndarray) else raw[raw.files[0]]
-            indices = arr[:, 0].astype(np.uint64)
-            masses = arr[:, 1].astype(np.float64)
-            positions = arr[:, 2:5].astype(np.float64)
-            velocities = arr[:, 5:8].astype(np.float64)
+            indices = arr[:, 0].astype(SIM_ID)
+            masses = arr[:, 1].astype(dt)
+            positions = arr[:, 2:5].astype(dt)
+            velocities = arr[:, 5:8].astype(dt)
             if arr.shape[1] >= 9:
-                extra["metallicity"] = arr[:, 8].astype(np.float64)
+                extra["metallicity"] = arr[:, 8].astype(dt)
 
         snap = SnapshotData(
             index=indices, mass=masses, position=positions,

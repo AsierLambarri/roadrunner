@@ -38,7 +38,8 @@ class RunConfig:
 
     assignment_method: str = "gmm"
     use_bgmm_priors: bool = True
-    dtype_math: str = "float64"
+    data_precision: str = "single"
+    math_precision: str = "single"
     svi_iters: int = 1000
     svi_batch_size: int = 10000
     halo_model: str = "kepler"
@@ -76,6 +77,12 @@ class RunConfig:
         """
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")
+
+        for name in ("data_precision", "math_precision"):
+            if getattr(self, name) not in ("single", "double"):
+                raise ValueError(
+                    f"{name} must be 'single' or 'double', got '{getattr(self, name)}'"
+                )
 
         _required = {"index", "mass", "position", "velocity"}
         given = set(self.fields.keys())

@@ -16,6 +16,7 @@
 import numpy as np
 
 from roadrunner.helpers import check_particle_uniqueness, remove_duplicates
+from roadrunner._defaults import SIM_ID, SNAP_ID
 
 
 def assign_birth_snapshots(
@@ -43,7 +44,7 @@ def assign_birth_snapshots(
         Birth snapshot ID for each particle.
     """
     if len(snapshot_times) == 0:
-        return np.array([], dtype=np.int64)
+        return np.array([], dtype=SNAP_ID)
     indices = np.searchsorted(snapshot_times, creation_times, side="right")
     indices = np.clip(indices, 0, len(snapshot_times) - 1)
     return snapshot_ids[indices]
@@ -71,7 +72,7 @@ def build_birth_dict(
     result: dict[int, np.ndarray] = {}
     for snap in np.unique(birth_snapshot_ids):
         mask = birth_snapshot_ids == snap
-        result[int(snap)] = particle_indices[mask].astype(np.uint64)
+        result[int(snap)] = particle_indices[mask].astype(SIM_ID)
     return result
 
 

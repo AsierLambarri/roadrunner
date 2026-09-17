@@ -56,7 +56,8 @@ def build_config_from_args(args):
         end_snapshot=args.end_snapshot,
         assignment_method=args.assignment_method,
         use_bgmm_priors=args.use_bgmm_priors,
-        dtype_math=args.dtype_math,
+        data_precision=args.data_precision,
+        math_precision=args.math_precision,
         halo_model=args.halo_model,
         cov_type=args.cov_type,
         max_iter=args.max_iter,
@@ -120,8 +121,10 @@ def main():
                         choices=["gmm", "bgmm"])
     parser.add_argument("--use-bgmm-priors", type=lambda x: x.lower() == "true",
                         default=True)
-    parser.add_argument("--dtype-math", type=str, default="float64",
-                        choices=["float32", "float64", "float128"])
+    parser.add_argument("--data-precision", type=str, default="single",
+                        choices=["single", "double"])
+    parser.add_argument("--math-precision", type=str, default="single",
+                        choices=["single", "double"])
     parser.add_argument("--cov-type", type=str, default="full",
                         choices=["full", "diagonal", "spherical"])
     parser.add_argument("--max-iter", type=int, default=10)

@@ -16,6 +16,7 @@ import numpy as np
 
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers.equivalence import EquivalenceTable
+from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
 
 
 class ParticleDataSnapshotReader:
@@ -50,7 +51,7 @@ class ParticleDataSnapshotReader:
 
     def set_particle_filter(self, particle_indices) -> None:
         """Set a persistent ID filter applied to every subsequent load()."""
-        self._particle_filter = np.asarray(particle_indices, dtype=np.uint64)
+        self._particle_filter = np.asarray(particle_indices, dtype=SIM_ID)
 
     def erase_particle_filter(self) -> None:
         """Remove the persistent ID filter (back to loading all particles)."""
@@ -61,11 +62,11 @@ class ParticleDataSnapshotReader:
         if (sphere is None) == (bbox is None):
             raise ValueError("Provide exactly one of `sphere` or `bbox`.")
         if sphere is not None:
-            center = np.asarray(sphere[0], dtype=np.float64)
+            center = np.asarray(sphere[0], dtype=math_dtype())
             radius = float(sphere[1])
             return np.sum((positions - center) ** 2, axis=1) <= radius ** 2
-        lower = np.asarray(bbox[0], dtype=np.float64)
-        upper = np.asarray(bbox[1], dtype=np.float64)
+        lower = np.asarray(bbox[0], dtype=math_dtype())
+        upper = np.asarray(bbox[1], dtype=math_dtype())
         return np.all((positions >= lower) & (positions <= upper), axis=1)
 
     def select_indices(self, file_path: str, sphere=None, bbox=None) -> np.ndarray:
@@ -127,8 +128,13 @@ class ParticleDataSnapshotReader:
                     extra[name] = hf[key][:]
 
         inv_s = 1.0 / scale
-        positions = pos_scaled * inv_s[:3] + mean[:3]
-        velocities = vel_scaled * inv_s[3:6] + mean[3:6]
+        dt = data_dtype()
+        masses = np.asarray(masses, dtype=dt)
+        positions = (pos_scaled * inv_s[:3] + mean[:3]).astype(dt)
+        velocities = (vel_scaled * inv_s[3:6] + mean[3:6]).astype(dt)
+        for name in extra:
+            if np.issubdtype(np.asanyarray(extra[name]).dtype, np.floating):
+                extra[name] = np.asarray(extra[name], dtype=dt)
 
         snap = SnapshotData(
             index=indices, mass=masses, position=positions,

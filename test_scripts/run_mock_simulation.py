@@ -21,6 +21,7 @@ import os
 import numpy as np
 
 from roadrunner._mcf_types import SnapshotData
+from roadrunner._defaults import precision
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.physics.merger_tree import MergerTreeHandlerCSV
@@ -75,8 +76,10 @@ def main():
     # GMM
     parser.add_argument("--method", default="gmm",
                         choices=["gmm", "bgmm", "svi-bgmm"])
-    parser.add_argument("--dtype-math", default="float64",
-                        choices=["float32", "float64", "float128"])
+    parser.add_argument("--data-precision", default="single",
+                        choices=["single", "double"])
+    parser.add_argument("--math-precision", default="single",
+                        choices=["single", "double"])
     parser.add_argument("--use-bgmm-priors", default=True,
                         type=lambda x: x.lower() == "true",
                         help="Enable BGMM priors (bgmm only)")
@@ -141,7 +144,6 @@ def main():
         verbose=1,
         method=args.method,
         use_bgmm_priors=args.use_bgmm_priors,
-        dtype_math=args.dtype_math,
     )
 
     # ── 5. Configs ─────────────────────────────────────────────────
@@ -203,12 +205,13 @@ def main():
     )
 
     # ── 11. Run ────────────────────────────────────────────────────
-    pipeline.run(
-        output_dir,
-        start_snapshot=0,
-        end_snapshot=(args.n_snap - 1) if args.n_snap is not None else None,
-        resume=args.resume,
-    )
+    with precision(data=args.data_precision, math=args.math_precision):
+        pipeline.run(
+            output_dir,
+            start_snapshot=0,
+            end_snapshot=(args.n_snap - 1) if args.n_snap is not None else None,
+            resume=args.resume,
+        )
 
 
 if __name__ == "__main__":

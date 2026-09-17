@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import warnings
 
+from roadrunner._defaults import precision
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.snapshot import SnapshotReader
 from roadrunner.readers.npz_reader import NPZSnapshotReader
@@ -25,6 +27,17 @@ from roadrunner.postprocessing.tracking.birth import BirthTracker
 from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
 
 
+def _with_precision_scope(func):
+    """Run ``func`` inside the precision scope from its ``RunConfig``."""
+    @functools.wraps(func)
+    def wrapper(config, *args, **kwargs):
+        cfg = config if isinstance(config, RunConfig) else RunConfig(**config)
+        with precision(data=cfg.data_precision, math=cfg.math_precision):
+            return func(config, *args, **kwargs)
+    return wrapper
+
+
+@_with_precision_scope
 def run_accretion_history(config: RunConfig | dict) -> None:
     """Run the full accretion history pipeline from a configuration.
 
@@ -105,7 +118,6 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         verbose=1,
         method=config.assignment_method,
         use_bgmm_priors=config.use_bgmm_priors,
-        dtype_math=config.dtype_math,
         n_svi_iters=config.svi_iters,
         batch_size=config.svi_batch_size,
     )

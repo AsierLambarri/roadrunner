@@ -16,6 +16,8 @@
 import numpy as np
 from scipy.spatial import KDTree
 
+from roadrunner._defaults import LOCAL_IDX, math_dtype
+
 from roadrunner.physics.constants import G_KM
 from roadrunner.physics.potentials import KeplerPotential
 
@@ -56,8 +58,8 @@ def compute_halo_bound_particles(
     velocities = particle_coordinates[:, 3:6]
     tree = KDTree(positions)
 
-    empty_indices = np.array([], dtype=np.uint64)
-    empty_values = np.array([], dtype=np.float32)
+    empty_indices = np.array([], dtype=LOCAL_IDX)
+    empty_values = np.array([], dtype=math_dtype())
 
     _2PI = 2 * np.pi
 
@@ -81,13 +83,13 @@ def compute_halo_bound_particles(
 
         if isinstance(halo._inner, KeplerPotential):
             a = -0.5 * halo._inner.G * halo._inner.M / np.maximum(-E, 1e-30)
-            tdyns = np.zeros_like(a, dtype=np.float32)
+            tdyns = np.zeros_like(a, dtype=math_dtype())
             bound_a = a > 0
             tdyns[bound_a] = (_2PI * np.sqrt(
                 a[bound_a]**3 / (halo._inner.G * halo._inner.M)
-            )).astype(np.float32)
+            )).astype(math_dtype(), copy=False)
         else:
-            tdyns = halo.dynamical_time(dist).astype(np.float32)
+            tdyns = halo.dynamical_time(dist).astype(math_dtype(), copy=False)
 
         bound = E < 0
         valid = local[bound]
@@ -95,8 +97,8 @@ def compute_halo_bound_particles(
             halo.set_boundness(empty_indices, empty_values, empty_values)
         else:
             halo.set_boundness(
-                valid.astype(np.uint64),
-                boundness[bound].astype(np.float32),
+                valid.astype(LOCAL_IDX),
+                boundness[bound].astype(math_dtype(), copy=False),
                 tdyns[bound],
             )
 

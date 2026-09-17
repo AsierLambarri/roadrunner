@@ -31,6 +31,7 @@ from scipy.linalg import solve_triangular
 
 from ._kmeans_plusplus import kmeans_plusplus_prior
 from ._math import entropy_sum, row_squared_norms
+from roadrunner._defaults import math_dtype
 from .base import BaseMixture
 from .weighted_gmm import (
     _check_counts,
@@ -106,7 +107,7 @@ def _compute_precision_cholesky(covariances, cov_type):
         choleskys = np.linalg.cholesky(covariances)
         for k in range(n_components): 
             precisions_chol[k, :, :] = solve_triangular(
-                choleskys[k, :, :], np.eye(n_features), lower=True, overwrite_b=True
+                choleskys[k, :, :], np.eye(n_features, dtype=choleskys.dtype), lower=True, overwrite_b=True
             )
     else: 
         # diagonal or shperical
@@ -245,14 +246,12 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         Random state.
     reg_covar : float, default=1e-6
         Regularisation added to covariance diagonal.
-    cast_dtype : dtype, default=np.float64
-        Working precision.
     **kwargs
         Additional keyword arguments.
     """
     def __init__(self, n_components=2, means_init=None, covariance_init=None, counts_init=None, cov_type="full", 
                  weight_concentration_prior=None, mean_precision_prior=None, mean_prior=None, degrees_of_freedom_prior=None, covariance_prior=None,
-                 init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6, cast_dtype=np.float64, 
+                 init_params='kmeans', max_iter=10, tol=1e-3, verbose=False, random_state=None,  reg_covar=1E-6, 
                  **kwargs):
 
         super().__init__(
@@ -263,7 +262,6 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             verbose=verbose,
             random_state=random_state,
             reg_covar=reg_covar,
-            cast_dtype=cast_dtype,
             **kwargs
         )
 
@@ -358,16 +356,16 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             self.weight_concentration_prior_ = np.full(
                 self.n_components,
                 1.0 / self.n_components,
-                dtype=self.cast_dtype,
+                dtype=math_dtype(),
             )
         else:
             alpha = np.asarray(
                 self.weight_concentration_prior,
-                dtype=self.cast_dtype
+                dtype=math_dtype()
             )
     
             if alpha.ndim == 0:
-                alpha = np.full(self.n_components, alpha, dtype=self.cast_dtype)
+                alpha = np.full(self.n_components, alpha, dtype=math_dtype())
     
             if alpha.shape != (self.n_components,):
                 raise ValueError(
@@ -392,13 +390,13 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         
         if self.mean_prior is None:
             mean_prior = np.tile(
-                X.mean(axis=0),
+                X.mean(axis=0).astype(X.dtype, copy=False),
                 (self.n_components, 1)
             )
         else:
             mean_prior = np.asarray(
                 self.mean_prior,
-                dtype=self.cast_dtype
+                dtype=X.dtype
             )
             if mean_prior.ndim == 1:
                 mean_prior = np.tile(
@@ -417,18 +415,18 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         if self.mean_precision_prior is None:
             beta = np.ones(
                 self.n_components,
-                dtype=self.cast_dtype
+                dtype=X.dtype
             )
         else:
             beta = np.asarray(
                 self.mean_precision_prior,
-                dtype=self.cast_dtype
+                dtype=X.dtype
             )
             if beta.ndim == 0:
                 beta = np.full(
                     self.n_components,
                     beta,
-                    dtype=self.cast_dtype
+                    dtype=X.dtype
                 )
         
             if beta.shape != (self.n_components,):
@@ -454,11 +452,14 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         _, n_features = X.shape        
         
         if self.covariance_prior is None:
+            # np.cov/np.var always compute in float64: cast back to the
+            # working precision (prior arrays are small).
+            md = X.dtype
             base = {
-                "full": lambda x: np.cov(x.T),
-                "diag": lambda x: np.var(x, axis=0, ddof=1),
-                "diagonal": lambda x: np.var(x, axis=0, ddof=1),
-                "spherical": lambda x: np.var(x, axis=0, ddof=1).mean(),
+                "full": lambda x: np.cov(x.T).astype(md, copy=False),
+                "diag": lambda x: np.var(x, axis=0, ddof=1).astype(md, copy=False),
+                "diagonal": lambda x: np.var(x, axis=0, ddof=1).astype(md, copy=False),
+                "spherical": lambda x: np.asarray(np.var(x, axis=0, ddof=1).mean(), dtype=md),
             }[self.cov_type](X)
     
             if self.cov_type == "full":
@@ -475,12 +476,12 @@ class WeightedBayesianGaussianMixture(BaseMixture):
                 cov_prior = np.full(
                     self.n_components,
                     base,
-                    dtype=self.cast_dtype
+                    dtype=X.dtype
                 )
         else:
             cov_prior = np.asarray(
                 self.covariance_prior,
-                dtype=self.cast_dtype
+                dtype=X.dtype
             )
     
             if self.cov_type == "full" and cov_prior.ndim == 2:
@@ -497,7 +498,7 @@ class WeightedBayesianGaussianMixture(BaseMixture):
                 cov_prior = np.full(
                     self.n_components,
                     cov_prior,
-                    dtype=self.cast_dtype
+                    dtype=X.dtype
                 )               
     
         self.covariance_prior_ = cov_prior       
@@ -558,7 +559,7 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         nk, xk, sk = None, None, None
         if resp is not None:
             nk, xk, sk = _estimate_gaussian_parameters(
-                X, resp, np.ones(X.shape[0]), self.cov_type, self.reg_covar
+                X, resp, np.ones(X.shape[0], dtype=X.dtype), self.cov_type, self.reg_covar
             )
 
         nk = self.counts_init if nk is None else nk
@@ -651,7 +652,8 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         _, n_features = xk.shape
         self.degrees_of_freedom_ = self.degrees_of_freedom_prior_ + nk
 
-        self.covariances_ = np.empty((self.n_components, n_features, n_features))
+        self.covariances_ = np.empty((self.n_components, n_features, n_features),
+                                       dtype=xk.dtype)
         for k in range(self.n_components):
             diff = xk[k] - self.mean_prior_[k]
             self.covariances_[k] = (
@@ -732,7 +734,7 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         n_samples, _ = X.shape
 
         nk, xk, sk = _estimate_gaussian_parameters(
-            X, resp, np.ones(X.shape[0]), self.cov_type, self.reg_covar
+            X, resp, np.ones(X.shape[0], dtype=X.dtype), self.cov_type, self.reg_covar
         )
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
@@ -834,5 +836,5 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         return super().fit(
             X, 
             latent_prior=latent_prior,
-            point_weights=np.ones(X.shape[0])
+            point_weights=np.ones(X.shape[0], dtype=np.asanyarray(X).dtype)
         )

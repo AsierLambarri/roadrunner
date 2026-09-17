@@ -14,6 +14,8 @@
 
 import numpy as np
 
+from roadrunner._defaults import LOCAL_IDX
+
 from roadrunner.clustering.union_find import overlapping_groups
 
 
@@ -34,7 +36,7 @@ def find_populated_haloes(candidates_list):
     """
     empty = [i for i, c in enumerate(candidates_list) if len(c) == 0]
     populated = [i for i, c in enumerate(candidates_list) if len(c) > 0]
-    return np.array(empty, dtype=np.int64), np.array(populated, dtype=np.int64)
+    return np.array(empty, dtype=LOCAL_IDX), np.array(populated, dtype=LOCAL_IDX)
 
 
 class HaloSegmenter:

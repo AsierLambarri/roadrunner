@@ -34,6 +34,22 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+from roadrunner._defaults import LOCAL_IDX
+
+_INT64_MAX = np.iinfo(np.int64).max
+
+
+def _assert_sim_ids_fit_int64(index: np.ndarray) -> None:
+    """Guard the SIM_ID → int64 narrowing in the index maps below.
+
+    Simulation IDs above 2**63 - 1 would silently wrap; fail loudly.
+    """
+    if len(index) and int(index.max()) > _INT64_MAX:
+        raise OverflowError(
+            "Simulation IDs exceed int64 range; the int64 index maps "
+            "cannot represent them."
+        )
+
 if TYPE_CHECKING:
     from roadrunner.clustering.sparse import SparseCSC
 
@@ -147,16 +163,16 @@ class SnapshotData:
 
         Returns
         -------
-        result : ndarray of int64
-            Local array indices for each queried ID; ``-1`` for IDs
-            that are not present in this snapshot.
+        result : ndarray of LOCAL_IDX
+            Local array indices for each queried ID; ``MISSING`` (-1) for
+            IDs that are not present in this snapshot.
         """
         if self._index_sorter is None:
             self._index_sorter = np.argsort(self.index)
         sorted_ids = self.index[self._index_sorter]
         pos = np.clip(np.searchsorted(sorted_ids, sim_ids), 0, len(sorted_ids) - 1)
         found = sorted_ids[pos] == sim_ids
-        result = np.full(len(sim_ids), -1, dtype=np.int64)
+        result = np.full(len(sim_ids), -1, dtype=LOCAL_IDX)
         result[found] = self._index_sorter[pos[found]]
         return result
 
@@ -165,12 +181,14 @@ class SnapshotData:
 
         Returns
         -------
-        idx : ndarray of int64
+        idx : ndarray of LOCAL_IDX
             Array indices.
         ids : ndarray of int64
-            Corresponding simulation particle IDs.
+            Corresponding simulation particle IDs (narrowed from SIM_ID;
+            see assertion below).
         """
-        idx = np.arange(len(self.index), dtype=np.int64)
+        _assert_sim_ids_fit_int64(self.index)
+        idx = np.arange(len(self.index), dtype=LOCAL_IDX)
         return idx, self.index.astype(np.int64, copy=False)
 
     def id_to_index_map(self) -> tuple[np.ndarray, np.ndarray]:
@@ -179,11 +197,12 @@ class SnapshotData:
         Returns
         -------
         ids : ndarray of int64
-            Simulation particle IDs.
-        idx : ndarray of int64
+            Simulation particle IDs (narrowed from SIM_ID; see assertion).
+        idx : ndarray of LOCAL_IDX
             Corresponding array indices.
         """
-        return self.index.astype(np.int64, copy=False), np.arange(len(self.index), dtype=np.int64)
+        _assert_sim_ids_fit_int64(self.index)
+        return self.index.astype(np.int64, copy=False), np.arange(len(self.index), dtype=LOCAL_IDX)
 
 
 class BoundnessResult:

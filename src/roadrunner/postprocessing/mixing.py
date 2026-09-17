@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 
+from roadrunner._defaults import LOCAL_IDX, UNBOUND, math_dtype
+
 from roadrunner.physics.constants import (
     NN_FRACTION,
     RILEY_BOUND_THRESHOLD,
@@ -40,17 +42,17 @@ def _local_velocity_dispersion(pos, vel, nmin=10):
     N = pos.shape[0]
     n = int(max(NN_FRACTION * N, nmin))
     if N <= nmin + 1:
-        return np.full(N, np.nan)
+        return np.full(N, np.nan, dtype=math_dtype())
 
     wi = RILEY_WI
-    data = np.empty((N, 6), dtype=np.float32)
+    data = np.empty((N, 6), dtype=math_dtype())
     data[:, :3] = pos
     data[:, 3:] = vel / wi
 
     tree = KDTree(data)
     _, idx = tree.query(data, k=n, workers=-1)
 
-    local_disp = np.empty(N, dtype=np.float64)
+    local_disp = np.empty(N, dtype=math_dtype())
     for k in range(N):
         local_disp[k] = np.linalg.norm(np.std(vel[idx[k]], axis=0))
 
@@ -145,8 +147,8 @@ def compute_riley_criterion(
     positions = particle_coords[:, :3] / (1 + redshift)
     velocities = particle_coords[:, 3:6]
 
-    skip_ids = {main_id, -1}
-    empty = np.array([], dtype=np.int64)
+    skip_ids = {main_id, UNBOUND}
+    empty = np.array([], dtype=LOCAL_IDX)
 
     records = []
     for sid in galaxy_allowed:
@@ -161,7 +163,7 @@ def compute_riley_criterion(
         mstar = particle_masses[allowed_idx].sum()
         if mstar > 0:
             bound_overlap = np.intersect1d(
-                allowed_idx.astype(np.int64), bound_idx.astype(np.int64),
+                allowed_idx.astype(LOCAL_IDX), bound_idx.astype(LOCAL_IDX),
             )
             f_bound = particle_masses[bound_overlap].sum() / mstar
         else:

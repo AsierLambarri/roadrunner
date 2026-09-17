@@ -13,6 +13,7 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.mixture import BayesianGaussianMixture as SKLearnBGMM
 from sklearn.metrics import adjusted_rand_score
 
+from roadrunner._defaults import precision
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
 
 rng = np.random.RandomState(42)
@@ -37,10 +38,10 @@ rng.shuffle(X)
 print("=== Test 1: Label agreement ===")
 sk = SKLearnBGMM(n_components=3, max_iter=200, tol=1e-3,
                   random_state=42).fit(X)
-rr = WeightedBayesianGaussianMixture(n_components=3, max_iter=200, tol=1e-3,
-                                      init_params="kmeans++",
-                                      cast_dtype=np.float64,
-                                      random_state=42).fit(X)
+with precision(math="double"):
+    rr = WeightedBayesianGaussianMixture(n_components=3, max_iter=200, tol=1e-3,
+                                          init_params="kmeans++",
+                                          random_state=42).fit(X)
 
 ari = adjusted_rand_score(sk.predict(X), rr.predict(X))
 print(f"  Adjusted Rand Index: {ari:.4f}")
@@ -81,19 +82,21 @@ rng.shuffle(X2)
 
 # Weak uniform prior — all clusters treated equally
 beta_uniform = None
-rr_uniform = WeightedBayesianGaussianMixture(
-    n_components=3, max_iter=200, tol=1e-3,
-    mean_precision_prior=beta_uniform,
-    init_params="kmeans++", cast_dtype=np.float64,
-    random_state=42).fit(X2)
+with precision(math="double"):
+    rr_uniform = WeightedBayesianGaussianMixture(
+        n_components=3, max_iter=200, tol=1e-3,
+        mean_precision_prior=beta_uniform,
+        init_params="kmeans++",
+        random_state=42).fit(X2)
 
 # Strong prior on component 0 (tight), weak on the rest
 beta_strong = np.array([100.0, 1.0, 1.0], dtype=np.float64)
-rr_strong = WeightedBayesianGaussianMixture(
-    n_components=3, max_iter=200, tol=1e-3,
-    mean_precision_prior=beta_strong,
-    init_params="kmeans++", cast_dtype=np.float64,
-    random_state=42).fit(X2)
+with precision(math="double"):
+    rr_strong = WeightedBayesianGaussianMixture(
+        n_components=3, max_iter=200, tol=1e-3,
+        mean_precision_prior=beta_strong,
+        init_params="kmeans++",
+        random_state=42).fit(X2)
 
 # Component 0: rr_strong should have tighter covariance (smaller det)
 # than rr_uniform, because mean_precision_prior shrinks toward mean_prior

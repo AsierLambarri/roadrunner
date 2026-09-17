@@ -86,7 +86,7 @@ class HDF5ParticleWriter:
             ])
 
             scaler = StandardScaler()
-            scaled = scaler.fit_transform(coords.astype(np.float64, copy=False))
+            scaled = scaler.fit_transform(coords)
 
             scaler_grp = data.require_group("scaler")
             scaler_grp.create_dataset("mean", data=scaler.mean_)

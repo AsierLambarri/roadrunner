@@ -44,15 +44,16 @@ from roadrunner.mixture.weighted_gmm import (
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
 from roadrunner.mixture.svi_bayesian_gmm import SVIBayesianGaussianMixture
 from roadrunner._defaults import (
+    GALAXY_ID,
+    LOCAL_IDX,
     PRIOR_DOF_OFFSET,
+    UNBOUND,
     UNRESOLVED_GROUP_RATIO,
+    math_dtype,
+    precision,
 )
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 
-_PRECISION_LADDER = {
-    "float32": "float64",
-    "float64": "float128",
-}
 from roadrunner.clustering.assignment import priors as prior
 
 
@@ -116,13 +117,13 @@ def _rank_transform(values, func_rank=np.log1p):
 
     Returns
     -------
-    transformed : ndarray of float32
-        Rank-transformed values.
+    transformed : ndarray
+        Rank-transformed values (ambient math precision).
     """
     if len(values) == 0:
         return values
     ranks = rankdata(values, method="ordinal")
-    return func_rank(ranks).astype(np.float32, copy=False)
+    return func_rank(ranks).astype(math_dtype(), copy=False)
 
 
 @njit(parallel=True, cache=True)
@@ -191,8 +192,6 @@ class XGMMAssigner:
         One of ``'gmm'``, ``'bgmm'``, or ``'svi-bgmm'``.
     use_bgmm_priors : bool, default=True
         Use fitted parameters from the previous snapshot as BGMM priors.
-    dtype_math : str, default='float64'
-        Working precision for the mixture fits.
     **mixture_kwargs
         Additional keyword arguments forwarded to the mixture
         constructor (e.g. ``n_svi_iters``, ``batch_size`` for SVI).
@@ -201,7 +200,7 @@ class XGMMAssigner:
     def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
                  min_particles=10, reg_covar=1e-6, prior_type="",
                  verbose=1, method="gmm", use_bgmm_priors=True,
-                 dtype_math="float64", **mixture_kwargs):
+                 **mixture_kwargs):
         self.cov_type = cov_type
         self.max_iter = max_iter
         self.tol = tol
@@ -215,7 +214,6 @@ class XGMMAssigner:
         self.previous_parameters = None
         self.parameters: dict[int, dict] = {}
         self.use_bgmm_priors = use_bgmm_priors
-        self.dtype_math = dtype_math
         self.mixture_kwargs = mixture_kwargs
 
     def assign(self, halos, particle_coords, newborn_indices, groups,
@@ -254,7 +252,7 @@ class XGMMAssigner:
 
         N = particle_coords.shape[0]
         self.particles_df = pd.DataFrame(
-            {"array_index": np.arange(N, dtype=np.uint64), "Sub_tree_id": -1}
+            {"array_index": np.arange(N, dtype=LOCAL_IDX), "Sub_tree_id": UNBOUND}
         ).set_index("array_index")
         self.resp_map: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 
@@ -271,7 +269,7 @@ class XGMMAssigner:
             boundness_csc=csc_b,
         )
 
-        gids = np.array(sorted(self.resp_map.keys()), dtype=np.int64)
+        gids = np.array(sorted(self.resp_map.keys()), dtype=GALAXY_ID)
         resp_csc = SparseCSC(
             [self.resp_map[g][0] for g in gids],
             [self.resp_map[g][1] for g in gids],
@@ -358,12 +356,12 @@ class XGMMAssigner:
         nonz : ndarray of shape (n_particles, 1)
             Non-zero mask.
         """
-        post_prob = np.ones((gp_idx.size, 1))
+        post_prob = np.ones((gp_idx.size, 1), dtype=math_dtype())
         nonz = (post_prob > 0).astype(np.uint8)
 
         nk, means, covs = _estimate_gaussian_parameters(
             self.particle_coords[gp_idx], post_prob,
-            np.ones(gp_idx.size, dtype=np.float32),
+            np.ones(gp_idx.size, dtype=math_dtype()),
             self.cov_type, reg_covar=self.reg_covar,
         )
         sid = int(group_subtrees[0])
@@ -405,12 +403,12 @@ class XGMMAssigner:
         """
         post_prob = row_l1_normalize(
             csc_b.to_dense(col_func=_no_transform)
-        ).astype(np.float32, copy=False)
+        ).astype(math_dtype(), copy=False)
         nonz = (post_prob > 0).astype(np.uint8)
 
         nk, means, covs = _estimate_gaussian_parameters(
             self.particle_coords[gp_idx], post_prob,
-            np.ones(gp_idx.size, dtype=np.float32),
+            np.ones(gp_idx.size, dtype=math_dtype()),
             self.cov_type, reg_covar=self.reg_covar,
         )
         params = {}
@@ -451,45 +449,48 @@ class XGMMAssigner:
             Non-zero mask.
         """
         from roadrunner.physics.scaler import StandardScaler
-        scaler = StandardScaler()
-        coords = scaler.fit_transform(
-            self.particle_coords[gp_idx].astype(np.float64, copy=False))
-
-        prior, nk, means, covs, cov_t = self._estimate_initial_params(
-            coords, csc_b)
-        nonz = (prior > 0).astype(np.uint8)
         n_comp = len(group_subtrees)
-
-        init_kwargs = dict(
-            n_components=n_comp,
-            counts_init=nk,
-            means_init=means,
-            covariance_init=covs,
-            cov_type=cov_t,
-            init_params="kmeans++",
-        )
         run_kwargs = dict(
             tol=self.tol,
             verbose=self.verbose,
             **self.mixture_kwargs,
         )
 
-        prior_kwargs = self._build_prior_kwargs(group_subtrees, csc_b, scaler, n_comp)
-
-        kwargs = dict(cast_dtype=getattr(np, self.dtype_math),
-                      **init_kwargs, **prior_kwargs, **run_kwargs)
-
-        for _ in range(3):
+        # Precision comes from the ambient scope (set once per run from the
+        # user "single"/"double" knobs). Everything below is rebuilt per
+        # attempt so a double retry recomputes in double, not just refits.
+        # (The old string-keyed ladder never matched and so never fired;
+        # this one does.)
+        first = "single" if math_dtype() == np.float32 else "double"
+        for math_name in dict.fromkeys([first, "double"]):
             try:
-                gmm = self.mixture_class(**kwargs).fit(coords, latent_prior=prior)
+                with precision(math=math_name):
+                    md = math_dtype()
+                    scaler = StandardScaler()
+                    coords = scaler.fit_transform(
+                        self.particle_coords[gp_idx].astype(md, copy=False))
+                    prior, nk, means, covs, cov_t = self._estimate_initial_params(
+                        coords, csc_b)
+                    init_kwargs = dict(
+                        n_components=n_comp,
+                        counts_init=np.asarray(nk, dtype=md),
+                        means_init=np.asarray(means, dtype=md),
+                        covariance_init=np.asarray(covs, dtype=md),
+                        cov_type=cov_t,
+                        init_params="kmeans++",
+                    )
+                    prior_kwargs = self._build_prior_kwargs(
+                        group_subtrees, csc_b, scaler, n_comp)
+                    gmm = self.mixture_class(
+                        **init_kwargs, **prior_kwargs, **run_kwargs
+                    ).fit(coords, latent_prior=prior)
                 break
             except (np.linalg.LinAlgError, ValueError):
-                next_dtype = _PRECISION_LADDER.get(kwargs["cast_dtype"])
-                if next_dtype is not None and hasattr(np, next_dtype):
-                    kwargs["cast_dtype"] = getattr(np, next_dtype)
-                    warnings.warn(f"Numerical issue — retrying with {next_dtype}.")
-                else:
+                if math_name == "double":
                     raise
+                warnings.warn("Numerical issue — retrying with double.")
+
+        nonz = (prior > 0).astype(np.uint8)
 
         log_prob = gmm.predict_log_proba(coords, latent_prior=prior)
         post_prob = np.exp(log_prob)
@@ -550,21 +551,22 @@ class XGMMAssigner:
                 or self.previous_parameters is None):
             return {}
 
+        md = math_dtype()
         n_f = self.particle_coords.shape[1]
         s = scaler.scale_
         dof = n_f + PRIOR_DOF_OFFSET
 
-        mp = np.zeros((n_comp, n_f))
+        mp = np.zeros((n_comp, n_f), dtype=md)
         cp = (
-            np.zeros((n_comp, n_f, n_f)) if self.cov_type == "full"
-            else np.zeros((n_comp, n_f)) if "diag" in self.cov_type
-            else np.zeros(n_comp)
+            np.zeros((n_comp, n_f, n_f), dtype=md) if self.cov_type == "full"
+            else np.zeros((n_comp, n_f), dtype=md) if "diag" in self.cov_type
+            else np.zeros(n_comp, dtype=md)
         )
-        wp = np.full(n_comp, 1.0 / n_comp)
-        pp = np.ones(n_comp)
+        wp = np.full(n_comp, 1.0 / n_comp, dtype=md)
+        pp = np.ones(n_comp, dtype=md)
 
         bound_counts = np.array([len(c) for c in csc_b.column_indices],
-                                dtype=np.float64)
+                                dtype=md)
 
         tid_to_idx = dict(zip(self.ensemble.sub_tree_ids,
                               range(len(self.ensemble.sub_tree_ids))))
@@ -577,7 +579,7 @@ class XGMMAssigner:
                 pos6 = np.concatenate([
                     self.ensemble.positions[idx],
                     self.ensemble.velocities[idx],
-                ])
+                ]).astype(md, copy=False)
                 mp[i] = (pos6 - scaler.mean_) * s
 
             p = self.previous_parameters.get(sid_int)
@@ -596,10 +598,10 @@ class XGMMAssigner:
             )
 
         return dict(
-            mean_prior=np.asarray(mp, dtype=np.float64),
-            covariance_prior=np.asarray(cp, dtype=np.float64),
-            weight_concentration_prior=np.asarray(wp, dtype=np.float64),
-            mean_precision_prior=np.asarray(pp, dtype=np.float64),
+            mean_prior=np.asarray(mp, dtype=md),
+            covariance_prior=np.asarray(cp, dtype=md),
+            weight_concentration_prior=np.asarray(wp, dtype=md),
+            mean_precision_prior=np.asarray(pp, dtype=md),
             degrees_of_freedom_prior=dof,
         )
 
@@ -635,7 +637,7 @@ class XGMMAssigner:
 
         prior = row_l1_normalize(
             csc_b.to_dense(col_func=_rank_transform)
-        ).astype(np.float32, copy=False)
+        ).astype(math_dtype(), copy=False)
 
         if self.previous_resp:
             _, aligned_p = csc_b.align(self.previous_resp, how="left")
@@ -652,7 +654,7 @@ class XGMMAssigner:
             resp = prior
 
         nk, means_init, covs_init = _estimate_gaussian_parameters(
-            coords, resp, np.ones(n_samples, dtype=np.float32),
+            coords, resp, np.ones(n_samples, dtype=math_dtype()),
             self.cov_type, reg_covar=self.reg_covar,
         )
 

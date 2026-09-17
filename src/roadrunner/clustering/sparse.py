@@ -3,6 +3,8 @@
 import numpy as np
 from numba import njit, prange
 
+from roadrunner._defaults import GALAXY_ID, LOCAL_IDX, MISSING, math_dtype
+
 
 def build_dense_from_csc(matrix_shape, true_indices, column_indices, column_values,
                          fill_value=0.0):
@@ -31,7 +33,7 @@ def build_dense_from_csc(matrix_shape, true_indices, column_indices, column_valu
     flat_candidates = np.concatenate(column_indices)
     flat_values = np.concatenate(column_values)
 
-    offsets = np.zeros(n_components + 1, dtype=np.int64)
+    offsets = np.zeros(n_components + 1, dtype=LOCAL_IDX)
     offsets[1:] = np.cumsum([len(c) for c in column_indices])
 
     return _csc_to_dense_kernel(
@@ -71,7 +73,7 @@ def _csc_to_dense_kernel(
     n_samples, n_components = matrix_shape
 
     imax = true_indices.max()
-    idx_map = np.full(int(imax + 1), imax + 2, dtype=np.int64)
+    idx_map = np.full(int(imax + 1), imax + 2, dtype=LOCAL_IDX)
     idx_map[true_indices] = np.arange(true_indices.size)
 
     dense = np.full(matrix_shape, fill_value, dtype=flat_values.dtype)
@@ -128,16 +130,16 @@ def _build_row_id(indices_list):
 
     Returns
     -------
-    row_id : ndarray of uint64
+    row_id : ndarray of LOCAL_IDX
         Sorted unique row IDs.
     """
     if len(indices_list) == 0:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=LOCAL_IDX)
     non_empty = [c for c in indices_list if c.size > 0]
     if not non_empty:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=LOCAL_IDX)
     all_rows = np.unique(np.concatenate(non_empty))
-    return all_rows if all_rows.size > 0 else np.array([], dtype=np.uint64)
+    return all_rows if all_rows.size > 0 else np.array([], dtype=LOCAL_IDX)
 
 
 class SparseCSC:
@@ -154,7 +156,7 @@ class SparseCSC:
         Per-column list of row IDs (external labels).
     column_values : list of ndarray
         Per-column list of values.
-    column_id : ndarray of int64, optional
+    column_id : ndarray of GALAXY_ID, optional
         External column labels.  Defaults to ``arange(n_columns)``.
     """
 
@@ -164,7 +166,7 @@ class SparseCSC:
         n = len(column_indices)
         self.column_id = (
             np.arange(n) if column_id is None
-            else np.asarray(column_id, dtype=np.int64)
+            else np.asarray(column_id, dtype=GALAXY_ID)
         )
         self.row_id = _build_row_id(column_indices)
 
@@ -242,20 +244,20 @@ class SparseCSC:
             new_rows = self.row_id.copy()
             new_cols = self.column_id.copy()
         elif how == "both":
-            new_rows = np.union1d(self.row_id, other.row_id).astype(np.int64)
-            new_cols = np.union1d(self.column_id, other.column_id).astype(np.int64)
+            new_rows = np.union1d(self.row_id, other.row_id).astype(LOCAL_IDX)
+            new_cols = np.union1d(self.column_id, other.column_id).astype(GALAXY_ID)
         else:
             raise ValueError(f"how must be 'left' or 'both', got '{how}'")
 
         if new_rows.size == 0 or new_cols.size == 0:
-            empty = SparseCSC([], [], column_id=np.array([], dtype=np.int64))
+            empty = SparseCSC([], [], column_id=np.array([], dtype=GALAXY_ID))
             return empty, empty
 
         max_id = max(
             int(self.row_id.max()) if self.row_id.size > 0 else 0,
             int(other.row_id.max()) if other.row_id.size > 0 else 0,
         )
-        row_map = np.full(max_id + 1, -1, dtype=np.int64)
+        row_map = np.full(max_id + 1, MISSING, dtype=LOCAL_IDX)
         row_map[new_rows] = np.arange(new_rows.size)
         new_cols_arr = new_cols.copy()
 
@@ -276,8 +278,8 @@ class SparseCSC:
             for cid in new_cols_arr:
                 k = col_map.get(cid)
                 if k is None:
-                    new_idx.append(np.array([], dtype=np.int64))
-                    new_val.append(np.array([], dtype=np.float32))
+                    new_idx.append(np.array([], dtype=LOCAL_IDX))
+                    new_val.append(np.array([], dtype=math_dtype()))
                     continue
                 old_idx = csc.column_indices[k]
                 old_val = csc.column_values[k]
@@ -315,13 +317,13 @@ class SparseCSC:
         new_values = []
         for idx_arr, val_arr in zip(self.column_indices, self.column_values):
             if idx_arr.size == 0:
-                new_indices.append(np.array([], dtype=np.int64))
-                new_values.append(np.array([], dtype=np.float32))
+                new_indices.append(np.array([], dtype=LOCAL_IDX))
+                new_values.append(np.array([], dtype=math_dtype()))
                 continue
             pos = np.searchsorted(sorted_src, idx_arr)
             pos = np.clip(pos, 0, len(sorted_src) - 1)
             found = sorted_src[pos] == idx_arr
-            new_indices.append(sorted_dst[pos[found]].astype(np.int64, copy=False))
+            new_indices.append(sorted_dst[pos[found]].astype(LOCAL_IDX, copy=False))
             new_values.append(val_arr[found].copy())
 
         return SparseCSC(new_indices, new_values, column_id=self.column_id.copy())
@@ -342,12 +344,12 @@ class SparseCSC:
 
         flat_rows = np.concatenate(self.column_indices)
         flat_vals = np.concatenate(self.column_values)
-        col_offsets = np.zeros(len(self.column_indices) + 1, dtype=np.int64)
+        col_offsets = np.zeros(len(self.column_indices) + 1, dtype=LOCAL_IDX)
         col_offsets[1:] = np.cumsum([len(c) for c in self.column_indices])
 
         # Map external row IDs → positional indices for the kernel
         max_row = int(self.row_id.max())
-        row_to_pos = np.full(max_row + 1, -1, dtype=np.int64)
+        row_to_pos = np.full(max_row + 1, MISSING, dtype=LOCAL_IDX)
         row_to_pos[self.row_id] = np.arange(self.row_id.size)
         flat_rows_pos = row_to_pos[flat_rows]
 
@@ -402,16 +404,16 @@ def _csc_to_csr_kernel(flat_rows, flat_vals, col_offsets, n_rows, n_cols):
     csr_vals : ndarray of float32, shape (nnz,)
         Values for each non-zero, in row-major order.
     """
-    row_counts = np.zeros(n_rows, dtype=np.int64)
+    row_counts = np.zeros(n_rows, dtype=LOCAL_IDX)
     for i in range(len(flat_rows)):
         row_counts[flat_rows[i]] += 1
 
-    row_offsets = np.zeros(n_rows + 1, dtype=np.int64)
+    row_offsets = np.zeros(n_rows + 1, dtype=LOCAL_IDX)
     for i in range(n_rows):
         row_offsets[i + 1] = row_offsets[i] + row_counts[i]
 
     nnz = len(flat_rows)
-    csr_cols = np.empty(nnz, dtype=np.int64)
+    csr_cols = np.empty(nnz, dtype=LOCAL_IDX)
     csr_vals = np.empty(nnz, dtype=flat_vals.dtype)
     row_counts[:] = 0
     for k in range(n_cols):
@@ -454,16 +456,16 @@ def _csr_to_csc_kernel(flat_cols, flat_vals, row_offsets, n_cols, n_rows):
     csc_vals : ndarray of float32, shape (nnz,)
         Values for each non-zero, in column-major order.
     """
-    col_counts = np.zeros(n_cols, dtype=np.int64)
+    col_counts = np.zeros(n_cols, dtype=LOCAL_IDX)
     for i in range(len(flat_cols)):
         col_counts[flat_cols[i]] += 1
 
-    col_offsets = np.zeros(n_cols + 1, dtype=np.int64)
+    col_offsets = np.zeros(n_cols + 1, dtype=LOCAL_IDX)
     for k in range(n_cols):
         col_offsets[k + 1] = col_offsets[k] + col_counts[k]
 
     nnz = len(flat_cols)
-    csc_rows = np.empty(nnz, dtype=np.int64)
+    csc_rows = np.empty(nnz, dtype=LOCAL_IDX)
     csc_vals = np.empty(nnz, dtype=flat_vals.dtype)
     col_counts[:] = 0
     for r in range(n_rows):
@@ -486,16 +488,16 @@ def _build_column_id(row_indices):
 
     Returns
     -------
-    column_id : ndarray of uint64
+    column_id : ndarray of GALAXY_ID
         Sorted unique column IDs.
     """
     if len(row_indices) == 0:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=GALAXY_ID)
     non_empty = [r for r in row_indices if r.size > 0]
     if not non_empty:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=GALAXY_ID)
     all_cols = np.unique(np.concatenate(non_empty))
-    return all_cols if all_cols.size > 0 else np.array([], dtype=np.uint64)
+    return all_cols if all_cols.size > 0 else np.array([], dtype=GALAXY_ID)
 
 
 def build_dense_from_csr(matrix_shape, true_indices, row_indices, row_values,
@@ -525,7 +527,7 @@ def build_dense_from_csr(matrix_shape, true_indices, row_indices, row_values,
     flat_indices = np.concatenate(row_indices)
     flat_values = np.concatenate(row_values)
 
-    offsets = np.zeros(n_rows + 1, dtype=np.int64)
+    offsets = np.zeros(n_rows + 1, dtype=LOCAL_IDX)
     offsets[1:] = np.cumsum([len(r) for r in row_indices])
 
     return _csr_to_dense_kernel(
@@ -565,7 +567,7 @@ def _csr_to_dense_kernel(
     n_rows, n_columns = matrix_shape
 
     imax = true_indices.max()
-    idx_map = np.full(int(imax + 1), imax + 2, dtype=np.int64)
+    idx_map = np.full(int(imax + 1), imax + 2, dtype=LOCAL_IDX)
     idx_map[true_indices] = np.arange(true_indices.size)
 
     dense = np.full(matrix_shape, fill_value, dtype=flat_values.dtype)
@@ -594,7 +596,7 @@ class SparseCSR:
         Per-row list of column IDs (external labels).
     row_values : list of ndarray
         Per-row list of values.
-    row_id : ndarray of int64, optional
+    row_id : ndarray of LOCAL_IDX, optional
         External row labels.  Defaults to ``arange(n_rows)``.
     """
 
@@ -604,7 +606,7 @@ class SparseCSR:
         n = len(row_indices)
         self.row_id = (
             np.arange(n) if row_id is None
-            else np.asarray(row_id, dtype=np.int64)
+            else np.asarray(row_id, dtype=LOCAL_IDX)
         )
         self.column_id = _build_column_id(row_indices)
 
@@ -641,13 +643,13 @@ class SparseCSR:
         else:
             mask = np.isin(self.row_id, rows)
             if not np.any(mask):
-                return np.full((0, self.column_id.size), fill_value, dtype=np.float32)
+                return np.full((0, self.column_id.size), fill_value, dtype=math_dtype())
             idx = np.where(mask)[0]
             row_idx_list = [self.row_indices[i] for i in idx]
             row_val_list = [self.row_values[i] for i in idx]
 
         if self.column_id.size == 0:
-            return np.full((len(row_idx_list), 0), fill_value)
+            return np.full((len(row_idx_list), 0), fill_value, dtype=math_dtype())
 
         if row_func is not None:
             row_val_list = [row_func(v) for v in row_val_list]
@@ -688,14 +690,14 @@ class SparseCSR:
             raise ValueError(f"how must be 'left' or 'both', got '{how}'")
 
         if new_rows.size == 0 or new_cols.size == 0:
-            empty = SparseCSR([], [], row_id=np.array([], dtype=np.int64))
+            empty = SparseCSR([], [], row_id=np.array([], dtype=LOCAL_IDX))
             return empty, empty
 
         max_id = max(
             int(self.column_id.max()) if self.column_id.size > 0 else 0,
             int(other.column_id.max()) if other.column_id.size > 0 else 0,
         )
-        col_map = np.full(max_id + 1, -1, dtype=np.int64)
+        col_map = np.full(max_id + 1, MISSING, dtype=LOCAL_IDX)
         col_map[new_cols] = np.arange(new_cols.size)
 
         def _align_one(csr):
@@ -715,8 +717,8 @@ class SparseCSR:
             for rid in new_rows:
                 i = row_map.get(rid)
                 if i is None:
-                    new_idx.append(np.array([], dtype=np.int64))
-                    new_val.append(np.array([], dtype=np.float32))
+                    new_idx.append(np.array([], dtype=LOCAL_IDX))
+                    new_val.append(np.array([], dtype=math_dtype()))
                     continue
                 old_idx = csr.row_indices[i]
                 old_val = csr.row_values[i]
@@ -774,12 +776,12 @@ class SparseCSR:
 
         flat_cols = np.concatenate(self.row_indices)
         flat_vals = np.concatenate(self.row_values)
-        row_offsets = np.zeros(len(self.row_indices) + 1, dtype=np.int64)
+        row_offsets = np.zeros(len(self.row_indices) + 1, dtype=LOCAL_IDX)
         row_offsets[1:] = np.cumsum([len(r) for r in self.row_indices])
 
         # Map external column IDs → positional indices for the kernel
         max_col = int(self.column_id.max())
-        col_to_pos = np.full(max_col + 1, -1, dtype=np.int64)
+        col_to_pos = np.full(max_col + 1, MISSING, dtype=LOCAL_IDX)
         col_to_pos[self.column_id] = np.arange(self.column_id.size)
         flat_cols_pos = col_to_pos[flat_cols]
 

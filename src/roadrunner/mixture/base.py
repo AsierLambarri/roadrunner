@@ -114,17 +114,16 @@ class BaseMixture(abc.ABC):
         Random state for reproducibility.
     reg_covar : float, default=1e-6
         Regularisation added to the diagonal of covariance matrices.
-    cast_dtype : dtype, default=np.float32
-        Working precision for internal arrays.
+        Stored raw (a Python float never upcasts an array); applied to
+        working-precision arrays at the use sites.
     **kwargs
         Additional keyword arguments consumed by subclasses.
     """
 
     def __init__(self, n_components=2, init_params='kmeans', max_iter=10, tol=1e-3, verbose=0,
-                 random_state=None, reg_covar=1E-6, cast_dtype=np.float32, **kwargs):
+                 random_state=None, reg_covar=1E-6, **kwargs):
 
-        self.cast_dtype  = cast_dtype
-        self.reg_covar   = self.cast_dtype(reg_covar)
+        self.reg_covar   = reg_covar
 
         self.n_components = n_components
 
@@ -272,6 +271,9 @@ class BaseMixture(abc.ABC):
         else:
             raise ValueError("provided ini_params is not valid.")
 
+        # NOTE: sklearn's KMeans always computes in float64, even for
+        # float32 input. Accepted exception: init seeding is one-time and
+        # small; everything downstream follows X's dtype.
         label = (
             KMeans(
                 n_clusters=self.n_components, n_init=1, init=means_init, max_iter=max_iters, random_state=self.random_state
@@ -419,7 +421,7 @@ class BaseMixture(abc.ABC):
         """
         t0 = time()
 
-        X = np.ascontiguousarray(X, dtype=self.cast_dtype)
+        X = np.ascontiguousarray(X)
         n_samples, n_features = X.shape
 
         if self.verbose > 0:
@@ -486,10 +488,10 @@ class BaseMixture(abc.ABC):
         log_resp : ndarray of shape (n_samples, n_components)
             ``log p(z_n = k | x_n)``.
         """
-        X = np.ascontiguousarray(X, dtype=self.cast_dtype)
+        X = np.ascontiguousarray(X)
         _, _, log_alpha = self._initialize_weights_and_prior(
             X,
-            np.ones(X.shape[0]),
+            np.ones(X.shape[0], dtype=X.dtype),
             latent_prior
         )
         log_resp, _ = self._e_step(X, log_alpha=log_alpha)

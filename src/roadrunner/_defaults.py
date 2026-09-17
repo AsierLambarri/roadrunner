@@ -17,6 +17,11 @@
 
 """Module-level default constants for the roadrunner package."""
 
+import contextvars
+from contextlib import contextmanager
+
+import numpy as np
+
 # ── Birth tracker ──────────────────────────────────────────────────
 BIRTH_GAUSSIAN_WIDTH = 0.3        # width of the gaussian window function
 
@@ -54,6 +59,71 @@ COL_WIDTH_RUNTIME = 12
 COL_WIDTH_INT = 10
 COL_WIDTH_FLOAT = 9
 
+# ── Precision (single/double) ────────────────────────────────────
+# User-facing names; "single" and "double" are the only valid values.
+# Consumed via data_dtype()/math_dtype() or the precision() scope —
+# never passed as method arguments.
+_PRECISION_MAP = {"single": np.float32, "double": np.float64}
+
+_data_var = contextvars.ContextVar("roadrunner_data_precision", default="single")
+_math_var = contextvars.ContextVar("roadrunner_math_precision", default="single")
+
+
+def _resolve_precision(name):
+    """Map a user precision name to a numpy dtype (raises on unknown)."""
+    try:
+        return _PRECISION_MAP[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown precision {name!r}. Choose from {sorted(_PRECISION_MAP)}"
+        ) from None
+
+
+@contextmanager
+def precision(data=None, math=None):
+    """Scope the data/math precision for a run (nestable, thread-safe).
+
+    Parameters
+    ----------
+    data, math : {"single", "double"} or None
+        ``None`` leaves the current value untouched.
+    """
+    tokens = []
+    if data is not None:
+        _resolve_precision(data)
+        tokens.append((_data_var, _data_var.set(data)))
+    if math is not None:
+        _resolve_precision(math)
+        tokens.append((_math_var, _math_var.set(math)))
+    try:
+        yield
+    finally:
+        for var, token in reversed(tokens):
+            var.reset(token)
+
+
+def data_dtype():
+    """Numpy dtype for loaded particle data (mass/position/velocity)."""
+    return _resolve_precision(_data_var.get())
+
+
+def math_dtype():
+    """Numpy dtype for compute kernels (mixture/scaler/halos)."""
+    return _resolve_precision(_math_var.get())
+
+
+# ── Integer IDs ──────────────────────────────────────────────────
+# SIM_ID: particle IDs from simulations (uint64, never narrowed/signed).
+# LOCAL_IDX: local array positions (signed: -1 == missing).
+# GALAXY_ID: galaxy/Sub_tree IDs (signed: -1 == unbound, load-bearing
+#   sentinel in assembly, statistics, and properties — never uint).
+# SNAP_ID: snapshot numbers (small).
+SIM_ID = np.uint64
+LOCAL_IDX = np.int64
+GALAXY_ID = np.int64
+SNAP_ID = np.int32
+UNBOUND = MISSING = -1
+
 
 __all__ = [
     "BIRTH_GAUSSIAN_WIDTH",
@@ -77,4 +147,13 @@ __all__ = [
     "COL_WIDTH_RUNTIME",
     "COL_WIDTH_INT",
     "COL_WIDTH_FLOAT",
+    "precision",
+    "data_dtype",
+    "math_dtype",
+    "SIM_ID",
+    "LOCAL_IDX",
+    "GALAXY_ID",
+    "SNAP_ID",
+    "UNBOUND",
+    "MISSING",
 ]

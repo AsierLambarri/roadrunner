@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._exceptions import RestartError
+from roadrunner._defaults import data_dtype, math_dtype
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_particles import HDF5ParticleWriter
@@ -171,6 +172,10 @@ class AccretionPipeline:
                 save_checkpoint(self._checkpoint_path, {
                     "last_snapshot": snap_id,
                     "snapshots": list(snapshot_ids),
+                    "precision": {
+                        "data": np.dtype(data_dtype()).name,
+                        "math": np.dtype(math_dtype()).name,
+                    },
                     "previous_resp": previous_resp_sim,
                     "previous_parameters": fitted_parameters,
                     "birth_tracker": bt._get_state() if bt is not None else None,
@@ -323,6 +328,18 @@ class AccretionPipeline:
                     f"Delete the checkpoint and start a fresh run."
                 )
         next_idx = snapshot_ids.index(last_completed) + 1
+        ckpt_precision = ckpt.get("precision")
+        if ckpt_precision is not None:
+            current = {
+                "data": np.dtype(data_dtype()).name,
+                "math": np.dtype(math_dtype()).name,
+            }
+            if dict(ckpt_precision) != current:
+                raise RestartError(
+                    f"Checkpoint precision {dict(ckpt_precision)} does not match "
+                    f"requested {current}. "
+                    f"Delete the checkpoint and start a fresh run."
+                )
         previous_resp_sim = ckpt.get("previous_resp")
         previous_parameters = ckpt.get("previous_parameters")
         if previous_parameters is not None:

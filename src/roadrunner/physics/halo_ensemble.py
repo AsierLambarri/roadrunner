@@ -16,6 +16,7 @@
 import numpy as np
 
 from roadrunner.clustering.sparse import SparseCSC
+from roadrunner._defaults import GALAXY_ID, LOCAL_IDX, math_dtype
 from roadrunner.physics.halo_model import HaloModel
 
 
@@ -80,12 +81,12 @@ class HaloEnsemble:
     @property
     def positions(self) -> np.ndarray:
         """Positions of all halos, shape ``(n_halos, 3)``."""
-        return np.array([h.xcen for h in self._halos], dtype=np.float64)
+        return np.array([h.xcen for h in self._halos], dtype=math_dtype())
 
     @property
     def velocities(self) -> np.ndarray:
         """Velocities of all halos, shape ``(n_halos, 3)``."""
-        return np.array([h.velocity for h in self._halos], dtype=np.float64)
+        return np.array([h.velocity for h in self._halos], dtype=math_dtype())
 
     @property
     def virial_radii(self) -> np.ndarray:
@@ -95,7 +96,7 @@ class HaloEnsemble:
     @property
     def sub_tree_ids(self) -> np.ndarray:
         """``Sub_tree_id`` of each halo, shape ``(n_halos,)``."""
-        return np.array([h.sub_tree_id for h in self._halos], dtype=int)
+        return np.array([h.sub_tree_id for h in self._halos], dtype=GALAXY_ID)
 
     def select(self, indices: list[int]) -> "HaloEnsemble":
         """Return a sub-ensemble containing the halos at the given indices.
@@ -135,13 +136,13 @@ class HaloEnsemble:
                 boundness.append(ener)
                 tdyns.append(tdyn_arr)
             else:
-                empty_idx = np.array([], dtype=np.uint64)
-                empty_val = np.array([], dtype=np.float32)
+                empty_idx = np.array([], dtype=LOCAL_IDX)
+                empty_val = np.array([], dtype=math_dtype())
                 candidates.append(empty_idx)
                 boundness.append(empty_val)
                 tdyns.append(empty_val)
 
-        col_id = np.array([h.sub_tree_id for h in self._halos], dtype=np.int64)
+            col_id = np.array([h.sub_tree_id for h in self._halos], dtype=GALAXY_ID)
         return SparseCSC(candidates, boundness, column_id=col_id), SparseCSC(candidates, tdyns, column_id=col_id)
 
     def populated_indices(self) -> np.ndarray:
@@ -154,7 +155,7 @@ class HaloEnsemble:
         csc, _ = self.get_particles()
         return np.array(
             [i for i, col in enumerate(csc.column_indices) if col.size > 0],
-            dtype=np.int64,
+            dtype=LOCAL_IDX,
         )
 
     def empty_indices(self) -> np.ndarray:
@@ -167,5 +168,5 @@ class HaloEnsemble:
         csc, _ = self.get_particles()
         return np.array(
             [i for i, col in enumerate(csc.column_indices) if col.size == 0],
-            dtype=np.int64,
+            dtype=LOCAL_IDX,
         )

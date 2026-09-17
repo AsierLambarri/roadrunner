@@ -37,10 +37,10 @@ class StandardScaler:
         X : ndarray of shape (n_samples, n_features)
             Training data.
         """
-        self.mean_ = np.mean(X, axis=0).astype(np.float64, copy=False)
+        self.mean_ = np.mean(X, axis=0).astype(X.dtype, copy=False)
         diff = X.max(axis=0) - X.min(axis=0)
         diff[diff == 0] = 1.0
-        self.scale_ = (SCALER_RANGE / diff).astype(np.float64, copy=False)
+        self.scale_ = (SCALER_RANGE / diff).astype(X.dtype, copy=False)
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:

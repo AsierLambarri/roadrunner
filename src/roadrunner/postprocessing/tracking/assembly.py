@@ -9,6 +9,7 @@ from collections import defaultdict, deque
 from tqdm import tqdm
 
 from roadrunner._exceptions import CycleError
+from roadrunner._defaults import UNBOUND
 
 _EMPTY = frozenset()
 
@@ -24,11 +25,11 @@ class AssemblyTracker:
     ----------
     n_sat_history : int, default=2
         Number of past satellite maps to buffer for history queries.
-    unbound_default : int, default=-1
+    unbound_default : int, default=UNBOUND (-1)
         Galaxy ID used for unbound particles.
     """
 
-    def __init__(self, n_sat_history=2, unbound_default=-1):
+    def __init__(self, n_sat_history=2, unbound_default=UNBOUND):
         self._infall_lists = defaultdict(set)
         self._previous_birth_map = defaultdict(set)
         self._unbound_default = unbound_default

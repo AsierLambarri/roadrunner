@@ -11,7 +11,7 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
-from roadrunner._defaults import BIRTH_GAUSSIAN_WIDTH
+from roadrunner._defaults import BIRTH_GAUSSIAN_WIDTH, SNAP_ID, math_dtype
 
 
 def _exp_window(x):
@@ -104,7 +104,7 @@ class FinalizedInfo(NamedTuple):
 
     birth_id: np.uint64
     birth_time: np.float32
-    birth_snap: np.uint32
+    birth_snap: SNAP_ID
     timescale: np.float32
 
 
@@ -167,11 +167,12 @@ class BirthTracker:
             host_active = hosts[is_active]
             w_active = ws[is_active]
 
-            t0 = np.array([self._active[p].t0 for p in p_active])
-            tau0 = np.array([self._active[p].tau for p in p_active])
-            tau0 = np.maximum(tau0, 1e-10)
+            md = math_dtype()
+            t0 = np.array([self._active[p].t0 for p in p_active], dtype=md)
+            tau0 = np.array([self._active[p].tau for p in p_active], dtype=md)
+            tau0 = np.maximum(tau0, md(1e-10))
 
-            deltas = (w_active * self._window_fn((t_snap - t0) / tau0)).astype(np.float64)
+            deltas = (w_active * self._window_fn((t_snap - t0) / tau0)).astype(md, copy=False)
             for p, host, delta in zip(p_active, host_active, deltas):
                 info = self._active[p]
                 if self.enforce_initial_hosts and host not in info.initial_hosts:
@@ -199,20 +200,21 @@ class BirthTracker:
                 particle_tau = tau_sorted[start:end].max()
 
                 hosts_u, inverse_u = np.unique(particle_hosts, return_inverse=True)
-                sums = np.zeros(len(hosts_u), dtype=np.float64)
+                sums = np.zeros(len(hosts_u), dtype=math_dtype())
                 np.add.at(sums, inverse_u, particle_weights)
 
                 counts = defaultdict(float, zip(hosts_u, sums))
                 initial_hosts = set(hosts_u)
 
+                md = math_dtype()
                 self._active[p] = ActiveParticleInfo(
-                    t0=np.float32(t_snap),
-                    snap0=np.uint32(snapshot_id),
-                    tau=np.float32(particle_tau),
+                    t0=md(t_snap),
+                    snap0=SNAP_ID(snapshot_id),
+                    tau=md(particle_tau),
                     counts=counts,
                     initial_hosts=initial_hosts,
                 )
-                heapq.heappush(self._heap, (np.float32(t_snap + self.factor * particle_tau), np.uint64(p)))
+                heapq.heappush(self._heap, (md(t_snap + self.factor * particle_tau), np.uint64(p)))
 
     def _finalize_particles(self, t_snap):
         """Finalise particles whose accumulation window has expired.
@@ -256,7 +258,7 @@ class BirthTracker:
         """
         if snapshot_id > self._last_snapshot:
             if weights is None:
-                weights = np.full(particle_ids.shape, 1.0)
+                weights = np.full(particle_ids.shape, 1.0, dtype=math_dtype())
             self._add_update_particles(t_snap, snapshot_id, particle_ids, host_ids, timescales, weights)
             self._finalize_particles(t_snap)
             self._last_snapshot = snapshot_id

@@ -238,7 +238,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         from time import time
 
         t0 = time()
-        X = np.ascontiguousarray(X, dtype=self.cast_dtype)
+        X = np.ascontiguousarray(X)
         n_samples, n_features = X.shape
 
         if self.verbose > 0:

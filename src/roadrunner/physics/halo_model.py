@@ -4,6 +4,7 @@ import numpy as np
 
 from roadrunner.physics.constants import G_KM
 from roadrunner.physics.potentials import get_potential
+from roadrunner._defaults import LOCAL_IDX, math_dtype
 from roadrunner._mcf_types import PotentialModel
 
 
@@ -44,8 +45,9 @@ class HaloModel:
         comoving: bool = True,
     ):
         self._inner = inner
-        self.xcen = np.asarray(xcen, dtype=np.float64)
-        self.velocity = np.asarray(velocity, dtype=np.float64)
+        md = math_dtype()
+        self.xcen = np.asarray(xcen, dtype=md)
+        self.velocity = np.asarray(velocity, dtype=md)
         self.virial_radius = float(virial_radius)
         self.sub_tree_id = sub_tree_id
         self.redshift = float(redshift)
@@ -60,14 +62,18 @@ class HaloModel:
 
         Parameters
         ----------
-        indices : ndarray of uint64
-            Bound particle indices.
-        energies : ndarray of float32
-            Boundness energy values.
-        tdyns : ndarray of float32
-            Dynamical times for the bound particles.
+        indices : ndarray of LOCAL_IDX
+            Bound particle indices (array positions). Cast on entry so
+            all halos share one dtype (mixed uint64/int64 inputs would
+            otherwise promote concatenations to float64).
+        energies : ndarray
+            Boundness energy values (ambient math precision).
+        tdyns : ndarray
+            Dynamical times for the bound particles (ambient math precision).
         """
-        self._boundness = (indices, energies, tdyns)
+        self._boundness = (
+            np.asarray(indices, dtype=LOCAL_IDX), energies, tdyns,
+        )
 
     def get_boundness(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         """Retrieve the stored boundness data.
@@ -196,10 +202,10 @@ class HaloModel:
         """
         xcen = np.array([
             row["position_x"], row["position_y"], row["position_z"],
-        ], dtype=np.float64)
+        ], dtype=math_dtype())
         velocity = np.array([
             row["velocity_x"], row["velocity_y"], row["velocity_z"],
-        ], dtype=np.float64)
+        ], dtype=math_dtype())
         conc = row["virial_radius"] / row["scale_radius"]
         kwargs = {"M": row["mass"], "G": G_KM}
         if model.lower() == "nfw":

@@ -5,7 +5,6 @@ from roadrunner.helpers import (
     check_particle_uniqueness,
     remove_duplicates,
     select_float_dtype,
-    select_int_dtype,
     select_uint_dtype,
 )
 
@@ -24,28 +23,12 @@ class TestSelectUintDtype:
     def test_large_value_uint64(self):
         assert select_uint_dtype(10_000_000_000) == np.uint64
 
-    def test_negative_value_uses_abs(self):
-        assert select_uint_dtype(-100) == np.uint16
+    def test_negative_value_raises(self):
+        with pytest.raises(ValueError):
+            select_uint_dtype(-100)
 
     def test_zero(self):
         assert select_uint_dtype(0) is not None
-
-
-class TestSelectIntDtype:
-    def test_small_value_int16(self):
-        assert select_int_dtype(100) == np.int16
-
-    def test_medium_value_int32(self):
-        assert select_int_dtype(100_000) == np.int32
-
-    def test_large_value_int64(self):
-        assert select_int_dtype(10_000_000_000) == np.int64
-
-    def test_negative_value(self):
-        assert select_int_dtype(-100) == np.int16
-
-    def test_zero(self):
-        assert select_int_dtype(0) is not None
 
 
 class TestSelectFloatDtype:

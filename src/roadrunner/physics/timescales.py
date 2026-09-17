@@ -16,6 +16,7 @@
 import numpy as np
 
 from roadrunner.physics.constants import MAX_DYN_TIMESCALE
+from roadrunner._defaults import math_dtype
 
 
 def compute_particle_dynamical_timescales(particle_df, ensemble, groups, td_factor=1.0):
@@ -41,7 +42,7 @@ def compute_particle_dynamical_timescales(particle_df, ensemble, groups, td_fact
     particle_df : DataFrame
         The same DataFrame with a ``timescale`` column added.
     """
-    particle_df["timescale"] = 0.0
+    particle_df["timescale"] = np.zeros(len(particle_df), dtype=math_dtype())
 
     for group in groups:
         sub = ensemble.select(group)

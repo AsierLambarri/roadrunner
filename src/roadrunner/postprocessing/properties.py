@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._defaults import (
-    MIN_PARTICLES_STRUCTURAL, SSC_NMIN, SSC_ALPHA,
+    MIN_PARTICLES_STRUCTURAL, SSC_NMIN, SSC_ALPHA, UNBOUND, math_dtype,
 )
 from roadrunner.physics.potentials import get_potential
 from roadrunner.physics.timescales import compute_tidal_radius
@@ -43,7 +43,7 @@ def random_lines_of_sight(N, half_sphere=True, seed=None):
     x = np.sin(theta) * np.cos(phi)
     y = np.sin(theta) * np.sin(phi)
     z = cos_theta
-    return np.column_stack((x, y, z))
+    return np.column_stack((x, y, z)).astype(math_dtype(), copy=False)
 
 
 def rotation_matrix_from_los(los):
@@ -62,7 +62,7 @@ def rotation_matrix_from_los(los):
     R : ndarray of shape (3, 3)
         Orthonormal rotation matrix.
     """
-    los = np.asarray(los)
+    los = np.asarray(los, dtype=math_dtype())
     if los.shape != (3,):
         raise ValueError("los must be a 3-element vector")
     ez = los / np.linalg.norm(los)
@@ -191,7 +191,7 @@ def projected_half_mass_radius(positions, masses, center, los_matrices, mass_fra
     """
     Nlos = los_matrices.shape[0]
     centered = positions - center
-    result = np.empty(Nlos, dtype=np.float64)
+    result = np.empty(Nlos, dtype=math_dtype())
     for i in range(Nlos):
         pos_rot = centered @ los_matrices[i].T
         radii = np.sqrt(pos_rot[:, 0] ** 2 + pos_rot[:, 1] ** 2)
@@ -235,13 +235,13 @@ def line_of_sight_velocity_dispersion(positions, velocities, los_matrices, apert
     -------
     sigma_los : ndarray of shape (n_los,)
     """
-    los_matrices = np.asarray(los_matrices)
-    apertures = np.asarray(apertures)
+    los_matrices = np.asarray(los_matrices, dtype=math_dtype())
+    apertures = np.asarray(apertures, dtype=math_dtype())
     if los_matrices.shape[0] != apertures.shape[0]:
         raise ValueError("Number of los_matrices must match number of apertures")
 
     Nlos = los_matrices.shape[0]
-    sigma_los = np.full(Nlos, np.nan)
+    sigma_los = np.full(Nlos, np.nan, dtype=math_dtype())
 
     for i in range(Nlos):
         R = los_matrices[i]
@@ -321,7 +321,8 @@ def compute_galaxy_properties(
     ]
 
     los_vectors = random_lines_of_sight(n_los)
-    los_matrices = np.array([rotation_matrix_from_los(los) for los in los_vectors])
+    los_matrices = np.array([rotation_matrix_from_los(los) for los in los_vectors],
+                            dtype=math_dtype())
 
     host_mass = host_props["mass"]
     if halo_model.lower() == "kepler":
@@ -331,8 +332,8 @@ def compute_galaxy_properties(
         host_c = host_props["virial_radius"] / host_props["scale_radius"]
         host_potential = get_potential(halo_model, M=host_mass, Rs=host_Rs, c=host_c)
 
-    if -1 in galaxy_bound:
-        del galaxy_bound[-1]
+    if UNBOUND in galaxy_bound:
+        del galaxy_bound[UNBOUND]
 
     records = []
     for sid, indices in galaxy_bound.items():
@@ -390,13 +391,13 @@ def compute_galaxy_properties(
         centered_pos = gal_pos - center_pos
         centered_vel = gal_vel - center_vel
 
-        r20 = half_mass_radius(centered_pos, gal_masses, np.zeros(3), mass_fraction=0.2)
-        rh = half_mass_radius(centered_pos, gal_masses, np.zeros(3), mass_fraction=0.5)
-        r80 = half_mass_radius(centered_pos, gal_masses, np.zeros(3), mass_fraction=0.8)
+        r20 = half_mass_radius(centered_pos, gal_masses, np.zeros(3, dtype=centered_pos.dtype), mass_fraction=0.2)
+        rh = half_mass_radius(centered_pos, gal_masses, np.zeros(3, dtype=centered_pos.dtype), mass_fraction=0.5)
+        r80 = half_mass_radius(centered_pos, gal_masses, np.zeros(3, dtype=centered_pos.dtype), mass_fraction=0.8)
         sigma = velocity_dispersion(centered_vel)
 
         Rhp = projected_half_mass_radius(
-            centered_pos, gal_masses, np.zeros(3), los_matrices, mass_fraction=0.5,
+            centered_pos, gal_masses, np.zeros(3, dtype=centered_pos.dtype), los_matrices, mass_fraction=0.5,
         )
         sigma_los_arr = line_of_sight_velocity_dispersion(
             centered_pos, centered_vel, los_matrices, Rhp,

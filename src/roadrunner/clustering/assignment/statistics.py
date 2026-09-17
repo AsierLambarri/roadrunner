@@ -23,7 +23,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from roadrunner._defaults import FRAGMENT_THRESHOLD
+from roadrunner._defaults import FRAGMENT_THRESHOLD, UNBOUND
 
 
 class GMMAssignerStatistics:
@@ -77,11 +77,11 @@ class GMMAssignerStatistics:
             The statistics object with updated attributes.
         """
         N = len(particle_df)
-        self.unassigned = int((particle_df["Sub_tree_id"] == -1).sum())
+        self.unassigned = int((particle_df["Sub_tree_id"] == UNBOUND).sum())
 
         counts = particle_df["Sub_tree_id"].value_counts()
         self.fragments = int(
-            (counts[counts.index != -1] < FRAGMENT_THRESHOLD).sum()
+            (counts[counts.index != UNBOUND] < FRAGMENT_THRESHOLD).sum()
         ) if len(counts) > 0 else 0
 
         if not resp_map:

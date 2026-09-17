@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner.helpers import select_uint_dtype
+from roadrunner._defaults import GALAXY_ID, SNAP_ID
 
 
 class HDF5CatalogueWriter:
@@ -90,7 +91,7 @@ class HDF5CatalogueWriter:
             hdr.create_dataset("equivalence", data=equiv_json,
                                dtype=h5py.string_dtype())
             self._del_existing(hdr, "last_snapshot")
-            hdr.create_dataset("last_snapshot", data=-1, dtype=np.int32)
+            hdr.create_dataset("last_snapshot", data=-1, dtype=SNAP_ID)
 
     def write_snapshot(self, snapshot_id, time,
                        properties_df, dynstate_df,
@@ -128,7 +129,7 @@ class HDF5CatalogueWriter:
 
             sat_grp = snap_grp.require_group("satellite_relations")
             for gal_id, sats in satellites_map.items():
-                arr = np.asarray(list(sats), dtype=np.int64)
+                arr = np.asarray(list(sats), dtype=GALAXY_ID)
                 sat_grp.create_dataset(str(gal_id), data=arr, compression="gzip")
 
             # Update last_snapshot

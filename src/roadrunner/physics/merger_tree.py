@@ -10,6 +10,8 @@ import pandas as pd
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
+from roadrunner._defaults import GALAXY_ID, UNBOUND
+
 from roadrunner.physics.constants import G_KM, DUFFY_A, DUFFY_B, DUFFY_C, DUFFY_PIVOT_MASS, MIN_DISTANCE
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 
@@ -74,7 +76,7 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         rvir_factor : float, default=1.0
             Multiplier on the virial radius for the neighbour search.
         """
-        self._df["host_id"] = -1
+        self._df["host_id"] = UNBOUND
         for snap in tqdm(
             self._df["Snapshot"].unique(),
             desc="Computing most bound satellite per snapshot",
@@ -86,8 +88,8 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             self._df.loc[mask, "host_id"] = (
                 self._df.loc[mask, "Sub_tree_id"]
                 .map(sat_to_host)
-                .fillna(-1)
-                .astype(int)
+                .fillna(UNBOUND)
+                .astype(GALAXY_ID)
             )
 
     def compute_distance_to_host(self, column: str = "host_id"):
@@ -191,7 +193,7 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         )
         masses = snap_df["mass"].values.astype(np.float32)
         rvirs = snap_df["virial_radius"].values.astype(np.float32) / (1 + redshift)
-        sub_ids = snap_df["Sub_tree_id"].values.astype(int)
+        sub_ids = snap_df["Sub_tree_id"].values.astype(GALAXY_ID)
 
         tree = KDTree(positions)
         satellites_map: dict[int, set[int]] = {sid: set() for sid in sub_ids}
@@ -265,7 +267,7 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         )
         masses = snap_df["mass"].to_numpy(dtype=np.float32)
         rvirs = snap_df["virial_radius"].to_numpy(dtype=np.float32) / (1 + redshift)
-        sub_ids = snap_df["Sub_tree_id"].to_numpy(dtype=int)
+        sub_ids = snap_df["Sub_tree_id"].to_numpy(dtype=GALAXY_ID)
 
         tree = KDTree(positions)
 

@@ -61,43 +61,45 @@ class TestRandomLinesOfSight:
 
 
 class TestRotationMatrixFromLos:
+    # NOTE: tolerances are 1e-6 (not 1e-10): rotation matrices follow the
+    # ambient math precision, which is float32 unless scoped otherwise.
     def test_aligns_los_with_z(self):
         los = np.array([1.0, 2.0, 3.0])
         R = rotation_matrix_from_los(los)
         rot_los = R @ (los / np.linalg.norm(los))
-        assert np.allclose(rot_los, [0, 0, 1], atol=1e-10)
+        assert np.allclose(rot_los, [0, 0, 1], atol=1e-6)
 
     def test_orthogonal(self):
         los = np.array([0.5, -1.0, 0.3])
         R = rotation_matrix_from_los(los)
-        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
-        assert np.allclose(R.T @ R, np.eye(3), atol=1e-10)
+        assert np.allclose(R @ R.T, np.eye(3), atol=1e-6)
+        assert np.allclose(R.T @ R, np.eye(3), atol=1e-6)
 
     def test_determinant_one(self):
         los = np.array([-2.0, 1.0, 0.5])
         R = rotation_matrix_from_los(los)
-        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-10)
+        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-6)
 
     def test_x_axis_orthogonal_to_z(self):
         los = np.array([1.0, 1.0, 1.0])
         R = rotation_matrix_from_los(los)
         # e_x should be perpendicular to e_z
-        assert np.isclose(R[0] @ R[2], 0.0, atol=1e-10)
+        assert np.isclose(R[0] @ R[2], 0.0, atol=1e-6)
         # e_y should be perpendicular to e_z
-        assert np.isclose(R[1] @ R[2], 0.0, atol=1e-10)
+        assert np.isclose(R[1] @ R[2], 0.0, atol=1e-6)
 
     def test_z_aligned_los_preserved(self):
         los = np.array([0.0, 0.0, 1.0])
         R = rotation_matrix_from_los(los)
         # any rotation that keeps +z fixed is valid
-        assert np.allclose(R @ los, los, atol=1e-10)
-        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
+        assert np.allclose(R @ los, los, atol=1e-6)
+        assert np.allclose(R @ R.T, np.eye(3), atol=1e-6)
 
     def test_negative_z(self):
         los = np.array([0.0, 0.0, -1.0])
         R = rotation_matrix_from_los(los)
         rot_los = R @ (los / np.linalg.norm(los))
-        assert np.allclose(rot_los, [0, 0, 1], atol=1e-10)
+        assert np.allclose(rot_los, [0, 0, 1], atol=1e-6)
 
     def test_raises_on_wrong_shape(self):
         with pytest.raises(ValueError, match="3-element"):
@@ -112,7 +114,7 @@ class TestRotationMatrixFromLos:
         # (R @ pᵢᵀ)ᵀ = pᵢ @ Rᵀ  (matrix identity)
         rot1 = (R @ points.T).T
         rot2 = points @ R.T
-        assert np.allclose(rot1, rot2, atol=1e-10)
+        assert np.allclose(rot1, rot2, atol=1e-6)
 
 
 class TestCentering:

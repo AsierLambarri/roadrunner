@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from roadrunner._defaults import precision
 from roadrunner.mixture.weighted_gmm import WeightedGaussianMixture
 
 
@@ -78,8 +79,9 @@ class TestSingleComponent:
 class TestDtypes:
     def test_float32(self, blob_data_3c):
         X32 = blob_data_3c.astype(np.float32)
-        gmm = WeightedGaussianMixture(n_components=3, cast_dtype=np.float32, random_state=42)
-        gmm.fit(X32)
+        with precision(math="single"):
+            gmm = WeightedGaussianMixture(n_components=3, random_state=42)
+            gmm.fit(X32)
         assert gmm.converged_
         assert gmm.means_.dtype == np.float32
 

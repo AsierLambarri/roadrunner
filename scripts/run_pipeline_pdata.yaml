@@ -11,7 +11,8 @@ particle_data_dir: halo685x12_bgmm
 
 assignment_method: bgmm
 use_bgmm_priors: true
-dtype_math: float64
+data_precision: single
+math_precision: single
 cov_type: full
 max_iter: 10
 tol: 1e-2

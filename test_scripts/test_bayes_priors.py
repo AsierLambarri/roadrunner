@@ -10,6 +10,7 @@ try:
 except:
     pass
 
+from roadrunner._defaults import precision
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
 
 rng = np.random.RandomState(42)
@@ -25,20 +26,22 @@ rng.shuffle(X)
 
 # ── Fit with uniform prior vs strong prior on component 0 ────────────
 print("Fitting BGMM with uniform prior...")
-rr_uniform = WeightedBayesianGaussianMixture(
-    n_components=3, max_iter=200, tol=1e-3,
-    init_params="kmeans++", cast_dtype=np.float64,
-    random_state=42,
-).fit(X)
+with precision(math="double"):
+    rr_uniform = WeightedBayesianGaussianMixture(
+        n_components=3, max_iter=200, tol=1e-3,
+        init_params="kmeans++",
+        random_state=42,
+    ).fit(X)
 
 print("Fitting BGMM with per-cluster prior (beta=[100, 1, 1])...")
 beta_strong = np.array([100.0, 1.0, 1.0], dtype=np.float64)
-rr_strong = WeightedBayesianGaussianMixture(
-    n_components=3, max_iter=200, tol=1e-3,
-    mean_precision_prior=beta_strong,
-    init_params="kmeans++", cast_dtype=np.float64,
-    random_state=42,
-).fit(X)
+with precision(math="double"):
+    rr_strong = WeightedBayesianGaussianMixture(
+        n_components=3, max_iter=200, tol=1e-3,
+        mean_precision_prior=beta_strong,
+        init_params="kmeans++",
+        random_state=42,
+    ).fit(X)
 
 # ── Plot ─────────────────────────────────────────────────────────────
 print("Plotting...")

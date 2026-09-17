@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
+from roadrunner._defaults import LOCAL_IDX
 from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.physics.halo_model import HaloModel
@@ -143,7 +144,7 @@ class TestDetectNewborns:
 
     def test_none_previous_resp_dtype(self):
         newborn = detect_newborns(None, 3)
-        assert newborn.dtype == np.uint64
+        assert newborn.dtype == LOCAL_IDX
 
     def test_with_previous_resp(self):
         csc = _make_csc(

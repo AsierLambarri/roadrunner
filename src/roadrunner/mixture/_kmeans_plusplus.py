@@ -22,6 +22,7 @@ with a non-uniform latent prior.
 import numpy as np
 
 from ._math import row_squared_norms
+from roadrunner._defaults import LOCAL_IDX, math_dtype
     
 def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=None):
     """K-means++ seeding with cluster-dependent per-point weights.
@@ -49,7 +50,7 @@ def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=N
     indices : ndarray of shape (n_clusters,)
         Indices of the selected centers in ``X``.
     """
-    X = np.asarray(X, dtype=float)
+    X = np.asarray(X, dtype=math_dtype())
     n_samples, n_features = X.shape
 
     if isinstance(random_state, (int, np.integer)):
@@ -62,7 +63,7 @@ def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=N
     n_local_trials = 2 + int(np.log(n_clusters))
     
     centers        = np.empty((n_clusters, n_features), dtype=X.dtype)
-    center_indices = np.empty(n_clusters, dtype=int)
+    center_indices = np.empty(n_clusters, dtype=LOCAL_IDX)
     
     candidate_dist_sq_all = np.empty((n_samples, n_local_trials), dtype=X.dtype)
     
@@ -70,7 +71,7 @@ def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=N
     X_norm_sq  = row_squared_norms(X)
     
     if cluster_weights is None:
-        cluster_weights = np.ones((n_samples, n_clusters))
+        cluster_weights = np.ones((n_samples, n_clusters), dtype=X.dtype)
         
     cluster_weights = np.asarray(cluster_weights, dtype=X.dtype)
     if cluster_weights.shape != (n_samples, n_clusters):

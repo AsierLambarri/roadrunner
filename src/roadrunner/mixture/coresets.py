@@ -200,7 +200,7 @@ class GaussianCoreset:
     CORESETs are sampled using importance sampling as in M. Lucic et al. 2018, but the EUCLIDEAN distance is changed for the MAHALANOBIS distance,
     in order to accomodate dimensionally heterogeneous data and accomodate the significance to the specific GAUSSIAN model.
     """
-    def __init__(self, n_components=2, centers=None, covariances=None, cov_type="full", random_state=None, cast_dtype=np.float32, **kwargs):
+    def __init__(self, n_components=2, centers=None, covariances=None, cov_type="full", random_state=None, **kwargs):
         """Init importance sampling and coreset construction.
 
         Parameters
@@ -221,8 +221,6 @@ class GaussianCoreset:
         self.random_state = random_state if isinstance(random_state, np.random.RandomState) else np.random.RandomState(random_state)
         
         self.alpha        = CORESET_ALPHA_BASE * (np.log2(self.n_components) + CORESET_ALPHA_OFFSET)
-
-        self.cast_dtype = cast_dtype
 
         
     def _initialize_centroids(self, X):
@@ -269,8 +267,8 @@ class GaussianCoreset:
         self.centers     = centers if self.centers is None else self.centers
         self.covariances = covariances if self.covariances is None else self.covariances
         
-        self.centers = np.asarray(self.centers, dtype=self.cast_dtype)
-        self.covariances = np.asarray(self.covariances, dtype=self.cast_dtype)
+        self.centers = np.asarray(self.centers, dtype=X.dtype)
+        self.covariances = np.asarray(self.covariances, dtype=X.dtype)
         
     def _estimate_importances(self, X, quad):
         """Estimate the importance q(x) of each sample.
@@ -295,7 +293,7 @@ class GaussianCoreset:
         min_quad = quad[np.arange(n_samples), cluster_membership]
         total_cost = np.sum(min_quad)
         
-        importances        = -1 * np.ones(n_samples, dtype=self.cast_dtype)
+        importances        = -1 * np.ones(n_samples, dtype=X.dtype)
         for k in range(self.n_components):
             mask = cluster_membership == k
             cluster_size = np.sum(mask)
@@ -327,7 +325,7 @@ class GaussianCoreset:
         -------
         self : class <GaussianCoreset>
         """
-        self.X = np.ascontiguousarray(X, dtype=self.cast_dtype)
+        self.X = np.ascontiguousarray(X)
         n_samples, n_features = self.X.shape
         
         self._initialize(self.X)

@@ -32,9 +32,20 @@ def select_uint_dtype(max_val, msg=None):
     -------
     dtype : np.dtype
         One of ``uint16``, ``uint32``, or ``uint64``.
+
+    Raises
+    ------
+    ValueError
+        If ``max_val`` is negative: unsigned storage cannot hold
+        sentinel values such as ``-1`` (see ``UNBOUND``); use a signed
+        dtype (``LOCAL_IDX``/``GALAXY_ID``) for those arrays.
     """
     if max_val < 0:
-        max_val = abs(max_val)
+        raise ValueError(
+            f"select_uint_dtype got negative max_val={max_val}. "
+            f"Unsigned dtypes cannot hold sentinel values like -1; "
+            f"use a signed dtype instead.{f' {msg}' if msg else ''}"
+        )
     bits = int(np.floor(np.log2(max_val))) + 1 if max_val != 0 else 1
     if bits <= 16:
         return np.uint16
@@ -45,35 +56,6 @@ def select_uint_dtype(max_val, msg=None):
     detail = f" {msg}" if msg else ""
     warnings.warn(f"uint64 insufficient for requested precision{detail}")
     return np.uint64
-
-
-def select_int_dtype(max_val, msg=None):
-    """Return the smallest signed integer dtype that can hold ``max_val``.
-
-    Parameters
-    ----------
-    max_val : int
-        Maximum absolute value to be stored.
-    msg : str, optional
-        Extra context appended to the warning when no dtype suffices.
-
-    Returns
-    -------
-    dtype : np.dtype
-        One of ``int16``, ``int32``, or ``int64``.
-    """
-    if max_val < 0:
-        max_val = abs(max_val)
-    bits = int(np.floor(np.log2(max_val))) + 2 if max_val != 0 else 1
-    if bits <= 16:
-        return np.int16
-    elif bits <= 32:
-        return np.int32
-    elif bits <= 64:
-        return np.int64
-    detail = f" {msg}" if msg else ""
-    warnings.warn(f"int64 insufficient for requested precision{detail}")
-    return np.int64
 
 
 def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None):
