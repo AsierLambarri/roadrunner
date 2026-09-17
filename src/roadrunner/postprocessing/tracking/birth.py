@@ -5,7 +5,7 @@ association once ``factor × timescale`` snapshots have elapsed.
 """
 
 import heapq
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -63,6 +63,35 @@ _WINDOWS = {
     "cauchy": _cauchy_window,
     "exp": _exp_window,
 }
+
+
+class ActiveParticleInfo:
+    """Per-particle accumulation record for unfinalised particles.
+
+    Holds the five primary fields; ``__slots__`` fixes the attribute set,
+    so instances store values in a compact array instead of a per-instance
+    dict. The birth leader (``leader_host``/``leader_score``) is derived
+    on demand as the argmax of ``counts`` rather than stored.
+    """
+
+    __slots__ = ("t0", "snap0", "tau", "counts", "initial_hosts")
+
+    def __init__(self, t0, snap0, tau, counts, initial_hosts):
+        self.t0 = t0
+        self.snap0 = snap0
+        self.tau = tau
+        self.counts = counts
+        self.initial_hosts = initial_hosts
+
+    @property
+    def leader_host(self):
+        """Host with the highest accumulated window score."""
+        return np.uint64(max(self.counts.items(), key=lambda kv: kv[1])[0])
+
+    @property
+    def leader_score(self):
+        """Highest accumulated window score."""
+        return np.float32(max(self.counts.values()))
 
 
 class BirthTracker:
@@ -124,19 +153,16 @@ class BirthTracker:
             host_active = hosts[is_active]
             w_active = ws[is_active]
 
-            t0 = np.array([self._active[p]["t0"] for p in p_active])
-            tau0 = np.array([self._active[p]["tau"] for p in p_active])
+            t0 = np.array([self._active[p].t0 for p in p_active])
+            tau0 = np.array([self._active[p].tau for p in p_active])
             tau0 = np.maximum(tau0, 1e-10)
 
             deltas = (w_active * self._window_fn((t_snap - t0) / tau0)).astype(np.float64)
             for p, host, delta in zip(p_active, host_active, deltas):
                 info = self._active[p]
-                if self.enforce_initial_hosts and host not in info["initial_hosts"]:
+                if self.enforce_initial_hosts and host not in info.initial_hosts:
                     continue
-                info["counts"][host] += delta
-                if info["counts"][host] > info["leader_score"]:
-                    info["leader_host"] = np.uint64(host)
-                    info["leader_score"] = info["counts"][host]
+                info.counts[host] += delta
 
         not_active = ~is_active
         if np.any(not_active):
@@ -162,19 +188,16 @@ class BirthTracker:
                 sums = np.zeros(len(hosts_u), dtype=np.float64)
                 np.add.at(sums, inverse_u, particle_weights)
 
-                counts = Counter(dict(zip(hosts_u, sums)))
+                counts = defaultdict(float, zip(hosts_u, sums))
                 initial_hosts = set(hosts_u)
-                leader_host, leader_score = counts.most_common(1)[0]
 
-                self._active[p] = {
-                    "t0": np.float32(t_snap),
-                    "snap0": np.uint32(snapshot_id),
-                    "tau": np.float32(particle_tau),
-                    "counts": counts,
-                    "initial_hosts": initial_hosts,
-                    "leader_host": np.uint64(leader_host),
-                    "leader_score": np.float32(leader_score),
-                }
+                self._active[p] = ActiveParticleInfo(
+                    t0=np.float32(t_snap),
+                    snap0=np.uint32(snapshot_id),
+                    tau=np.float32(particle_tau),
+                    counts=counts,
+                    initial_hosts=initial_hosts,
+                )
                 heapq.heappush(self._heap, (np.float32(t_snap + self.factor * particle_tau), np.uint64(p)))
 
     def _finalize_particles(self, t_snap):
@@ -193,14 +216,14 @@ class BirthTracker:
                 continue
 
             info = self._active.pop(p_to_finalize)
-            birth_id = info["leader_host"]
+            birth_id = info.leader_host
 
             self._finalized[p_to_finalize] = {
                 "particle_index": p_to_finalize,
-                "birth_time": info["t0"],
-                "birth_snap": info["snap0"],
+                "birth_time": info.t0,
+                "birth_snap": info.snap0,
                 "birth_id": birth_id,
-                "timescale": info["tau"],
+                "timescale": info.tau,
             }
 
             self._birth_map[birth_id].add(p_to_finalize)
@@ -255,7 +278,7 @@ class BirthTracker:
         """
         birth_map = {k: set(v) for k, v in self._birth_map.items()}
         for p, info in self._active.items():
-            birth_map.setdefault(info["leader_host"], set()).add(p)
+            birth_map.setdefault(info.leader_host, set()).add(p)
         return birth_map
 
     def _get_state(self):
@@ -282,7 +305,19 @@ class BirthTracker:
         ----------
         state : dict
         """
-        self._active = state["active"]
+        # Normalise pre-B2 checkpoints whose active records are plain dicts.
+        # Stored leader_host/leader_score (old format) are dropped: the
+        # leader is now derived from counts.
+        active = {}
+        for p, info in state["active"].items():
+            if isinstance(info, dict):
+                info = ActiveParticleInfo(
+                    info["t0"], info["snap0"], info["tau"],
+                    defaultdict(float, info["counts"]),
+                    info["initial_hosts"],
+                )
+            active[p] = info
+        self._active = active
         self._finalized = state["finalized"]
         self._heap = state["heap"]
         heapq.heapify(self._heap)

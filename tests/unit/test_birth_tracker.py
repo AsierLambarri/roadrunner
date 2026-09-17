@@ -51,8 +51,8 @@ class TestBirthTracker:
         info = tracker._active[1]
         # With gaussian window at dt=1, tau=2: exp(-0.3*(1/2)^2) = exp(-0.075) ≈ 0.928
         # So both scores should be > 0
-        assert 10 in info["counts"]
-        assert 20 in info["counts"]
+        assert 10 in info.counts
+        assert 20 in info.counts
 
     def test_enforce_initial_hosts(self):
         tracker = BirthTracker(factor=5, enforce_initial_hosts=True, window="gaussian")
@@ -67,8 +67,8 @@ class TestBirthTracker:
                        timescales=np.array([2.0]))
         info = tracker._active[1]
         # Only galaxy 10 should have a score > 0
-        assert 10 in info["counts"]
-        assert info["counts"].get(20, 0) == 0.0
+        assert 10 in info.counts
+        assert info.counts.get(20, 0) == 0.0
 
     def test_current_birth_map(self):
         tracker = BirthTracker(factor=5, window="gaussian")
