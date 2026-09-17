@@ -10,6 +10,8 @@ from tqdm import tqdm
 
 from roadrunner._exceptions import CycleError
 
+_EMPTY = frozenset()
+
 
 class AssemblyTracker:
     """Tracks the assembly history of each galaxy across snapshots.
@@ -48,7 +50,7 @@ class AssemblyTracker:
         sat_history = {g: set(sats) for g, sats in satellites_map.items()}
         for snap_map in self._sat_history_buffer:
             for g in sat_history:
-                sat_history[g].update(snap_map.get(g, []))
+                sat_history[g].update(snap_map.get(g, _EMPTY))
         return sat_history
 
     def _order_galaxies_bottom_up(self, warm_galaxies, satellites_history):
@@ -149,8 +151,8 @@ class AssemblyTracker:
 
         satellites_history = self._get_current_sat_history(satellites_map)
         for g in tqdm(ordered_galaxies, desc="Updating each galaxy..."):
-            prev_birth = self._previous_birth_map.get(g, set())
-            curr_birth = birth_map.get(g, set())
+            prev_birth = self._previous_birth_map.get(g, _EMPTY)
+            curr_birth = birth_map.get(g, _EMPTY)
 
             erase = prev_birth - curr_birth
             add = curr_birth - prev_birth
@@ -161,12 +163,17 @@ class AssemblyTracker:
             if g in self._frozen:
                 continue
 
-            A_g = assignment_map.get(g, set())
-            valid = curr_birth | self._infall_lists.get(self._unbound_default, set())
-            for h in satellites_history.get(g, []):
-                valid |= self._infall_lists.get(h, set())
+            A_g = assignment_map.get(g, _EMPTY)
+            # Distributive form of ``A_g & (curr_birth | unbound | sats...)``:
+            # intersect per component so the full ``valid`` union is never
+            # materialised. Result is identical; peak transient is bounded by
+            # what is actually accreted rather than all reachable infall.
+            accreted = A_g & curr_birth
+            accreted |= A_g & self._infall_lists.get(self._unbound_default, _EMPTY)
+            for h in satellites_history.get(g, _EMPTY):
+                accreted |= A_g & self._infall_lists.get(h, _EMPTY)
 
-            self._infall_lists[g].update(A_g & valid)
+            self._infall_lists[g].update(accreted)
 
         self._previous_birth_map = dict(birth_map)
 
