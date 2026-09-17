@@ -11,7 +11,9 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
-from roadrunner._defaults import BIRTH_GAUSSIAN_WIDTH, SNAP_ID, math_dtype
+from roadrunner._defaults import (
+    BIRTH_GAUSSIAN_WIDTH, GALAXY_ID, SIM_ID, SNAP_ID, math_dtype,
+)
 
 
 def _exp_window(x):
@@ -87,12 +89,12 @@ class ActiveParticleInfo:
     @property
     def leader_host(self):
         """Host with the highest accumulated window score."""
-        return np.uint64(max(self.counts.items(), key=lambda kv: kv[1])[0])
+        return GALAXY_ID(max(self.counts.items(), key=lambda kv: kv[1])[0])
 
     @property
     def leader_score(self):
-        """Highest accumulated window score."""
-        return np.float32(max(self.counts.values()))
+        """Highest accumulated window score (ambient math precision)."""
+        return math_dtype()(max(self.counts.values()))
 
 
 class FinalizedInfo(NamedTuple):
@@ -102,7 +104,7 @@ class FinalizedInfo(NamedTuple):
     The particle index is the ``_finalized`` dict key, not stored here.
     """
 
-    birth_id: np.uint64
+    birth_id: GALAXY_ID
     birth_time: np.float32
     birth_snap: SNAP_ID
     timescale: np.float32
@@ -214,7 +216,7 @@ class BirthTracker:
                     counts=counts,
                     initial_hosts=initial_hosts,
                 )
-                heapq.heappush(self._heap, (md(t_snap + self.factor * particle_tau), np.uint64(p)))
+                heapq.heappush(self._heap, (md(t_snap + self.factor * particle_tau), SIM_ID(p)))
 
     def _finalize_particles(self, t_snap):
         """Finalise particles whose accumulation window has expired.

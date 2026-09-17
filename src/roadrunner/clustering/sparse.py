@@ -684,8 +684,8 @@ class SparseCSR:
             new_rows = self.row_id.copy()
             new_cols = self.column_id.copy()
         elif how == "both":
-            new_rows = np.union1d(self.row_id, other.row_id).astype(np.int64)
-            new_cols = np.union1d(self.column_id, other.column_id).astype(np.int64)
+            new_rows = np.union1d(self.row_id, other.row_id).astype(LOCAL_IDX)
+            new_cols = np.union1d(self.column_id, other.column_id).astype(GALAXY_ID)
         else:
             raise ValueError(f"how must be 'left' or 'both', got '{how}'")
 

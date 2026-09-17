@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._exceptions import RestartError
-from roadrunner._defaults import data_dtype, math_dtype
+from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_particles import HDF5ParticleWriter
@@ -460,7 +460,7 @@ class AccretionPipeline:
                     sim_ids = snap_data.index[snap_result.result.particle_df["array_index"].values]
                     recs = np.array(
                         list(zip(sim_ids, snap_result.result.particle_df["timescale"].values)),
-                        dtype=[("particle_index", np.uint64), ("timescale", np.float32)],
+                        dtype=[("particle_index", SIM_ID), ("timescale", np.float32)],
                     )
                     self.assign_writer.write_timescales(recs)
 
