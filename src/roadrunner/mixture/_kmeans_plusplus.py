@@ -29,7 +29,7 @@ def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=N
 
     The probability of selecting point ``i`` as the next center for
     cluster ``k`` is proportional to
-    ``cluster_weights[i, k] * distance_to_nearest_center[i]``.
+    ``cluster_weights[i, k] * d(x_i, nearest centre)**2`` (D² sampling).
 
     Parameters
     ----------
