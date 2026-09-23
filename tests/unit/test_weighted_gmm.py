@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from roadrunner._defaults import precision
-from roadrunner.mixture.weighted_gmm import WeightedGaussianMixture
+from roadrunner.mixture.weighted_gmm import WeightedGaussianMixture, _check_counts
 
 
 @pytest.fixture
@@ -102,3 +102,60 @@ class TestEdgeCases:
         gmm = WeightedGaussianMixture(n_components=2, cov_type="full", random_state=42)
         gmm.fit(X)
         assert gmm.converged_ or not gmm.converged_
+
+
+class TestInPlaceMutation:
+    def test_fit_does_not_mutate_prior_or_counts(self, blob_data_3c):
+        n_samples = blob_data_3c.shape[0]
+        n_components = 3
+        rng = np.random.default_rng(0)
+        prior = rng.uniform(0.1, 1.0, (n_samples, n_components)).astype(blob_data_3c.dtype)
+        counts = np.full(n_components, n_samples / n_components, dtype=blob_data_3c.dtype)
+        means = np.array([[-5.0, -5.0], [0.0, 0.0], [5.0, 5.0]], dtype=blob_data_3c.dtype)
+        covariance = np.stack([np.eye(2, dtype=blob_data_3c.dtype)] * n_components)
+
+        prior_copy = prior.copy()
+        counts_copy = counts.copy()
+
+        gmm = WeightedGaussianMixture(
+            n_components=n_components,
+            means_init=means,
+            covariance_init=covariance,
+            counts_init=counts,
+            random_state=42,
+        )
+        gmm.fit(blob_data_3c, latent_prior=prior)
+
+        assert np.array_equal(prior, prior_copy)
+        assert np.array_equal(counts, counts_copy)
+
+
+class TestCheckCountsSum:
+    def test_wrong_sum_raises(self):
+        counts = np.array([10.0, 10.0, 10.0])  # sums to 30, not 100
+        with pytest.raises(ValueError, match="must sum to"):
+            _check_counts(counts, n_components=3, n_samples=100)
+
+    def test_sum_equal_to_n_samples_passes(self):
+        counts = np.array([33.0, 33.0, 34.0])  # sums to 100
+        result = _check_counts(counts, n_components=3, n_samples=100)
+        assert np.array_equal(result, counts)
+
+    def test_float32_rounding_within_rtol_passes(self):
+        # Relative drift of 2.5e-5 on a large N: within rtol=1e-3, should not raise.
+        n_samples = 200_000
+        counts = np.full(4, n_samples / 4, dtype=np.float32)
+        counts[0] += 5.0
+        _check_counts(counts, n_components=4, n_samples=n_samples)
+
+    def test_sum_far_outside_rtol_raises(self):
+        n_samples = 200_000
+        counts = np.full(4, n_samples / 4, dtype=np.float32)
+        counts[0] += n_samples * 0.1  # relative drift 0.1, well outside rtol=1e-3
+        with pytest.raises(ValueError, match="must sum to"):
+            _check_counts(counts, n_components=4, n_samples=n_samples)
+
+    def test_negative_counts_raises(self):
+        counts = np.array([-1.0, 50.0, 51.0])
+        with pytest.raises(ValueError, match="non-negative"):
+            _check_counts(counts, n_components=3, n_samples=100)

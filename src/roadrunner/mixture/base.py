@@ -31,9 +31,9 @@ import abc
 from time import time
 
 import numpy as np
-from sklearn.cluster import KMeans
 
 from ._math import logsumexp
+from .kmeans import WeightedKMeans
 from roadrunner._defaults import KMEANS_MAX_ITER, KMEANS_PP_MAX_ITER
 
 
@@ -107,7 +107,8 @@ class BaseMixture(abc.ABC):
     max_iter : int, default=10
         Maximum number of EM iterations.
     tol : float, default=1e-3
-        Convergence threshold (absolute change in lower bound).
+        Convergence threshold on the change in lower bound, relative
+        to ``max(|lower_bound|, 1)``.
     verbose : int, default=0
         Verbosity level.
     random_state : int or RandomState, optional
@@ -203,7 +204,8 @@ class BaseMixture(abc.ABC):
         point_weights : ndarray or None
             Per-point weights. ``None`` means uniform weights.
         latent_prior : ndarray of shape (n_samples, n_components) or None
-            Per-point, per-component prior weights.
+            Per-point, per-component prior weights, used as soft-label
+            evidence in the E-step; zero entries act as hard masks.
 
         Returns
         -------
@@ -219,9 +221,11 @@ class BaseMixture(abc.ABC):
         if latent_prior is None:
             latent_prior = np.ones((n_samples, self.n_components), dtype=X.dtype)
         else:
-            latent_prior = np.asarray(latent_prior, dtype=X.dtype)
+            latent_prior = np.asarray(latent_prior, dtype=X.dtype).copy()   # never rescale the caller's array
         if latent_prior.shape != (n_samples, self.n_components):
             raise ValueError(f"latent_prior must have shape {(n_samples, self.n_components)}")
+        if np.any(latent_prior < 0):
+            raise ValueError("latent_prior must be non-negative")
 
         if point_weights is None:
             point_weights = np.ones((n_samples, ), dtype=X.dtype)
@@ -271,14 +275,9 @@ class BaseMixture(abc.ABC):
         else:
             raise ValueError("provided ini_params is not valid.")
 
-        # NOTE: sklearn's KMeans always computes in float64, even for
-        # float32 input. Accepted exception: init seeding is one-time and
-        # small; everything downstream follows X's dtype.
         label = (
-            KMeans(
-                n_clusters=self.n_components, n_init=1, init=means_init, max_iter=max_iters, random_state=self.random_state
-            )
-            .fit(X)
+            WeightedKMeans(n_clusters=self.n_components, init=means_init, max_iter=max_iters)
+            .fit(X, point_weights=point_weights, cluster_weights=alpha)
             .labels_
         )
         resp[np.arange(n_samples), label] = 1
@@ -449,7 +448,7 @@ class BaseMixture(abc.ABC):
             self._m_step(X, np.exp(log_resp), point_weights)
             # Bound after the M-step (sklearn order): the simplified VB bound is only
             # valid when q(theta) has just been updated from these responsibilities.
-            ll = self._compute_lower_bound(log_resp, log_norm, point_weights)
+            ll = self._compute_lower_bound(log_resp, log_norm, point_weights, log_alpha)
 
             change = ll - lower_bound
             lower_bound = ll

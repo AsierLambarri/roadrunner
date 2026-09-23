@@ -58,6 +58,22 @@ class TestInitializeWeightsAndPrior:
         with pytest.raises(ValueError, match="latent_prior must have shape"):
             bm._initialize_weights_and_prior(X, None, np.ones((5, 3)))
 
+    def test_negative_prior_raises(self):
+        bm = _ConcreteMixture(n_components=3)
+        X = np.ones((5, 3), dtype=np.float32)
+        prior = np.ones((5, 3), dtype=np.float32)
+        prior[0, 0] = -1.0  # row still sums to 1 > 0, isolating the negativity check
+        with pytest.raises(ValueError, match="non-negative"):
+            bm._initialize_weights_and_prior(X, None, prior)
+
+    def test_latent_prior_not_mutated(self):
+        bm = _ConcreteMixture(n_components=3)
+        X = np.ones((10, 2), dtype=np.float32)
+        prior = np.random.uniform(0.1, 1.0, (10, 3)).astype(X.dtype)
+        prior_copy = prior.copy()
+        bm._initialize_weights_and_prior(X, None, prior)
+        assert np.array_equal(prior, prior_copy)
+
 
 class TestNonpositiveDefinite:
     def test_spherical_all_positive(self):

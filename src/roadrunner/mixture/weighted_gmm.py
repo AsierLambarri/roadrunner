@@ -22,8 +22,10 @@
 
 The :class:`WeightedGaussianMixture` class fits a Gaussian mixture
 via the EM algorithm, supporting per-particle ``point_weights`` and
-a ``latent_prior`` responsibility mask.  The module-level covariances
-estimation functions are also used by the Bayesian and SVI variants.
+a ``latent_prior`` used as per-point soft-label evidence on the
+component memberships (zeros act as hard masks).  The module-level
+covariances estimation functions are also used by the Bayesian and
+SVI variants.
 """
 
 import numpy as np
@@ -61,8 +63,8 @@ def _check_counts(counts, n_components, n_samples):
 
     if np.any(counts < 0):
         raise ValueError("counts must be non-negative")
-        if not np.allclose(counts.sum(), n_samples, atol=1E-1):
-            raise ValueError(f"counts must sum to {n_samples}, got {counts.sum()}")
+    if not np.isclose(counts.sum(), n_samples, rtol=1e-3):
+        raise ValueError(f"counts must sum to {n_samples}, got {counts.sum()}")
 
     return counts
 
@@ -398,9 +400,10 @@ class WeightedGaussianMixture(BaseMixture):
 
     Fits a Gaussian mixture model via the Expectation-Maximisation (EM)
     algorithm, supporting per-particle point weights and a
-    ``latent_prior`` that acts as a responsibility mask.  The model
-    can be initialised from pre-computed sufficient statistics
-    via ``counts_init``, ``means_init``, and ``covariance_init``.
+    ``latent_prior`` used as per-point soft-label evidence on the
+    component memberships (zeros act as hard masks).  The model can
+    be initialised from pre-computed sufficient statistics via
+    ``counts_init``, ``means_init``, and ``covariance_init``.
 
     Parameters
     ----------
@@ -419,7 +422,8 @@ class WeightedGaussianMixture(BaseMixture):
     max_iter : int, default=10
         Maximum EM iterations.
     tol : float, default=1e-3
-        Convergence threshold (absolute change in lower bound).
+        Convergence threshold on the change in lower bound, relative
+        to ``max(|lower_bound|, 1)``.
     verbose : bool or int, default=False
         Verbosity flag.
     random_state : int or RandomState, optional
@@ -555,7 +559,7 @@ class WeightedGaussianMixture(BaseMixture):
             )
             weights /= weights.sum()
 
-        self.weights_  = weights if self.counts_init is None else np.asarray(self.counts_init, dtype=X.dtype)
+        self.weights_  = weights if self.counts_init is None else np.asarray(self.counts_init, dtype=X.dtype).copy()
         self.weights_ /= self.weights_.sum()
         self.means_    = means if self.means_init is None else np.asarray(self.means_init, dtype=X.dtype)
         self.covariances_ = covariances if self.covariance_init is None else np.asarray(self.covariance_init, dtype=X.dtype)
@@ -604,7 +608,7 @@ class WeightedGaussianMixture(BaseMixture):
         return _estimate_log_gaussian_prob(X, self.means_, self.covariances_, self.cov_type)
 
 
-    def _compute_lower_bound(self, log_resp, log_prob_norm, point_weights):
+    def _compute_lower_bound(self, log_resp, log_prob_norm, point_weights, log_alpha):
         """Compute the log-likelihood lower bound.
 
         Parameters
@@ -614,6 +618,8 @@ class WeightedGaussianMixture(BaseMixture):
         log_prob_norm : ndarray of shape (n_samples,)
             Log-probability normalisation term.
         point_weights : ndarray of shape (n_samples,)
+        log_alpha : ndarray of shape (n_samples, n_components)
+            Log latent prior (unused: already included in ``log_prob_norm``).
 
         Returns
         -------

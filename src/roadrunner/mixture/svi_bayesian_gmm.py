@@ -4,7 +4,7 @@
 # file:      svi_bayesian_gmm.py
 # brief:     Stochastic variational Bayesian Gaussian mixture (SVI-BGMM).
 #
-# Implements mini-batch natural-gradient SVI for the variational
+# Implements mini-batch stochastic (Robbins-Monro) SVI for the variational
 # Bayesian Gaussian mixture model.  Convergence is assessed via a
 # rolling window of relative lower-bound changes (Stan-style
 # mean/median delta-ELBO criterion).
@@ -19,8 +19,8 @@
 
 The :class:`SVIBayesianGaussianMixture` class extends
 :class:`WeightedBayesianGaussianMixture` by replacing the full-data
-VB M-step with a mini-batch natural-gradient update.  The learning
-rate follows a Robbins-Monro schedule ``rho = (t + tau)^(-kappa)``.
+VB M-step with a mini-batch stochastic (Robbins-Monro) update.  The
+learning rate follows a Robbins-Monro schedule ``rho = (t + tau)^(-kappa)``.
 Convergence is detected when the mean or median relative change of
 the lower bound over a rolling window falls below ``tol``.
 """
@@ -41,7 +41,8 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
 
     Inherits all parameter handling, priors, E-step, and Wishart
     updates from WeightedBayesianGaussianMixture. Overrides fit()
-    to use mini-batch natural gradient updates instead of full-data EM.
+    to use mini-batch stochastic (Robbins-Monro) updates instead of
+    full-data EM.
 
     Convergence is assessed by monitoring the relative change in the
     variational lower bound over a rolling window of evaluations.
@@ -106,11 +107,12 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         return self.random_state.choice(n_samples, M, replace=False)
 
     def _svi_m_step(self, X_b, resp_b, pw_b, rho, n_total):
-        """Natural gradient M-step on mini-batch statistics.
+        """Stochastic M-step on mini-batch statistics.
 
-        Estimates Gaussian parameters on the mini-batch, scales the
-        sufficient statistics to the full data size, then applies
-        a Polyak–Ruppert averaging step with learning rate ``rho``.
+        Estimates Gaussian statistics on the mini-batch, rescales the counts
+        to the full data size, computes the corresponding VB parameters and
+        blends them into the current ones with a Robbins-Monro step
+        ``theta <- (1 - rho) * theta + rho * theta_batch``.
 
         Parameters
         ----------
@@ -222,7 +224,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
     def fit(self, X, latent_prior=None):
         """Fit the SVI Bayesian GMM using stochastic variational inference.
 
-        The method uses mini-batch natural-gradient updates with a
+        The method uses mini-batch stochastic (Robbins-Monro) updates with a
         Robbins–Monro learning-rate schedule and rolling-window
         convergence detection.
 
@@ -271,6 +273,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         self.lower_bound_ = -np.inf
         n_iters = self.n_svi_iters
         last_log_resp, last_log_norm = None, None
+        last_log_alpha = None
 
         # ── SVI loop ────────────────────────────────────────────────
         report_every = max(1, self.n_svi_iters // 10)
@@ -284,6 +287,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
 
             log_resp_b, log_norm_b = self._e_step(X_b, log_alpha_b)
             last_log_resp, last_log_norm = log_resp_b, log_norm_b
+            last_log_alpha = log_alpha_b
 
             rho = (t + self.tau) ** (-self.kappa)
             self._svi_m_step(
@@ -295,7 +299,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
             if t % self.eval_every == 0:
                 pw_b = np.ones(len(idx_b), dtype=X.dtype)
                 lb = self._compute_lower_bound(
-                    log_resp_b, log_norm_b, pw_b)
+                    log_resp_b, log_norm_b, pw_b, log_alpha_b)
                 self._store_lower_bound(lb)
 
                 if self._is_diverging() and self.verbose > 0:
@@ -325,7 +329,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         if self.lower_bound_ == -np.inf:
             pw_b = np.ones(len(idx_b), dtype=X.dtype)
             self.lower_bound_ = self._compute_lower_bound(
-                last_log_resp, last_log_norm, pw_b)
+                last_log_resp, last_log_norm, pw_b, last_log_alpha)
 
         self._set_parameters()
 

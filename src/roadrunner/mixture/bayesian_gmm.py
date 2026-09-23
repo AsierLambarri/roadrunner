@@ -6,9 +6,10 @@
 #
 # Implements a full variational-Bayes treatment of Gaussian mixtures
 # with a Normal-Wishart prior over (mu, Sigma) and a Dirichlet prior
-# over the mixing weights.  Supports per-particle point weights, a
-# ``latent_prior`` responsibility mask, and the ``counts_init`` /
-# ``means_init`` / ``covariance_init`` initialisation convention.
+# over the mixing weights.  Assumes unit point weights, and supports a
+# ``latent_prior`` used as per-point soft-label evidence, and the
+# ``counts_init`` / ``means_init`` / ``covariance_init`` initialisation
+# convention.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez
@@ -239,7 +240,8 @@ class WeightedBayesianGaussianMixture(BaseMixture):
     max_iter : int, default=10
         Maximum VB iterations.
     tol : float, default=1e-3
-        Convergence threshold (absolute change in ELBO).
+        Convergence threshold on the change in ELBO, relative to
+        ``max(|ELBO|, 1)``.
     verbose : bool or int, default=False
         Verbosity flag.
     random_state : int or RandomState, optional
@@ -562,9 +564,9 @@ class WeightedBayesianGaussianMixture(BaseMixture):
                 X, resp, np.ones(X.shape[0], dtype=X.dtype), self.cov_type, self.reg_covar
             )
 
-        nk = self.counts_init if nk is None else nk
-        xk = self.means_init if  xk is None else xk
-        sk = self.covariance_init if sk is None else sk
+        nk = nk if self.counts_init is None else np.asarray(self.counts_init, dtype=X.dtype)
+        xk = xk if self.means_init is None else np.asarray(self.means_init, dtype=X.dtype)
+        sk = sk if self.covariance_init is None else np.asarray(self.covariance_init, dtype=X.dtype)
 
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
@@ -780,17 +782,20 @@ class WeightedBayesianGaussianMixture(BaseMixture):
 
         return log_gauss + 0.5 * (log_lambda - n_features / self.mean_precision_)
 
-    def _compute_lower_bound(self, log_resp, log_prob_norm, _):
-        """Compute the log-likelihood lower bound for variational inference.
+    def _compute_lower_bound(self, log_resp, log_prob_norm, _, log_alpha):
+        """Compute the variational lower bound (ELBO).
 
-        Includes the expected log-weight term, the log-det of the
-        precision Cholesky factor, and the Wishart normalisation.
+        Responsibility entropy plus the expected log latent prior
+        ``sum_nk r_nk log(alpha_nk)``, the Dirichlet and Wishart
+        normalisations, and the mean-precision term.
 
         Parameters
         ----------
         log_resp : ndarray of shape (n_samples, n_components)
         log_prob_norm : ndarray of shape (n_samples,)
         _ : unused (placeholder for point_weights)
+        log_alpha : ndarray of shape (n_samples, n_components)
+            Log latent prior (rows scaled to sum to ``n_components``).
 
         Returns
         -------
@@ -803,15 +808,18 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         log_det_pchol = _compute_log_det_cholesky(
             self.precisions_cholesky_, self.cov_type, n_features
         ) - 0.5 * n_features * np.log(self.degrees_of_freedom_)
-        
+
         log_wishart = _log_wishart_norm(
-            self.degrees_of_freedom_, 
-            log_det_pchol, 
+            self.degrees_of_freedom_,
+            log_det_pchol,
             n_features
         ).sum()
 
+        resp = np.exp(log_resp)
+
         return (
-            - entropy_sum(log_resp, np.exp(log_resp))
+            - entropy_sum(log_resp, resp)
+            + entropy_sum(log_alpha, resp)
             - log_norm_weight
             - log_wishart
             - 0.5 * n_features * np.sum(np.log(self.mean_precision_))
