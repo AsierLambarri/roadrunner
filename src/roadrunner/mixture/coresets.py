@@ -143,7 +143,7 @@ def _exact_fudge(q, M, tol=5e-2, max_eta=1000):
     Returns
     -------
     fudge : float
-        Oversampling factor.
+        Oversampling factor, or ``-1.5`` if the root finder does not converge.
     """
     q = np.asarray(q, dtype=np.float64)
     if np.any(q < 0):
@@ -173,12 +173,12 @@ def _exact_fudge(q, M, tol=5e-2, max_eta=1000):
         return np.sum(1.0 - np.exp(T * log1mq))
 
     def f(eta):
-        """Equation U(eta*M) - M = 0, solved to find the coreset size.
+        """Residual ``E[U(eta * M)] - M``; its root is the oversampling factor.
 
         Parameters
         ----------
         eta : float
-            Ratio of coreset size to full data size.
+            Oversampling factor: ``eta * M`` draws are made.
 
         Returns
         -------
@@ -209,8 +209,13 @@ class GaussianCoreset:
             Number of components or clusters. Default to 2.
         centers : array of shape (n_components, n_features)
             Cluster centers. Estimated using kmeans++ if not provided.
-        covariances : array of shape (n_features, n_features, n_components)
-            Gaussian Covariance of each component. Initialized to IDENTITY if not provided.
+        covariances : ndarray, optional
+            Gaussian covariance of each component; shape ``(n_components,)``,
+            ``(n_components, n_features)`` or
+            ``(n_components, n_features, n_features)`` for spherical,
+            diagonal or full covariance. Initialized to IDENTITY if not provided.
+        cov_type : {'full', 'diagonal', 'spherical'}, default='full'
+            Covariance type.
         random_state : int or numpy.random
             Random State used in sampling.
         """
@@ -339,22 +344,25 @@ class GaussianCoreset:
 
     
     def generate_coreset(self, Ncore):
-        """Draws coreset samples and generates weights with or without replacement. When drawn 
-        with replacement, the weights are computed as c_i / (N_core * q_i) where c_i is the 
-        multiplicity of the data point. When drawn with replacement, the unique number of core samples
-        is samller than N_core.
+        """Draw a weighted coreset by importance sampling with replacement.
+
+        ``Ncore`` points are drawn with probabilities ``sampling_weights``; each
+        unique point gets weight ``c_i / (Ncore * q_i)``, ``c_i`` being its
+        multiplicity, so the coreset has at most ``Ncore`` points.
 
         Parameters
         ----------
-        X : array[float] of shape (n_samples, n_features)
-            Data points.
-        N_core : int
-            Number of draws to sample the coreset.
+        Ncore : int
+            Number of draws.
 
         Returns
         -------
-        C : array[float] of shape (n_core, n_features)
-        weights : array[float] of shape (n_core)
+        C : ndarray of shape (n_core, n_features)
+            Unique sampled points.
+        weights : ndarray of shape (n_core,)
+            Importance weights.
+        indices : ndarray of shape (n_core,)
+            Indices of the sampled points in ``X``.
         """
         n_samples, n_features = self.X.shape
         
@@ -371,33 +379,25 @@ class GaussianCoreset:
 
 
     def estimate_error(self, sampled_indices, weights):
-        """Estimates the accuracy of the coreset epsilon, defined as 
+        """Relative error of the coreset log-likelihood.
 
-               | L(X|theta) - L(C|theta) | < epsilon * L(X|theta)
-
-        where L(X|theta) is the usual GM log-likelihood and L(C|theta) is the
-        weighted GM log-likelihood as in M. Lucin et al. 2018
-
-        For the sklearn metric, one should use weights / weights.sum(): since the
-        loglik for each point is defined as w_i*log[p(x_i)], the mean would be
-
-                            sum( w_i*log[p(x_i)] )
-                            ----------------------
-                                    sum(w_i)
+        ``epsilon = |L(X|theta) - L(C|theta)| / |L(X|theta)|``, with ``L(C|theta)``
+        the weighted coreset log-likelihood (Lucic et al. 2018), evaluated at the
+        current centres and covariances with hard-assignment mixing weights.
 
         Parameters
         ----------
-        X : array[float] of shape (n_samples, n_features)
-            Data points.
-        C : array[float] of shape (n_core, n_features)
-            Core sample.
-        weights : array[float] of shape (n_core)
-            Core weights.
+        sampled_indices : ndarray of shape (n_core,)
+            Indices of the coreset points in ``X`` (from :meth:`generate_coreset`).
+        weights : ndarray of shape (n_core,)
+            Coreset weights.
 
         Returns
         -------
         eps_sum : float
+            Relative error of the summed log-likelihood.
         eps_mean : float
+            Relative error of the weighted mean log-likelihood.
         """
         n_samples, n_features = self.X.shape
                 
