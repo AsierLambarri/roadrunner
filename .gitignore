@@ -42,3 +42,8 @@ re-planning/
 _XGMMAssigner.py
 semiempirical.py
 mass_loss_test/
+
+# Audit / review working folders (not part of source code)
+audit-*/
+math-audit/
+summary/
