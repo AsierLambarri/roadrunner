@@ -15,11 +15,13 @@
 
 Provides numerically stable log-space operations (logsumexp, entropy)
 and row-normalisation for responsibility matrices, all implemented
-as parallel numba kernels.
+as parallel numba kernels. Also includes a centred, responsibility-weighted
+squared-deviation kernel used to avoid the cancellation that afflicts the
+``E[x**2] - mu**2`` covariance expansion.
 """
 
 import numpy as np
-from numba import njit, prange
+from numba import njit, prange, get_num_threads
 
 
 @njit(parallel=True, fastmath=False, inline="always", cache=True)
@@ -144,3 +146,50 @@ def row_squared_norms(X):
             s += X[i, j] * X[i, j]
         result[i] = s
     return result
+
+
+@njit(parallel=True, cache=True)
+def _centered_squared_sums_kernel(X, resp, means, n_chunks):
+    """Numba kernel for :func:`centered_squared_sums` (``n_chunks`` is passed in so the kernel stays cacheable)."""
+    n_samples, n_features = X.shape
+    n_components = means.shape[0]
+    step = (n_samples + n_chunks - 1) // n_chunks
+    partial = np.zeros((n_chunks, n_components, n_features), dtype=X.dtype)
+    for c in prange(n_chunks):
+        acc = np.zeros((n_components, n_features), dtype=X.dtype)
+        for i in range(c * step, min(n_samples, (c + 1) * step)):
+            for k in range(n_components):
+                r = resp[i, k]
+                for j in range(n_features):
+                    t = X[i, j] - means[k, j]
+                    acc[k, j] += r * t * t
+        partial[c] = acc
+    return partial.sum(axis=0)
+
+
+def centered_squared_sums(X, resp, means):
+    """Responsibility-weighted squared deviations from each component mean (parallel).
+
+    ``out[k, j] = sum_i resp[i, k] * (X[i, j] - means[k, j]) ** 2``
+
+    Centring before squaring avoids the catastrophic cancellation of
+    ``E[x**2] - mu**2`` in single precision when ``|mu| >> sigma``.
+    Samples are split into one chunk per thread, each with its own
+    accumulator (no false sharing between threads).
+
+    Parameters
+    ----------
+    X : ndarray of shape (N, D)
+        Input data.
+    resp : ndarray of shape (N, K)
+        (Weighted) responsibilities.
+    means : ndarray of shape (K, D)
+        Component means.
+
+    Returns
+    -------
+    out : ndarray of shape (K, D)
+        Weighted sums of squared deviations, in ``X.dtype``.
+    """
+    n_chunks = max(1, min(get_num_threads(), X.shape[0]))
+    return _centered_squared_sums_kernel(X, resp, means, n_chunks)

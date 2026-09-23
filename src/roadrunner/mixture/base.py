@@ -439,15 +439,17 @@ class BaseMixture(abc.ABC):
             else:
                 print(f"Initialized 0 (complete params.):   time lapse={dt:.6f}\n")
 
-        lower_bound = self.lower_bound_
+        self.converged_ = False
+        lower_bound = -np.inf
         lower_bounds = [lower_bound]
         for i in range(1, self.max_iter + 1):
             tx = time()
 
             log_resp, log_norm = self._e_step(X, log_alpha)
-            ll = self._compute_lower_bound(log_resp, log_norm, point_weights)
-
             self._m_step(X, np.exp(log_resp), point_weights)
+            # Bound after the M-step (sklearn order): the simplified VB bound is only
+            # valid when q(theta) has just been updated from these responsibilities.
+            ll = self._compute_lower_bound(log_resp, log_norm, point_weights)
 
             change = ll - lower_bound
             lower_bound = ll

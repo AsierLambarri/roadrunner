@@ -118,6 +118,6 @@ def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=N
         best_candidate = candidate_ids[best_idx]
         centers[c] = X[best_candidate]
         center_indices[c] = best_candidate
-        closest_dist_sq = candidate_dist_sq_all[:, best_idx]
+        closest_dist_sq = candidate_dist_sq_all[:, best_idx].copy()
 
     return centers, center_indices

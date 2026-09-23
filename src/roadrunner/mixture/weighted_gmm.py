@@ -211,6 +211,18 @@ def _estimate_covariances_diagonal(resp, X, nk, means, reg_covar):
     -------
     covariance : array, shape (n_components, n_features,)
         The covariance matrix of the current components, only the diagonal is returned.
+
+    Notes
+    -----
+    Uses the scikit-learn expansion ``E[x**2] - mu**2``, which loses precision
+    when a component sits far from the origin relative to its width: the
+    relative error grows as ``eps * (mu / sigma)**2`` (plus rounding
+    accumulated over the samples). In single precision the error reaches ~1% at
+    ``mu / sigma ~ 300`` and the variance can turn non-positive at a few
+    thousand; double precision stays accurate to ~1e-4 up to
+    ``mu / sigma ~ 1e5``. Standard-scaled data keeps this regime out of reach
+    in practice. A centred alternative is available in
+    :func:`roadrunner.mixture._math.centered_squared_sums`.
     """
     avg_X2 = ( resp.T @ X**2 ) / nk[:, np.newaxis]
     avg_means2 = means**2
@@ -236,6 +248,11 @@ def _estimate_covariances_spherical(resp, X, nk, means, reg_covar):
     -------
     covariance : array-like of shape (n_components, )
         The covariance matrix of the current component, only sigma**2 is returned.
+
+    Notes
+    -----
+    Inherits the precision limitation of
+    :func:`_estimate_covariances_diagonal`.
     """
     return _estimate_covariances_diagonal(resp, X, nk, means, reg_covar).mean(axis=1)
 

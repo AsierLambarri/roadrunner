@@ -108,7 +108,7 @@ def _compute_precision_cholesky(covariances, cov_type):
         for k in range(n_components): 
             precisions_chol[k, :, :] = solve_triangular(
                 choleskys[k, :, :], np.eye(n_features, dtype=choleskys.dtype), lower=True, overwrite_b=True
-            )
+            ).T
     else: 
         # diagonal or shperical
         precisions_chol = 1 / np.sqrt(covariances)

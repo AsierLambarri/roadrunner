@@ -51,3 +51,13 @@ class TestKMeansPlusPlus:
         a, _ = kmeans_plusplus_prior(X, 3, random_state=42)
         b, _ = kmeans_plusplus_prior(X, 3, random_state=42)
         assert np.array_equal(a, b)
+
+    def test_every_separated_blob_gets_a_center(self):
+        rng = np.random.default_rng(42)
+        n_blobs, per_blob = 10, 200
+        centres = 100.0 * np.array([(i % 5, i // 5) for i in range(n_blobs)])
+        X = np.repeat(centres, per_blob, axis=0) + 0.1 * rng.normal(size=(n_blobs * per_blob, 2))
+        labels = np.repeat(np.arange(n_blobs), per_blob)
+        for seed in range(10):
+            _, indices = kmeans_plusplus_prior(X, n_blobs, random_state=seed)
+            assert len(set(labels[indices])) == n_blobs

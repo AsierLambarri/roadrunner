@@ -29,6 +29,15 @@ class TestFit:
         for i in range(1, len(lbs)):
             assert lbs[i] >= lbs[i - 1] - 1e-6
 
+    def test_refit_resets_convergence_state(self, blob_data_3c):
+        gmm = WeightedGaussianMixture(n_components=3, random_state=42)
+        gmm.fit(blob_data_3c)
+        assert gmm.converged_
+        gmm.max_iter = 1
+        gmm.fit(blob_data_3c)
+        assert not gmm.converged_
+        assert gmm.lower_bounds_[0] == -np.inf
+
     def test_predict_returns_labels(self, blob_data_3c):
         gmm = WeightedGaussianMixture(n_components=3, random_state=42)
         gmm.fit(blob_data_3c)

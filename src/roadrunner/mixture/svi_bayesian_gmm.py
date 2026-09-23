@@ -59,8 +59,9 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
     tau : float, default=1.0
         Learning rate schedule offset: rho = (t + tau)^(-kappa).
 
-    kappa : float, default=0.5
-        Learning rate schedule exponent.
+    kappa : float, default=0.6
+        Learning rate schedule exponent. Must lie in (0.5, 1] for
+        Robbins-Monro convergence.
 
     eval_every : int, default=5
         Number of SVI iterations between lower-bound evaluations.
@@ -77,7 +78,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
     """
 
     def __init__(self, n_svi_iters=1000, batch_size=10000,
-                 tau=1.0, kappa=0.5, eval_every=5, window_size=5,
+                 tau=1.0, kappa=0.6, eval_every=5, window_size=5,
                  tol=1e-3, **kwargs):
         super().__init__(**kwargs)
         self.n_svi_iters = n_svi_iters
@@ -267,6 +268,7 @@ class SVIBayesianGaussianMixture(WeightedBayesianGaussianMixture):
         self._prev_lb = None
         self._best_lb = -np.inf
         self.converged_ = False
+        self.lower_bound_ = -np.inf
         n_iters = self.n_svi_iters
         last_log_resp, last_log_norm = None, None
 
