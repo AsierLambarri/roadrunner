@@ -28,6 +28,18 @@ class TestLogSumExp:
         result = logsumexp(X)
         assert np.allclose(result, X.reshape(-1, 1))
 
+    def test_all_neg_inf_row_gives_neg_inf(self):
+        X = np.array([[-np.inf, -np.inf, -np.inf], [-1.0, -2.0, -3.0]], dtype=np.float64)
+        result = logsumexp(X)
+        assert result[0, 0] == -np.inf
+        assert np.isfinite(result[1, 0])
+
+    def test_row_with_pos_inf_gives_pos_inf(self):
+        X = np.array([[1.0, np.inf, 2.0], [-1.0, -2.0, -3.0]], dtype=np.float64)
+        result = logsumexp(X)
+        assert result[0, 0] == np.inf
+        assert np.isfinite(result[1, 0])
+
 
 class TestRowL1Normalize:
     def test_rows_sum_to_one(self):

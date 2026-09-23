@@ -50,33 +50,38 @@ def logsumexp(log_probs):
             if v > a_max:
                 a_max = v
 
-        s = 0.0
-        for j in range(M):
-            s += np.exp(log_probs[i, j] - a_max)
+        if not np.isfinite(a_max):          # all -inf row (or a +inf entry): shifting would give NaN
+            out[i, 0] = a_max
+        else:
+            s = 0.0
+            for j in range(M):
+                s += np.exp(log_probs[i, j] - a_max)
 
-        out[i, 0] = a_max + np.log(s)
+            out[i, 0] = a_max + np.log(s)
 
     return out
 
 
 @njit(parallel=True, cache=True)
 def entropy_sum(log_resp, resp):
-    """Compute the negative entropy :math:`-\\sum r \\log r` over all entries.
+    """Weighted sum of logs, skipping zero weights (parallel).
 
-    Only entries where ``resp[i, j] > 0`` contribute, avoiding the
-    undefined ``0 * log(0)`` case.
+    ``s = sum_{i,j: resp[i, j] > 0} resp[i, j] * log_resp[i, j]``
+
+    With ``log_resp = log(resp)`` this is the negative entropy
+    :math:`\\sum r \\log r`; it is also used for ``sum r log(alpha)``.
+    Skipping ``resp == 0`` avoids ``0 * log(0) = nan``.
 
     Parameters
     ----------
     log_resp : ndarray of shape (N, K)
-        Log-responsibilities.
+        Log values (log-responsibilities or log latent prior).
     resp : ndarray of shape (N, K)
-        Responsibilities (``exp(log_resp)``).
+        Non-negative weights (responsibilities).
 
     Returns
     -------
     s : float
-        ``sum_{i,j, resp>0} resp[i, j] * log_resp[i, j]``.
     """
     s = 0.0
     for i in prange(log_resp.shape[0]):
