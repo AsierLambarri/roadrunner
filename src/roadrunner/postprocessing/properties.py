@@ -187,7 +187,7 @@ def projected_half_mass_radius(positions, masses, center, los_matrices, mass_fra
 
     Returns
     -------
-    Rhp : float or ndarray of shape (n_los,)
+    Rhp : ndarray of shape (n_los,)
     """
     Nlos = los_matrices.shape[0]
     centered = positions - center
@@ -196,7 +196,7 @@ def projected_half_mass_radius(positions, masses, center, los_matrices, mass_fra
         pos_rot = centered @ los_matrices[i].T
         radii = np.sqrt(pos_rot[:, 0] ** 2 + pos_rot[:, 1] ** 2)
         result[i] = enclosed_mass_radius(radii, masses, mass_fraction)
-    return result if Nlos > 1 else result[0]
+    return result
 
 
 def velocity_dispersion(velocities):
@@ -236,7 +236,7 @@ def line_of_sight_velocity_dispersion(positions, velocities, los_matrices, apert
     sigma_los : ndarray of shape (n_los,)
     """
     los_matrices = np.asarray(los_matrices, dtype=math_dtype())
-    apertures = np.asarray(apertures, dtype=math_dtype())
+    apertures = np.atleast_1d(np.asarray(apertures, dtype=math_dtype()))
     if los_matrices.shape[0] != apertures.shape[0]:
         raise ValueError("Number of los_matrices must match number of apertures")
 
@@ -340,10 +340,9 @@ def compute_galaxy_properties(
         if indices.size == 0:
             continue
 
-        row = galaxy_table.loc[sid]
-        host_id = row["host_id"]
-        sat_mass = row["mass"]
-        distance = row["distance_to_acc_id"]
+        host_id = galaxy_table.at[sid, "host_id"]
+        sat_mass = galaxy_table.at[sid, "mass"]
+        distance = galaxy_table.at[sid, "distance_to_acc_id"]
 
         r_t = compute_tidal_radius(host_potential, sat_mass, distance)
 
@@ -411,7 +410,7 @@ def compute_galaxy_properties(
             velocity_z=center_vel[2],
             Mtot=Mtot,
             r20=r20, rh=rh, r80=r80,
-            Rhp=np.nanmedian(Rhp) if isinstance(Rhp, np.ndarray) else Rhp,
+            Rhp=np.nanmedian(Rhp),
             sigma=sigma,
             sigma_los=np.nanmedian(sigma_los_arr),
             r_t=r_t,

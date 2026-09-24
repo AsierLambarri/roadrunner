@@ -260,14 +260,15 @@ class TestProjectedHalfMassRadius:
         result = projected_half_mass_radius(pos, masses, center, los_matrices)
         assert result.shape == (2,)
 
-    def test_single_los_returns_scalar(self):
+    def test_single_los_returns_array(self):
         rng = np.random.default_rng(42)
         pos = rng.normal(0, 3.0, (100, 3))
         masses = np.ones(100)
         center = np.zeros(3)
         los = np.eye(3)[np.newaxis]
         result = projected_half_mass_radius(pos, masses, center, los)
-        assert isinstance(result, (float, np.floating))
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (1,)
 
     def test_different_los_different_radii(self):
         rng = np.random.default_rng(42)
@@ -399,6 +400,43 @@ class TestComputeGalaxyProperties:
         assert list(result.columns) == expected_cols
         assert len(result) == 2
         assert set(result["Sub_tree_id"]) == {10, 20}
+
+    def test_n_los_one_and_large_host_id_exact(self):
+        rng = np.random.default_rng(42)
+        N = 200
+        masses = rng.uniform(0.1, 1.0, N)
+        coords = np.column_stack([
+            rng.normal(0, 10, N), rng.normal(0, 10, N), rng.normal(0, 10, N),
+            rng.normal(0, 50, N), rng.normal(0, 50, N), rng.normal(0, 50, N),
+        ])
+        big_host_id = 2**53 + 1
+        galaxy_particles = {10: np.arange(0, 100), 20: np.arange(100, 200)}
+        galaxy_table = pd.DataFrame({
+            "host_id": pd.array([1, big_host_id], dtype="int64"),
+            "mass": pd.array([5e10, 1e10], dtype="float64"),
+            "distance_to_acc_id": pd.array([50.0, 120.0], dtype="float64"),
+        }, index=pd.Index([10, 20], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": 1e12, "scale_radius": 10.0,
+            "virial_radius": 200.0, "Redshift": 0.1,
+        })
+        result = compute_galaxy_properties(
+            accretion_id=1,
+            particle_masses=masses,
+            particle_coords=coords,
+            galaxy_bound=galaxy_particles,
+            galaxy_table=galaxy_table,
+            host_props=host_props,
+            halo_model="kepler",
+            n_los=1,
+        )
+        result = result.set_index("Sub_tree_id")
+        assert np.isfinite(result.at[10, "Rhp"])
+        assert np.isfinite(result.at[10, "sigma_los"])
+        # read the mb_host_id column directly: a `.loc[row]` slice would
+        # upcast to a single (float) dtype across the row's other float
+        # columns, masking the very precision loss this test checks for.
+        assert int(result.at[20, "mb_host_id"]) == big_host_id
 
     def test_single_galaxy(self):
         rng = np.random.default_rng(42)
