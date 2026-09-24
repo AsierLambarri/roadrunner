@@ -265,7 +265,7 @@ class AccretionPipeline:
         if raw is None:
             return None
         if isinstance(raw, str):
-            snap_data = np.loadtxt(raw)
+            snap_data = np.atleast_1d(np.loadtxt(raw))
             return {int(s) for s in snap_data}
         snaps = [raw] if isinstance(raw, int) else list(raw)
         resolved = set()
