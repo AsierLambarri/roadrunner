@@ -130,7 +130,7 @@ class HDF5ParticleWriter:
                 arr = getattr(snapshot_data, name)
                 if np.issubdtype(arr.dtype, np.floating):
                     dtype = select_float_dtype(
-                        float(arr.max()), self._float_atol,
+                        float(np.abs(arr).max()), self._float_atol,
                         msg=f"(extra field {name!r})",
                     )
                 else:
