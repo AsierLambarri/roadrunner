@@ -451,6 +451,8 @@ class XGMMAssigner:
         from roadrunner.physics.scaler import StandardScaler
         n_comp = len(group_subtrees)
         run_kwargs = dict(
+            max_iter=self.max_iter,
+            reg_covar=self.reg_covar,
             tol=self.tol,
             verbose=self.verbose,
             **self.mixture_kwargs,
