@@ -218,6 +218,41 @@ class TestComputeDistanceToHost:
         assert dist > 0
 
 
+class TestExactIntegerHostId:
+    """C20: host_id must preserve exact int64 identities above 2**53."""
+
+    @pytest.fixture
+    def big_id_df(self):
+        host_id = 2**53 + 1
+        sat_id = 2**53 + 3
+        return pd.DataFrame({
+            "Sub_tree_id": np.array([host_id, sat_id], dtype=np.int64),
+            "Snapshot": [0, 0],
+            "Redshift": [0.0, 0.0],
+            "mass": [1e12, 1e9],
+            "virial_radius": [200.0, 20.0],
+            "scale_radius": [10.0, 2.0],
+            "position_x": [0.0, 5.0],
+            "position_y": [0.0, 0.0],
+            "position_z": [0.0, 0.0],
+            "velocity_x": [0.0, 10.0],
+            "velocity_y": [0.0, 0.0],
+            "velocity_z": [0.0, 0.0],
+        })
+
+    def test_exact_host_id_and_distance(self, big_id_df):
+        host_id = 2**53 + 1
+        sat_id = 2**53 + 3
+        h = MergerTreeHandlerCSV(big_id_df)
+        h.compute_most_bound_satellite(rvir_factor=2.0)
+        h.compute_distance_to_host(column="host_id")
+
+        assert h.dataframe["host_id"].dtype == np.int64
+        sat_row = h.dataframe[h.dataframe["Sub_tree_id"] == sat_id]
+        assert sat_row["host_id"].values[0] == host_id
+        assert sat_row["distance_to_host_id"].values[0] == 5.0
+
+
 class TestComputeSatellites:
     def test_returns_dict(self, three_halo_bound_df):
         result = MergerTreeHandlerCSV.compute_satellites(three_halo_bound_df, rvir_factor=2.0)

@@ -1,5 +1,6 @@
 """Merger-tree CSV reader."""
 
+import numpy as np
 import pandas as pd
 
 
@@ -21,6 +22,22 @@ class MergerTreeReaderCSV:
             self._df = data.copy()
         else:
             raise TypeError("data must be str (file path) or pd.DataFrame")
+
+        if "Sub_tree_id" in self._df.columns and not self._df.empty:
+            s = self._df["Sub_tree_id"]
+            if not pd.api.types.is_integer_dtype(s):
+                v = s.to_numpy()
+                if (
+                    np.isfinite(v).all()
+                    and (v == np.round(v)).all()
+                    and np.abs(v).max() <= 2**53
+                ):
+                    self._df["Sub_tree_id"] = v.astype(np.int64)
+                else:
+                    raise TypeError(
+                        "Sub_tree_id must be integer; float values above "
+                        "2**53 or non-integral cannot be trusted"
+                    )
 
     @property
     def dataframe(self) -> pd.DataFrame:

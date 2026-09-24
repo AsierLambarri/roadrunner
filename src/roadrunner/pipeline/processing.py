@@ -73,7 +73,7 @@ def process_snapshot(
 
     ensemble = HaloEnsemble([
         HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving)
-        for _, row in snap_df.iterrows()
+        for row in snap_df.to_dict("records")
     ])
     compute_halo_bound_particles(
         ensemble, particle_coords, search_factor=config.search_factor,

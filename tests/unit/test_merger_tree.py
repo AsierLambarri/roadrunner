@@ -117,6 +117,35 @@ class TestToNumeric:
         assert len(result) == len(reader.dataframe)
 
 
+class TestSubTreeIdIntegerCast:
+    def test_integral_float_cast_to_int64(self):
+        df = pd.DataFrame({"Sub_tree_id": [1.0, 2.0, 3.0], "Snapshot": [0, 0, 0]})
+        reader = MergerTreeReader(df)
+        assert reader.dataframe["Sub_tree_id"].dtype == np.int64
+        assert reader.dataframe["Sub_tree_id"].tolist() == [1, 2, 3]
+
+    def test_non_integral_float_raises(self):
+        df = pd.DataFrame({"Sub_tree_id": [1.0, 1.5, 3.0], "Snapshot": [0, 0, 0]})
+        with pytest.raises(TypeError, match="Sub_tree_id must be integer"):
+            MergerTreeReader(df)
+
+    def test_float_above_2_53_raises(self):
+        df = pd.DataFrame({
+            "Sub_tree_id": [2.0**54, 2.0], "Snapshot": [0, 0],
+        })
+        with pytest.raises(TypeError, match="Sub_tree_id must be integer"):
+            MergerTreeReader(df)
+
+    def test_int_ids_unchanged(self):
+        df = pd.DataFrame({
+            "Sub_tree_id": np.array([2**53 + 1, 2**53 + 2], dtype=np.int64),
+            "Snapshot": [0, 0],
+        })
+        reader = MergerTreeReader(df)
+        assert reader.dataframe["Sub_tree_id"].dtype == np.int64
+        assert reader.dataframe["Sub_tree_id"].tolist() == [2**53 + 1, 2**53 + 2]
+
+
 class TestNfwCmz:
     def test_known_value_scalar(self):
         result = nfw_cmz_relation_duffy(1e12, 0.0)

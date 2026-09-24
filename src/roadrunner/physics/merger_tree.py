@@ -85,12 +85,8 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             mask = self._df["Snapshot"] == snap
             snap_df = self._df[mask].copy()
             sat_to_host = self._most_bound_satellite_impl(snap_df, rvir_factor)
-            self._df.loc[mask, "host_id"] = (
-                self._df.loc[mask, "Sub_tree_id"]
-                .map(sat_to_host)
-                .fillna(UNBOUND)
-                .astype(GALAXY_ID)
-            )
+            ids = self._df.loc[mask, "Sub_tree_id"].to_numpy(dtype=GALAXY_ID)
+            self._df.loc[mask, "host_id"] = self._lookup_host_ids(ids, sat_to_host)
 
     def compute_distance_to_host(self, column: str = "host_id"):
         """Compute the distance from each subhalo to its host.
@@ -138,6 +134,43 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         return MergerTreeHandlerCSV._satellites_impl(snapshot_df, rvir_factor)
 
     # ── PRIVATE HELPERS ──────────────────────────────────────
+
+    @staticmethod
+    def _lookup_host_ids(ids: np.ndarray, sat_to_host: dict[int, int]) -> np.ndarray:
+        """Exact integer lookup of ``ids`` in ``sat_to_host`` (``UNBOUND`` if absent).
+
+        Sorts the (typically much smaller) satellite map once, then
+        resolves every ``ids`` entry with a vectorised
+        ``np.searchsorted`` + exact-match gather, mirroring the join
+        used in :meth:`SparseCSC.remap_rows`. This avoids a per-row
+        Python ``dict.get`` over every halo while still comparing
+        exact integers (no float round-trip, unlike ``Series.map``
+        through ``fillna``).
+
+        Parameters
+        ----------
+        ids : ndarray of GALAXY_ID
+            ``Sub_tree_id`` values to resolve, for one snapshot.
+        sat_to_host : dict of int -> int
+            Maps each satellite ``Sub_tree_id`` to its most bound host.
+
+        Returns
+        -------
+        host_ids : ndarray of GALAXY_ID
+            ``UNBOUND`` for IDs absent from ``sat_to_host`` (centrals).
+        """
+        result = np.full(len(ids), UNBOUND, dtype=GALAXY_ID)
+        if not sat_to_host:
+            return result
+        keys = np.fromiter(sat_to_host.keys(), dtype=GALAXY_ID, count=len(sat_to_host))
+        vals = np.fromiter(sat_to_host.values(), dtype=GALAXY_ID, count=len(sat_to_host))
+        order = np.argsort(keys)
+        sorted_keys = keys[order]
+        sorted_vals = vals[order]
+        pos = np.clip(np.searchsorted(sorted_keys, ids), 0, len(sorted_keys) - 1)
+        found = sorted_keys[pos] == ids
+        result[found] = sorted_vals[pos[found]]
+        return result
 
     @staticmethod
     def _compute_rs_row(row: pd.Series) -> float:
