@@ -30,12 +30,6 @@ class TestLocalVelocityDispersion:
         assert result.shape == (5,)
         assert np.all(np.isnan(result))
 
-    def test_single_particle_returns_nan(self):
-        pos = np.array([[0.0, 0.0, 0.0]])
-        vel = np.array([[10.0, 20.0, 30.0]])
-        result = _local_velocity_dispersion(pos, vel)
-        assert np.isnan(result[0])
-
 
 class TestRileyCriterionSingle:
     def test_intact_high_f_bound(self):

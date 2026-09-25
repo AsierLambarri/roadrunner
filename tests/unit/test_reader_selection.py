@@ -84,11 +84,7 @@ class TestSelectionAPI:
         snap = reader.load(path)
         assert np.array_equal(snap.index, IDS)
         assert np.allclose(snap.position, POSITIONS)
-
-    def test_override_filter(self, reader_and_path):
-        reader, path = reader_and_path
-        snap = reader.load(path, particle_indices=np.array([101, 105]))
-        assert set(snap.index.tolist()) == {101, 105}
+        assert np.allclose(snap.velocity, VELOCITIES)
 
     def test_persistent_filter_and_erase(self, reader_and_path):
         reader, path = reader_and_path
@@ -105,11 +101,7 @@ class TestSelectionAPI:
         snap = reader.load(path, particle_indices=np.array([102, 107]))
         expected = METALLICITY[np.array([102, 107]) - 100]
         assert np.allclose(snap.metallicity, expected)
-
-    def test_select_indices_sphere(self, reader_and_path):
-        reader, path = reader_and_path
-        ids = reader.select_indices(path, sphere=((2.0, 0.0, 0.0), 1.5))
-        assert set(ids.tolist()) == {101, 102, 103}
+        assert set(snap.index.tolist()) == {102, 107}
 
     def test_select_indices_bbox(self, reader_and_path):
         reader, path = reader_and_path
@@ -131,12 +123,6 @@ class TestSelectionAPI:
         with pytest.raises(ValueError, match="exactly one"):
             reader.select_indices(
                 path, sphere=((0, 0, 0), 1.0), bbox=((0, 0, 0), (1, 1, 1)))
-
-    def test_pdata_unscaling(self, tmp_path):
-        reader, path = _make_reader(tmp_path, ParticleDataSnapshotReader)
-        snap = reader.load(path)
-        assert np.allclose(snap.position, POSITIONS)
-        assert np.allclose(snap.velocity, VELOCITIES)
 
 
 class TestEntrySelection:

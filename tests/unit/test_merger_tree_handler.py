@@ -157,24 +157,16 @@ class TestDistanceToHostImpl:
 # ── State-modifying method tests ────────────────────────────
 
 class TestComputeScaleRadii:
-    def test_nan_filled(self, scale_radii_df):
+    def test_nan_filled_correct_value(self, scale_radii_df):
         handler = MergerTreeHandlerCSV(scale_radii_df)
+        original = handler.dataframe.iloc[1]["scale_radius"]
         handler.compute_scale_radii()
         for _, row in handler.dataframe.iterrows():
             if pd.isna(row["scale_radius"]):
                 pytest.fail("NaN remained after compute_scale_radii")
-
-    def test_nan_filled_correct_value(self, scale_radii_df):
-        handler = MergerTreeHandlerCSV(scale_radii_df)
-        handler.compute_scale_radii()
         row = handler.dataframe.iloc[0]
         expected = row["virial_radius"] / nfw_cmz_relation_duffy(row["mass"], row["Redshift"])
         assert np.isclose(row["scale_radius"], expected)
-
-    def test_valid_unchanged(self, scale_radii_df):
-        handler = MergerTreeHandlerCSV(scale_radii_df)
-        original = handler.dataframe.iloc[1]["scale_radius"]
-        handler.compute_scale_radii()
         assert handler.dataframe.iloc[1]["scale_radius"] == original
 
 
@@ -185,14 +177,10 @@ class TestComputeMostBoundSatellite:
         h.compute_most_bound_satellite(rvir_factor=2.0)
         return h
 
-    def test_host_id_column_added(self, handler):
+    def test_close_small_halo_has_host(self, handler):
         assert "host_id" in handler.dataframe.columns
-
-    def test_large_halo_no_host(self, handler):
         host_row = handler.dataframe[handler.dataframe["Sub_tree_id"] == 10]
         assert host_row["host_id"].values[0] == -1
-
-    def test_close_small_halo_has_host(self, handler):
         close_row = handler.dataframe[handler.dataframe["Sub_tree_id"] == 30]
         assert close_row["host_id"].values[0] == 10
 
@@ -205,14 +193,10 @@ class TestComputeDistanceToHost:
         h.compute_distance_to_host(column="host_id")
         return h
 
-    def test_distance_column_added(self, handler):
+    def test_satellite_has_positive_distance(self, handler):
         assert "distance_to_host_id" in handler.dataframe.columns
-
-    def test_central_halo_nan(self, handler):
         host_row = handler.dataframe[handler.dataframe["Sub_tree_id"] == 10]
         assert np.isnan(host_row["distance_to_host_id"].values[0])
-
-    def test_satellite_has_positive_distance(self, handler):
         close_row = handler.dataframe[handler.dataframe["Sub_tree_id"] == 30]
         dist = close_row["distance_to_host_id"].values[0]
         assert dist > 0
@@ -254,10 +238,6 @@ class TestExactIntegerHostId:
 
 
 class TestComputeSatellites:
-    def test_returns_dict(self, three_halo_bound_df):
-        result = MergerTreeHandlerCSV.compute_satellites(three_halo_bound_df, rvir_factor=2.0)
-        assert isinstance(result, dict)
-
     def test_host_has_satellite(self, three_halo_bound_df):
         result = MergerTreeHandlerCSV.compute_satellites(three_halo_bound_df, rvir_factor=2.0)
         assert 30 in result.get(10, set())

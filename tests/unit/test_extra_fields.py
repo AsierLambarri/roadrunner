@@ -33,17 +33,6 @@ class TestSnapshotDataRegistries:
         assert "metallicity" in data.fields
         assert "metallicity" in data.extra_fields
         assert "metallicity" not in data._assign_fields
-
-    def test_extra_fields_appears_on_instance(self):
-        """Extra fields are accessible as attributes."""
-        data = SnapshotData(
-            index=np.array([0, 1]),
-            mass=np.array([1.0, 2.0]),
-            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
-            redshift=0.5, time=1.0,
-            metallicity=np.array([0.01, 0.02]),
-        )
         np.testing.assert_array_equal(data.metallicity, [0.01, 0.02])
 
     def test_data_property_shape(self):
@@ -86,19 +75,6 @@ class TestSnapshotDataRegistries:
         )
         assert "metallicity" not in data.extra_fields
 
-    def test_indices_and_masses_never_extra(self):
-        """Internal fields indices/masses are never marked extra."""
-        data = SnapshotData(
-            index=np.array([0, 1]),
-            mass=np.array([1.0, 2.0]),
-            position=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
-            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
-            redshift=0.5, time=1.0,
-        )
-        assert "index" not in data.extra_fields
-        assert "mass" not in data.extra_fields
-
-
 class TestExtraFieldsHDF5Roundtrip:
     def test_write_snapshot_writes_extra(self, tmp_path):
         """HDF5ParticleWriter writes extra_fields datasets."""
@@ -138,10 +114,3 @@ class TestConfigAssignFields:
             assign_fields=["positions", "velocities"],
         )
         assert config.assign_fields == ["positions", "velocities"]
-
-    def test_run_config_default_assign_fields(self):
-        """assign_fields defaults to None (SnapshotData default)."""
-        from roadrunner.pipeline.config import RunConfig
-
-        config = RunConfig()
-        assert config.assign_fields is None

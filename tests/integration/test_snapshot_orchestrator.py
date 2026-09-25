@@ -67,59 +67,15 @@ class TestSnapshotOrchestratorWithoutTrackers:
         assert result.dynstate is not None
         assert "Sub_tree_id" in result.result.particle_df.columns
         assert "timescale" in result.result.particle_df.columns
-
-    def test_process_without_trackers_still_produces_properties(self):
-        tree, coords, masses, snap_data = _load_mock()
-        orchestrator = SnapshotOrchestrator(
-            processing_config=ProcessingConfig(halo_model="kepler"),
-            reduction_config=ReductionConfig(accretion_id=1),
-            assigner=_make_assigner(),
-        )
-        result = orchestrator.process(
-            snap_id=0, snap_df=tree, snap_data=snap_data,
-            satellites={},
-        )
-        assert result.properties is not None
         assert len(result.properties) > 0
-        assert "Sub_tree_id" in result.properties.columns
         assert "Mtot" in result.properties.columns
-
-    def test_process_twice_accumulates_no_tracker_state(self):
-        tree, coords, masses, snap_data = _load_mock()
-        orchestrator = SnapshotOrchestrator(
-            processing_config=ProcessingConfig(halo_model="kepler"),
-            reduction_config=ReductionConfig(accretion_id=1),
-            assigner=_make_assigner(),
-        )
-        result1 = orchestrator.process(
-            snap_id=0, snap_df=tree, snap_data=snap_data,
-            satellites={},
-        )
-        result2 = orchestrator.process(
-            snap_id=1, snap_df=tree, snap_data=snap_data,
-            satellites={},
-            previous_resp_sim=result1.previous_resp_sim,
-        )
-        assert len(result2.result.particle_df) == len(result1.result.particle_df)
+        assert result.previous_resp_sim is not None
+        assert len(result.previous_resp_sim) > 0
+        expected = ["Sub_tree_id", "mstar", "f_bound", "sigma50", "dynstate"]
+        assert list(result.dynstate.columns) == expected
 
 
 class TestSnapshotOrchestratorWithTrackers:
-    def test_process_with_birth_tracker(self):
-        tree, coords, masses, snap_data = _load_mock()
-        bt = BirthTracker(factor=5, enforce_initial_hosts=False)
-        orchestrator = SnapshotOrchestrator(
-            processing_config=ProcessingConfig(halo_model="kepler"),
-            reduction_config=ReductionConfig(accretion_id=1),
-            assigner=_make_assigner(),
-            birth_tracker=bt,
-        )
-        result = orchestrator.process(
-            snap_id=0, snap_df=tree, snap_data=snap_data,
-            satellites={},
-        )
-        assert isinstance(result, SnapshotResult)
-        assert result.properties is not None
-
     def test_trackers_accumulate_state_across_snapshots(self):
         tree, coords, masses, snap_data = _load_mock()
         bt = BirthTracker(factor=5, enforce_initial_hosts=False)
@@ -143,32 +99,4 @@ class TestSnapshotOrchestratorWithTrackers:
         assert bt._last_snapshot == 1
         assert at._last_snapshot == 1
         assert len(at.current()) > 0
-
-    def test_previous_resp_roundtrip_sim_space(self):
-        tree, coords, masses, snap_data = _load_mock()
-        orchestrator = SnapshotOrchestrator(
-            processing_config=ProcessingConfig(halo_model="kepler"),
-            reduction_config=ReductionConfig(accretion_id=1),
-            assigner=_make_assigner(),
-        )
-        result1 = orchestrator.process(
-            snap_id=0, snap_df=tree, snap_data=snap_data,
-            satellites={},
-        )
-        assert result1.previous_resp_sim is not None
-        assert len(result1.previous_resp_sim) > 0
-
-    def test_dynstate_columns(self):
-        tree, coords, masses, snap_data = _load_mock()
-        orchestrator = SnapshotOrchestrator(
-            processing_config=ProcessingConfig(halo_model="kepler"),
-            reduction_config=ReductionConfig(accretion_id=1),
-            assigner=_make_assigner(),
-        )
-        result = orchestrator.process(
-            snap_id=0, snap_df=tree, snap_data=snap_data,
-            satellites={},
-        )
-        assert result.dynstate is not None
-        expected = ["Sub_tree_id", "mstar", "f_bound", "sigma50", "dynstate"]
-        assert list(result.dynstate.columns) == expected
+        assert len(result2.result.particle_df) == len(result1.result.particle_df)

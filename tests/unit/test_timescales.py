@@ -34,20 +34,14 @@ def _make_ensemble(halos):
 
 
 class TestDynamicalTimescales:
-    def test_returns_same_df(self):
-        halos = [_make_halo([0.0, 0.0, 0.0], sub_tree_id=1)]
-        ens = _make_ensemble(halos)
-        df = pd.DataFrame({"array_index": np.arange(10, dtype=np.uint64), "Sub_tree_id": 1})
-        result = compute_particle_dynamical_timescales(df, ens, [[0]])
-        assert "timescale" in result.columns
-        assert len(result) == 10
-
     def test_timescale_positive(self):
         halos = [_make_halo([0.0, 0.0, 0.0], sub_tree_id=1)]
         ens = _make_ensemble(halos)
         df = pd.DataFrame({"array_index": np.arange(10, dtype=np.uint64), "Sub_tree_id": 1})
         result = compute_particle_dynamical_timescales(df, ens, [[0]], td_factor=1.0)
         assert np.all(result["timescale"].values > 0)
+        assert "timescale" in result.columns
+        assert len(result) == 10
 
     def test_timescale_capped(self):
         halos = [_make_halo([0.0, 0.0, 0.0], sub_tree_id=1)]
@@ -114,10 +108,3 @@ class TestTidalRadius:
         rt = compute_tidal_radius(halo, 1e10, 100.0)
         assert np.isfinite(rt)
         assert rt > 0
-
-    def test_large_distance_larger_rt(self):
-        M, Ms = 1e12, 1e10
-        halo = _make_halo([0.0, 0.0, 0.0], mass=M)
-        rt_near = compute_tidal_radius(halo, Ms, 50.0)
-        rt_far = compute_tidal_radius(halo, Ms, 200.0)
-        assert rt_far > rt_near

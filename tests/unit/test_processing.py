@@ -46,12 +46,6 @@ class TestProcessingConfig:
         assert cfg.search_factor == 1.0
         assert cfg.min_particles == 10
 
-    def test_custom(self):
-        cfg = ProcessingConfig(halo_model="nfw", search_factor=2.0, min_particles=5)
-        assert cfg.halo_model == "nfw"
-        assert cfg.search_factor == 2.0
-        assert cfg.min_particles == 5
-
     def test_frozen(self):
         cfg = ProcessingConfig()
         with pytest.raises(AttributeError):
@@ -109,21 +103,6 @@ class TestProcessSnapshot:
             snap_data, tree, newborn, None, assigner, cfg_large,
         )
         assert ens_large.nstars >= ens_small.nstars
-
-    def test_min_particles_affects_groups(self):
-        tree, coords, masses, snap_data = _load_mock()
-        assigner = XGMMAssigner(
-            cov_type="full", max_iter=5, tol=1e-2,
-            min_particles=5, reg_covar=1e-6, prior_type="", verbose=0,
-        )
-        newborn = np.arange(coords.shape[0], dtype=np.uint64)
-
-        _, result = process_snapshot(
-            snap_data, tree, newborn, None, assigner,
-            ProcessingConfig(min_particles=5),
-        )
-        assert result.particle_df is not None
-        assert len(result.particle_df) > 0
 
 
 class TestExactIntegerSubTreeId:

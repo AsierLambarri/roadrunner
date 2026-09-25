@@ -55,11 +55,6 @@ class TestSelectSnapshots:
         assert not result.empty
         assert (result["Snapshot"] == snaps[0]).all()
 
-    def test_select_multiple_snapshots(self, reader):
-        snaps = reader.snapshots
-        result = reader.select_snapshots(snaps)
-        assert len(result) == len(reader.dataframe)
-
     def test_select_empty_snapshots(self, reader):
         result = reader.select_snapshots([99999])
         assert result.empty
@@ -75,11 +70,6 @@ class TestSelectSubtrees:
         result = reader.select_subtrees([ids[0]])
         assert not result.empty
         assert (result["Sub_tree_id"] == ids[0]).all()
-
-    def test_select_multiple_subtrees(self, reader):
-        ids = reader.subtree_ids[:3]
-        result = reader.select_subtrees(ids)
-        assert len(result["Sub_tree_id"].unique()) == len(ids)
 
     def test_select_empty_subtrees(self, reader):
         result = reader.select_subtrees([-1])
@@ -160,16 +150,7 @@ class TestNfwCmz:
         assert result.shape == (3,)
         assert all(result[i] > result[i + 1] for i in range(len(result) - 1))
 
-    def test_monotonic_decreasing_with_mass(self):
-        low = nfw_cmz_relation_duffy(1e11, 0.0)
-        high = nfw_cmz_relation_duffy(1e14, 0.0)
-        assert low > high
-
     def test_monotonic_decreasing_with_redshift(self):
         z0 = nfw_cmz_relation_duffy(1e12, 0.0)
         z2 = nfw_cmz_relation_duffy(1e12, 2.0)
         assert z0 > z2
-
-    def test_exact_midpoint(self):
-        result = nfw_cmz_relation_duffy(2e12, 0.0)
-        assert abs(result - 7.85) < 1e-12

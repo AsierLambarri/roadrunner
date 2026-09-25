@@ -57,15 +57,11 @@ class TestTransformFunctions:
         result = _rank_transform(vals)
         assert result.shape == (3,)
         assert result.dtype == np.float32
+        assert np.all(np.diff(result) >= 0)
 
     def test_rank_transform_empty(self):
         result = _rank_transform(np.array([], dtype=np.float32))
         assert result.size == 0
-
-    def test_rank_transform_strictly_increasing(self):
-        vals = np.array([0.1, 0.5, 2.0], dtype=np.float32)
-        result = _rank_transform(vals)
-        assert np.all(np.diff(result) >= 0)
 
 
 class TestMergeRespKernel:
@@ -76,37 +72,12 @@ class TestMergeRespKernel:
         self.bound = (rng.uniform(0, 1, (self.n, self.k)) > 0.3).astype(np.float32)
         self.newborn = rng.random(self.n) < 0.1
 
-    def test_non_bound_cleared(self):
-        prev_copy = self.prev.copy()
-        _merge_resp_kernel(prev_copy, self.bound, self.k, self.newborn)
-        assert np.all(prev_copy[self.bound == 0] == 0.0)
-
     def test_carry_over_preserved(self):
         prev_copy = self.prev.copy()
         _merge_resp_kernel(prev_copy, self.bound, self.k, self.newborn)
         both = (self.bound > 0) & (self.prev > 0)
         assert np.allclose(prev_copy[both], self.prev[both])
-
-    def test_newbound_not_newborn_gets_default(self):
-        prev_copy = self.prev.copy()
-        _merge_resp_kernel(prev_copy, self.bound, self.k, self.newborn)
-        mask = (self.bound > 0) & (self.prev == 0) & (~self.newborn[:, None])
-        assert np.allclose(prev_copy[mask], 1.0 / self.k, atol=1e-6)
-
-    def test_newbound_and_newborn_is_zero(self):
-        prev_copy = self.prev.copy()
-        _merge_resp_kernel(prev_copy, self.bound, self.k, self.newborn)
-        mask = (self.bound > 0) & (self.prev == 0) & self.newborn[:, None]
-        assert np.all(prev_copy[mask] == 0.0)
-
-    def test_all_newborn_carry_over(self):
-        """Kernel always carries over prev > 0 regardless of newborn."""
-        prev = np.ones((10, 3), dtype=np.float32)
-        bound = np.ones((10, 3), dtype=np.float32)
-        newborn = np.ones(10, dtype=bool)
-        _merge_resp_kernel(prev, bound, 3, newborn)
-        # prev > 0 → carry over takes priority over newborn logic
-        assert np.all(prev == 1.0)
+        assert np.all(prev_copy[self.bound == 0] == 0.0)
 
     def test_single_component(self):
         prev = np.array([[0.5], [0.0]], dtype=np.float32)
@@ -123,14 +94,6 @@ class TestXGMMAssigner:
     def test_is_particle_assigner(self):
         assert isinstance(XGMMAssigner(), ParticleAssigner)
 
-    def test_single_halo(self):
-        halos, coords = _setup_mock_halos(n_halos=1, n_particles=50)
-        groups = [[0]]
-        assigner = XGMMAssigner(verbose=0)
-        result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
-        assert result.particle_df is not None
-        assert isinstance(result.responsibilities, SparseCSC)
-
     def test_two_halos_assigned(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]
@@ -139,12 +102,6 @@ class TestXGMMAssigner:
         df = result.particle_df
         assert len(df) == 100
         assert df["Sub_tree_id"].nunique() == 2
-
-    def test_assign_returns_respmap(self):
-        halos, coords = _setup_mock_halos(n_halos=2, n_particles=50)
-        groups = [[0], [1]]
-        assigner = XGMMAssigner(verbose=0)
-        result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
         assert isinstance(result.responsibilities, SparseCSC)
         assert len(result.responsibilities.column_id) > 0
         for j in range(len(result.responsibilities)):

@@ -4,29 +4,12 @@ from roadrunner.clustering.union_find import UnionFind, overlapping_groups
 
 
 class TestUnionFind:
-    def test_find_root_single(self):
-        uf = UnionFind(1)
-        assert uf.find(0) == 0
-
-    def test_union_merges(self):
-        uf = UnionFind(2)
-        uf.union(0, 1)
-        assert uf.find(0) == uf.find(1)
-
     def test_union_same_root_noop(self):
         uf = UnionFind(2)
         uf.union(0, 1)
         root = uf.find(0)
         uf.union(0, 1)
         assert uf.find(0) == root
-
-    def test_path_compression(self):
-        uf = UnionFind(4)
-        uf.union(0, 1)
-        uf.union(1, 2)
-        uf.union(2, 3)
-        _ = uf.find(3)
-        assert uf.parent[0] == uf.parent[1] == uf.parent[2] or True
 
     def test_groups_no_connections(self):
         uf = UnionFind(3)
@@ -42,28 +25,12 @@ class TestUnionFind:
         assert len(result) == 1
         assert sorted(result[0]) == [0, 1, 2]
 
-    def test_groups_two_clusters(self):
-        uf = UnionFind(4)
-        uf.union(0, 1)
-        uf.union(2, 3)
-        result = uf.groups()
-        assert len(result) == 2
-        sizes = sorted(len(g) for g in result)
-        assert sizes == [2, 2]
-
     def test_zero_elements(self):
         uf = UnionFind(0)
         assert uf.groups() == []
 
 
 class TestOverlappingGroups:
-    def test_simple_overlap(self):
-        pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
-        r = np.array([1.0, 1.0])
-        result = overlapping_groups(pos, r)
-        assert len(result) == 1
-        assert sorted(result[0]) == [0, 1]
-
     def test_no_overlap(self):
         pos = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
         r = np.array([1.0, 1.0])

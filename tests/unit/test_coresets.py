@@ -19,23 +19,14 @@ def sample_data():
 
 
 class TestFitAndGenerate:
-    def test_fit_returns_self(self, sample_data):
+    def test_generate_coreset_shape(self, sample_data):
         coreset = GaussianCoreset(n_components=2, random_state=42)
         result = coreset.fit(sample_data)
         assert result is coreset
-
-    def test_generate_coreset_shape(self, sample_data):
-        coreset = GaussianCoreset(n_components=2, random_state=42)
-        coreset.fit(sample_data)
         C, w, idx = coreset.generate_coreset(50)
         assert C.shape[1] == 2
         assert w.shape[0] == C.shape[0]
         assert idx.shape[0] == C.shape[0]
-
-    def test_weights_positive(self, sample_data):
-        coreset = GaussianCoreset(n_components=2, random_state=42)
-        coreset.fit(sample_data)
-        C, w, idx = coreset.generate_coreset(50)
         assert np.all(w > 0)
 
     def test_estimate_error_finite(self, sample_data):
@@ -63,13 +54,6 @@ class TestMahalanobis:
             sample_data, coreset.centers, coreset.covariances, coreset.cov_type
         )
         assert quad.shape == (200, 2)
-
-    def test_nonnegative(self, sample_data):
-        coreset = GaussianCoreset(n_components=2, cov_type="full", random_state=42)
-        coreset.fit(sample_data)
-        quad = _estimate_mahalanobis_squared(
-            sample_data, coreset.centers, coreset.covariances, coreset.cov_type
-        )
         assert np.all(quad >= -1e-6)
 
 

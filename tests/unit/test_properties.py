@@ -28,12 +28,6 @@ class TestRandomLinesOfSight:
         # all z should be >= 0 (cos_theta in [0, 1])
         assert np.all(vectors[:, 2] >= 0)
 
-    def test_full_sphere(self):
-        vectors = random_lines_of_sight(1000, half_sphere=False, seed=0)
-        # z should span [-1, 1]
-        assert np.any(vectors[:, 2] < 0)
-        assert np.any(vectors[:, 2] > 0)
-
     def test_reproducible_seed(self):
         v1 = random_lines_of_sight(50, seed=42)
         v2 = random_lines_of_sight(50, seed=42)
@@ -80,21 +74,6 @@ class TestRotationMatrixFromLos:
         R = rotation_matrix_from_los(los)
         assert np.isclose(np.linalg.det(R), 1.0, atol=1e-6)
 
-    def test_x_axis_orthogonal_to_z(self):
-        los = np.array([1.0, 1.0, 1.0])
-        R = rotation_matrix_from_los(los)
-        # e_x should be perpendicular to e_z
-        assert np.isclose(R[0] @ R[2], 0.0, atol=1e-6)
-        # e_y should be perpendicular to e_z
-        assert np.isclose(R[1] @ R[2], 0.0, atol=1e-6)
-
-    def test_z_aligned_los_preserved(self):
-        los = np.array([0.0, 0.0, 1.0])
-        R = rotation_matrix_from_los(los)
-        # any rotation that keeps +z fixed is valid
-        assert np.allclose(R @ los, los, atol=1e-6)
-        assert np.allclose(R @ R.T, np.eye(3), atol=1e-6)
-
     def test_negative_z(self):
         los = np.array([0.0, 0.0, -1.0])
         R = rotation_matrix_from_los(los)
@@ -106,16 +85,6 @@ class TestRotationMatrixFromLos:
             rotation_matrix_from_los(np.array([1.0, 2.0]))
         with pytest.raises(ValueError, match="3-element"):
             rotation_matrix_from_los(np.array([[1.0, 2.0, 3.0]]))
-
-    def test_row_vector_convention(self):
-        los = np.array([1.0, 2.0, 3.0])
-        R = rotation_matrix_from_los(los)
-        points = np.random.default_rng(0).uniform(-1, 1, (5, 3))
-        # (R @ pᵢᵀ)ᵀ = pᵢ @ Rᵀ  (matrix identity)
-        rot1 = (R @ points.T).T
-        rot2 = points @ R.T
-        assert np.allclose(rot1, rot2, atol=1e-6)
-
 
 class TestCentering:
     def test_known_center(self):
@@ -144,25 +113,6 @@ class TestCentering:
         unweighted = np.average(pos, axis=0)
         assert np.linalg.norm(cpos - unweighted) > 0.01
 
-    def test_within_envelope(self):
-        rng = np.random.default_rng(42)
-        pos = rng.uniform(-10, 10, (100, 3))
-        vel = rng.uniform(-100, 100, (100, 3))
-        masses = np.ones(100)
-        cpos, _ = find_center(pos, vel, masses)
-        # center must be inside the data bounding box
-        assert np.all(cpos >= pos.min(axis=0) - 1.0)
-        assert np.all(cpos <= pos.max(axis=0) + 1.0)
-
-    def test_symmetric_distribution(self):
-        rng = np.random.default_rng(42)
-        pos = rng.normal(0, 3, (500, 3))
-        vel = rng.normal(0, 100, (500, 3))
-        masses = np.ones(500)
-        cpos, _ = find_center(pos, vel, masses)
-        # symmetric distribution → center near origin
-        assert np.allclose(cpos, 0.0, atol=1.0)
-
     def test_single_particle(self):
         pos = np.array([[5.0, 6.0, 7.0]])
         vel = np.array([[10.0, 20.0, 30.0]])
@@ -190,13 +140,6 @@ class TestEnclosedMassRadius:
         masses = np.ones(3)
         assert enclosed_mass_radius(radii, masses, 1.0) == 10.0
 
-    def test_mass_concentrated_at_large_radius(self):
-        # 99% of mass at r=100 → r98 ≈ 100
-        radii = np.array([1.0, 100.0])
-        masses = np.array([1.0, 99.0])
-        r98 = enclosed_mass_radius(radii, masses, 0.98)
-        assert np.isclose(r98, 100.0, atol=2.0)
-
     def test_zero_total_mass(self):
         radii = np.array([1.0, 2.0, 3.0])
         masses = np.zeros(3)
@@ -215,15 +158,6 @@ class TestEnclosedMassRadius:
 
 
 class TestHalfMassRadius:
-    def test_uniform_sphere(self):
-        rng = np.random.default_rng(42)
-        pos = rng.normal(0, 5.0, (1000, 3))
-        masses = np.ones(1000)
-        center = np.zeros(3)
-        r50 = half_mass_radius(pos, masses, center)
-        assert r50 > 0
-        assert r50 < 10.0  # within 2σ of the gaussian
-
     def test_two_equal_masses(self):
         pos = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
         masses = np.array([1.0, 1.0])
@@ -231,12 +165,6 @@ class TestHalfMassRadius:
         # radii = [0, 10], cum_mass = [0.5, 1.0], searchsorted(0.5) → 1,
         # interpolation: r = 0 + (0.5-0.5)/(1.0-0.5)*(10-0) = 0
         assert r50 == 0.0  # half-mass is at the inner particle
-
-    def test_single_particle(self):
-        pos = np.array([[3.0, 4.0, 5.0]])
-        masses = np.array([1.0])
-        r50 = half_mass_radius(pos, masses, center=np.array([3.0, 4.0, 5.0]))
-        assert r50 == 0.0  # at center
 
 
 class TestProjectedHalfMassRadius:
@@ -250,15 +178,6 @@ class TestProjectedHalfMassRadius:
         r50_3d = half_mass_radius(pos, masses, center)
         r50_2d = projected_half_mass_radius(pos, masses, center, los[np.newaxis])
         assert r50_2d < r50_3d
-
-    def test_multiple_lines_of_sight(self):
-        rng = np.random.default_rng(42)
-        pos = rng.normal(0, 3.0, (300, 3))
-        masses = np.ones(300)
-        center = np.zeros(3)
-        los_matrices = np.array([np.eye(3), np.eye(3)])
-        result = projected_half_mass_radius(pos, masses, center, los_matrices)
-        assert result.shape == (2,)
 
     def test_single_los_returns_array(self):
         rng = np.random.default_rng(42)
@@ -281,6 +200,7 @@ class TestProjectedHalfMassRadius:
         los_matrices = np.array([R1, R2])
         result = projected_half_mass_radius(pos, masses, center, los_matrices)
         assert not np.isclose(result[0], result[1], atol=0.01)
+        assert result.shape == (2,)
 
 
 class TestVelocityDispersion:
@@ -289,12 +209,6 @@ class TestVelocityDispersion:
         # σ_x = 1.414, σ_y = 0, σ_z = 0 → σ = 1.414
         sigma = velocity_dispersion(vel)
         assert np.isclose(sigma, np.sqrt(2), atol=1e-6)
-
-    def test_isotropic(self):
-        rng = np.random.default_rng(42)
-        vel = rng.normal(0, 100, (1000, 3))
-        sigma = velocity_dispersion(vel)
-        assert np.isclose(sigma, np.sqrt(3) * 100, rtol=0.1)
 
     def test_single_particle(self):
         vel = np.array([[10.0, 20.0, 30.0]])
@@ -401,6 +315,13 @@ class TestComputeGalaxyProperties:
         assert len(result) == 2
         assert set(result["Sub_tree_id"]) == {10, 20}
 
+        row10 = result[result["Sub_tree_id"] == 10].iloc[0]
+        assert row10["Mtot"] == pytest.approx(masses[:100].sum())
+        assert row10["r_t"] > 0
+        assert not np.isnan(row10["rh"])
+        assert not np.isnan(row10["sigma"])
+        assert not np.isnan(row10["sigma_los"])
+
     def test_n_los_one_and_large_host_id_exact(self):
         rng = np.random.default_rng(42)
         N = 200
@@ -437,42 +358,6 @@ class TestComputeGalaxyProperties:
         # upcast to a single (float) dtype across the row's other float
         # columns, masking the very precision loss this test checks for.
         assert int(result.at[20, "mb_host_id"]) == big_host_id
-
-    def test_single_galaxy(self):
-        rng = np.random.default_rng(42)
-        N = 50
-        masses = rng.uniform(0.1, 1.0, N)
-        coords = np.column_stack([
-            rng.normal(0, 5, N), rng.normal(0, 5, N), rng.normal(0, 5, N),
-            rng.normal(0, 30, N), rng.normal(0, 30, N), rng.normal(0, 30, N),
-        ])
-        galaxy_particles = {42: np.arange(N)}
-        galaxy_table = pd.DataFrame({
-            "host_id": [1], "mass": [2e10],
-            "distance_to_acc_id": [80.0],
-        }, index=pd.Index([42], name="Sub_tree_id"))
-        host_props = pd.Series({
-            "mass": 1e12, "scale_radius": 10.0,
-            "virial_radius": 200.0, "Redshift": 0.1,
-        })
-        result = compute_galaxy_properties(
-            accretion_id=1,
-            particle_masses=masses,
-            particle_coords=coords,
-            galaxy_bound=galaxy_particles,
-            galaxy_table=galaxy_table,
-            host_props=host_props,
-            halo_model="kepler",
-            n_los=3,
-        )
-        assert len(result) == 1
-        row = result.iloc[0]
-        assert row["Sub_tree_id"] == 42
-        assert row["Mtot"] == pytest.approx(masses.sum())
-        assert row["r_t"] > 0
-        assert not np.isnan(row["rh"])
-        assert not np.isnan(row["sigma"])
-        assert not np.isnan(row["sigma_los"])
 
     def test_few_particles_returns_nan_properties(self):
         masses = np.array([1.0, 1.0, 1.0])

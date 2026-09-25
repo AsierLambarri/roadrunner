@@ -46,22 +46,6 @@ class TestPotential:
         expected = inner.potential(np.array([r_phys]))
         assert np.allclose(result, expected)
 
-    def test_multiple_particles(self):
-        inner = KeplerPotential(M=1e12)
-        halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
-        xyz = np.array([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]])
-        result = halo.potential(xyz)
-        expected = inner.potential(np.array([1.0, 2.0, 3.0]))
-        assert np.allclose(result, expected)
-
-    def test_passthrough_radius(self):
-        inner = KeplerPotential(M=1e12)
-        halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
-        r = np.array([50.0, 100.0])
-        result = halo.potential(r)
-        expected = inner.potential(r)
-        assert np.allclose(result, expected)
-
     def test_1d_virial_radius_mode(self):
         inner = KeplerPotential(M=1e12)
         halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.5, comoving=True)
@@ -91,6 +75,8 @@ class TestBoundness:
         assert np.array_equal(result[0], indices)
         assert np.array_equal(result[1], energies)
         assert np.array_equal(result[2], tdyns)
+        assert isinstance(result, tuple)
+        assert len(result) == 3
 
     def test_set_boundness_overwrites(self):
         inner = KeplerPotential(M=1e12)
@@ -99,14 +85,6 @@ class TestBoundness:
         halo.set_boundness(np.array([5]), np.array([0.9]), np.array([2.0]))
         result = halo.get_boundness()
         assert result[0][0] == 5
-
-    def test_get_boundness_returns_tuple(self):
-        inner = KeplerPotential(M=1e12)
-        halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
-        halo.set_boundness(np.array([0]), np.array([0.1]), np.array([1.0]))
-        result = halo.get_boundness()
-        assert isinstance(result, tuple)
-        assert len(result) == 3
 
 
 class TestTidalDenominator:

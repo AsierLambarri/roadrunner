@@ -79,8 +79,6 @@ class TestNonpositiveDefinite:
     def test_spherical_all_positive(self):
         result = _nonpositive_definite(np.array([1.0, 2.0]), "spherical")
         assert not np.any(result)
-
-    def test_spherical_some_nonpositive(self):
         result = _nonpositive_definite(np.array([1.0, -1.0]), "spherical")
         assert np.any(result)
 
@@ -88,8 +86,6 @@ class TestNonpositiveDefinite:
         cov = np.array([[1.0, 2.0], [3.0, 4.0]])
         result = _nonpositive_definite(cov, "diagonal")
         assert not np.any(result)
-
-    def test_diagonal_some_nonpositive(self):
         cov = np.array([[1.0, 2.0], [3.0, -4.0]])
         result = _nonpositive_definite(cov, "diagonal")
         assert np.any(result)

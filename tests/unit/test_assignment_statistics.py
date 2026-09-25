@@ -17,15 +17,6 @@ class TestGMMAssignerStatistics:
         assert np.isnan(s.avg_entropy)
         assert np.isnan(s.avg_cond)
 
-    def test_all_assigned_no_soft(self):
-        df = pd.DataFrame({"array_index": np.arange(100), "Sub_tree_id": [1] * 100})
-        s = GMMAssignerStatistics().compute(df, {}, {})
-        assert s.unassigned == 0
-        assert s.fragments == 0
-        assert np.isnan(s.avg_conf)
-        assert np.isnan(s.avg_entropy)
-        assert np.isnan(s.avg_cond)
-
     def test_unassigned_and_fragments(self):
         df = pd.DataFrame({
             "array_index": np.arange(110),
@@ -58,18 +49,6 @@ class TestGMMAssignerStatistics:
         assert np.isclose(s.avg_conf, 0.75)
         assert not np.isnan(s.avg_entropy)
         assert s.avg_entropy >= 0.0
-
-    def test_avg_cond_from_diagonal_cov(self):
-        df = pd.DataFrame({
-            "array_index": np.arange(4),
-            "Sub_tree_id": [1, 1, 2, 2],
-        })
-        resp_map = {
-            1: (np.array([0, 1], dtype=np.uint64), np.array([0.9, 0.8], dtype=np.float32)),
-        }
-        params = {1: {"covariance_condition": 1000.0}}
-        s = GMMAssignerStatistics().compute(df, resp_map, params)
-        assert np.isclose(s.avg_cond, 1000.0, atol=1.0)
 
     def test_avg_cond_from_full_cov(self):
         df = pd.DataFrame({

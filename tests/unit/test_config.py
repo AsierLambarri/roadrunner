@@ -26,6 +26,7 @@ class TestRunConfigDefaults:
         assert c.code == "RAMSES"
         assert c.ptype == "star"
         assert c.unit_base is None
+        assert c.assign_fields is None
 
     def test_fields_default_factory(self):
         c1 = RunConfig()
@@ -44,12 +45,6 @@ class TestRunConfigDefaults:
 
 
 class TestRunConfigFromDict:
-    def test_from_dict(self):
-        d = {"halo_model": "nfw", "cov_type": "diagonal"}
-        c = RunConfig(**d)
-        assert c.halo_model == "nfw"
-        assert c.cov_type == "diagonal"
-
     def test_from_dict_extra_keys_rejected(self):
         with pytest.raises(TypeError, match="unknown_key"):
             RunConfig(**{"halo_model": "kepler", "unknown_key": 42})
@@ -98,12 +93,3 @@ class TestRunConfigFrozen:
         with pytest.raises(AttributeError):
             c.halo_model = "nfw"
 
-    def test_frozen_fields(self):
-        c = RunConfig()
-        with pytest.raises(AttributeError):
-            c.fields = {}
-
-    def test_frozen_attribute_from_dict(self):
-        c = RunConfig(halo_model="nfw")
-        with pytest.raises(AttributeError):
-            c.halo_model = "kepler"

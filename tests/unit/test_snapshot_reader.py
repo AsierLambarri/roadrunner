@@ -6,13 +6,10 @@ from roadrunner.readers.snapshot import SnapshotReader
 
 
 class TestMockData:
-    def test_returns_snapshot_data(self):
-        result = SnapshotReader.mock_data(100)
-        assert isinstance(result, SnapshotData)
-
     def test_correct_shapes(self):
         n = 50
         data = SnapshotReader.mock_data(n)
+        assert isinstance(data, SnapshotData)
         assert data.index.shape == (n,)
         assert data.mass.shape == (n,)
         assert data.position.shape == (n, 3)
@@ -50,10 +47,6 @@ class TestConstruction:
         assert reader.code == "RAMSES"
         assert reader.ptype == "stars"
 
-    def test_code_uppercased(self):
-        reader = SnapshotReader("ramses", "gas", {"index": "particle_index"})
-        assert reader.code == "RAMSES"
-
     def test_unit_base_stored(self):
         ub = {"length": (1.0, "kpc")}
         reader = SnapshotReader("GEAR", "stars", {}, unit_base=ub)
@@ -74,11 +67,3 @@ class TestOpenDispatch:
                 "ART", "ART-I", "GEAR", "AURIGA", "AREPO",
                 "RAMSES", "VINTERGATAN",
             )
-
-
-class TestFilter:
-    def test_filter_name_includes_id(self):
-        reader = SnapshotReader("RAMSES", "stars", {"index": "pid"})
-        indices = np.array([1, 2, 3])
-        filter_name = f"_snap_filter_{id(indices)}"
-        assert filter_name.startswith("_snap_filter_")

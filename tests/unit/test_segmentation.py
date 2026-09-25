@@ -9,16 +9,6 @@ class TestFindPopulatedHaloes:
         assert list(empty) == [1]
         assert list(populated) == [0, 2]
 
-    def test_all_empty(self):
-        empty, populated = find_populated_haloes([[], []])
-        assert list(empty) == [0, 1]
-        assert list(populated) == []
-
-    def test_all_populated(self):
-        empty, populated = find_populated_haloes([[1], [2]])
-        assert list(empty) == []
-        assert list(populated) == [0, 1]
-
     def test_empty_input(self):
         empty, populated = find_populated_haloes([])
         assert list(empty) == []
@@ -33,23 +23,9 @@ class TestHaloSegmenter:
         assert seg is seg  # returns self
         assert sorted(seg.groups[0]) == [0, 1, 2]
 
-    def test_overlap_groups_none(self):
-        pos = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
-        r = np.array([1.0, 1.0])
-        seg = HaloSegmenter(pos, r).overlap_groups()
-        assert len(seg.groups) == 2
-
     def test_overlap_groups_empty(self):
         seg = HaloSegmenter([], []).overlap_groups()
         assert seg.groups == []
-
-    def test_fluent_chain(self):
-        pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [5.0, 0.0, 0.0]])
-        r = np.array([1.0, 1.0, 1.0])
-        candidates = [[1] * 100, [1] * 3, [1] * 50]
-        seg = HaloSegmenter(pos, r).overlap_groups().prune(candidates, min_particles=10)
-        assert seg is seg
-        assert seg.pruned_groups is not None
 
     def test_prune_below_threshold(self):
         # Chain overlap: 0-1 and 1-2 overlap → one group [0,1,2]

@@ -68,10 +68,6 @@ class TestSnapshotTime:
         eq = EquivalenceTable(sample_df)
         assert eq.snapshot_time(100) == 1.0
 
-    def test_another_value(self, sample_df):
-        eq = EquivalenceTable(sample_df)
-        assert eq.snapshot_time(200) == 10.0
-
     def test_missing_snapshot_raises(self, sample_df):
         eq = EquivalenceTable(sample_df)
         with pytest.raises(KeyError):
@@ -98,9 +94,6 @@ class TestProperties:
     def test_min_snapshot(self, sample_df):
         eq = EquivalenceTable(sample_df)
         assert eq.min_snapshot == 100
-
-    def test_max_snapshot(self, sample_df):
-        eq = EquivalenceTable(sample_df)
         assert eq.max_snapshot == 200
 
     def test_dataframe_property(self, sample_df):

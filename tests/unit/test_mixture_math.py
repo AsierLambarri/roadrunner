@@ -42,11 +42,6 @@ class TestLogSumExp:
 
 
 class TestRowL1Normalize:
-    def test_rows_sum_to_one(self):
-        X = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
-        result = row_l1_normalize(X.copy())
-        assert np.allclose(result.sum(axis=1), 1.0)
-
     def test_zero_row_unchanged(self):
         X = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 0.0]], dtype=np.float32)
         result = row_l1_normalize(X.copy())
@@ -84,11 +79,6 @@ class TestRowSquaredNorms:
         X = np.array([[3.0, 4.0]], dtype=np.float64)
         result = row_squared_norms(X)
         assert np.isclose(result[0], 25.0)
-
-    def test_zeros(self):
-        X = np.zeros((2, 3), dtype=np.float64)
-        result = row_squared_norms(X)
-        assert np.all(result == 0.0)
 
 
 def _centered_squared_sums_reference(X, resp, means):

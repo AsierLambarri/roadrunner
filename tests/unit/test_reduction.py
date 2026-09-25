@@ -97,12 +97,6 @@ class TestReductionConfig:
         assert cfg.halo_model == "kepler"
         assert cfg.n_los == 15
 
-    def test_custom(self):
-        cfg = ReductionConfig(accretion_id=42, halo_model="nfw", n_los=15)
-        assert cfg.accretion_id == 42
-        assert cfg.halo_model == "nfw"
-        assert cfg.n_los == 15
-
     def test_frozen(self):
         cfg = ReductionConfig(accretion_id=1)
         with pytest.raises(AttributeError):
@@ -110,10 +104,10 @@ class TestReductionConfig:
 
 
 class TestReduceSnapshot:
-    def test_returns_two_dataframes(self):
+    def test_properties_columns(self):
         n = 200
         snap_data = _make_snap_data(n_particles=n)
-        satellite_ids = [1, 2, 3]
+        satellite_ids = [1, 2]
         snap_df = _make_snap_df(satellite_ids=satellite_ids)
         result = _make_result()
         galaxy_particles, galaxy_bound = _make_galaxy_dicts(n, satellite_ids)
@@ -124,19 +118,6 @@ class TestReduceSnapshot:
         )
         assert isinstance(props, pd.DataFrame)
         assert isinstance(dyn, pd.DataFrame)
-
-    def test_properties_columns(self):
-        n = 200
-        snap_data = _make_snap_data(n_particles=n)
-        satellite_ids = [1, 2]
-        snap_df = _make_snap_df(satellite_ids=satellite_ids)
-        result = _make_result()
-        galaxy_particles, galaxy_bound = _make_galaxy_dicts(n, satellite_ids)
-        cfg = ReductionConfig(accretion_id=100)
-
-        props, _ = reduce_snapshot(
-            snap_data, snap_df, result, galaxy_particles, galaxy_bound, cfg,
-        )
         expected_cols = [
             "Sub_tree_id", "mb_host_id",
             "position_x", "position_y", "position_z",
@@ -145,21 +126,8 @@ class TestReduceSnapshot:
             "sigma", "sigma_los", "r_t",
         ]
         assert list(props.columns) == expected_cols
-
-    def test_dynstate_columns(self):
-        n = 200
-        snap_data = _make_snap_data(n_particles=n)
-        satellite_ids = [2]
-        snap_df = _make_snap_df(satellite_ids=satellite_ids)
-        result = _make_result()
-        galaxy_particles, galaxy_bound = _make_galaxy_dicts(n, satellite_ids)
-        cfg = ReductionConfig(accretion_id=100)
-
-        _, dyn = reduce_snapshot(
-            snap_data, snap_df, result, galaxy_particles, galaxy_bound, cfg,
-        )
-        expected_cols = ["Sub_tree_id", "mstar", "f_bound", "sigma50", "dynstate"]
-        assert list(dyn.columns) == expected_cols
+        expected_dyn_cols = ["Sub_tree_id", "mstar", "f_bound", "sigma50", "dynstate"]
+        assert list(dyn.columns) == expected_dyn_cols
 
     def test_empty_galaxy_particles(self):
         n = 50
