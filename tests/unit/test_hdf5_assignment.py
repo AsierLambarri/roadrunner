@@ -95,6 +95,19 @@ class TestHDF5AssignmentWriter:
         loaded = np.loadtxt(ts_path, dtype=np.uint64)
         assert loaded.shape == (100, 2)
 
+        # A later batch: particles 50-149, where 50-99 overlap the first
+        # batch (given a *different* timescale, to prove the overlap is
+        # ignored rather than rewritten) and 100-149 are genuinely new.
+        ts2 = np.array(
+            list(zip(range(50, 150), np.full(100, 9.0, dtype=np.float32))),
+            dtype=[("particle_index", np.uint64), ("timescale", np.float32)],
+        )
+        w.write_timescales(ts2)
+        loaded2 = np.loadtxt(ts_path, dtype=np.float64)
+        assert loaded2.shape == (150, 2)  # only the 50 genuinely-new rows were appended
+        by_id = dict(zip(loaded2[:, 0].astype(np.uint64), loaded2[:, 1]))
+        assert by_id[0] == pytest.approx(0.5)  # untouched by the second, conflicting batch
+
     def test_empty_assignment(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
         w = HDF5AssignmentWriter(tmp_dir)
