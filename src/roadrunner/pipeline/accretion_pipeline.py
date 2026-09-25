@@ -78,7 +78,21 @@ class AccretionPipeline:
             Last snapshot to process (defaults to the latest known).
         resume : bool, default=False
             If ``True``, try to resume from a previously saved checkpoint.
+
+        Raises
+        ------
+        RuntimeError
+            If the merger tree contains zero halos across every snapshot
+            (a structurally empty or misconfigured input). A single
+            snapshot with no particles is not an error: it is skipped
+            with a warning (see :meth:`_process_snapshot`).
         """
+        if self.merger_handler.dataframe.empty:
+            raise RuntimeError(
+                "The merger tree contains zero halos across all snapshots; "
+                "nothing to process. Check merger_tree_path."
+            )
+
         snapshot_ids = self._filter_snapshots(start_snapshot, end_snapshot)
         if not snapshot_ids:
             print("No snapshots to process.")
@@ -120,16 +134,23 @@ class AccretionPipeline:
             snap_id = snapshot_ids[idx]
             print(f"\nSnapshot {snap_id}  ({idx + 1}/{len(snapshot_ids)})")
             showwarning = warnings.showwarning
-            with warnings.catch_warnings(record=True) as records:
-                try:
-                    snap_result = self._process_snapshot(
-                        snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
-                    )
-                except (Exception, KeyboardInterrupt):
-                    self._save_error_checkpoint(last_good, snapshot_ids)
-                    raise
-                finally:
-                    self._flush_warnings(snap_id, records, showwarning)
+            try:
+                with warnings.catch_warnings(record=True) as records:
+                    try:
+                        snap_result = self._process_snapshot(
+                            snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
+                        )
+                    except (Exception, KeyboardInterrupt):
+                        self._save_error_checkpoint(last_good, snapshot_ids)
+                        raise
+            finally:
+                # Flush only after `catch_warnings.__exit__` has restored
+                # `_showwarnmsg_impl` -- replaying while still inside the
+                # context re-triggers the recorder on every replayed
+                # warning, growing `records` (and warnings.log) forever.
+                self._flush_warnings(snap_id, tuple(records), showwarning)
+            if snap_result is None:
+                continue  # this snapshot had zero halos or zero particles
             previous_resp_sim = snap_result.previous_resp_sim
             last_good = (
                 snap_id, previous_resp_sim, snap_result.result.fitted_parameters,
@@ -422,7 +443,15 @@ class AccretionPipeline:
 
         Returns
         -------
-        snap_result : SnapshotResult
+        snap_result : SnapshotResult or None
+            ``None`` if this snapshot had zero particles; it is
+            skipped with a warning rather than processed (see
+            :meth:`run`'s docstring for the distinction from a
+            structurally empty whole catalogue). A snapshot can never
+            have zero halos here: ``snap_id`` is only ever drawn from
+            ``merger_handler.snapshots``, the set of Snapshot values
+            actually present in the merger tree, so
+            ``select_snapshots(snap_id)`` is guaranteed non-empty.
 
         Raises
         ------
@@ -433,11 +462,12 @@ class AccretionPipeline:
         try:
             t0 = time.time()
             snap_df = self.merger_handler.select_snapshots(snap_id)
-            if snap_df.empty:
-                raise RuntimeError(f"Empty merger tree for snapshot {snap_id}")
 
             file_path = self.equiv_table.snapshot_path(snap_id)
             snap_data = self.snapshot_reader.load(file_path)
+            if len(snap_data.index) == 0:
+                warnings.warn(f"Snapshot {snap_id} has zero particles; skipping.")
+                return None
             t1 = time.time()
 
             satellites = self.merger_handler.compute_satellites(snap_df)
@@ -590,7 +620,11 @@ class AccretionPipeline:
         Parameters
         ----------
         snap_id : int
-        records : list of warnings.WarningMessage
+        records : tuple of warnings.WarningMessage
+            Must be called after the ``catch_warnings`` context that
+            produced it has exited, and on a copy rather than the
+            live recorder list -- replaying while still inside the
+            context re-triggers the recorder itself.
         showwarning : callable
             The original ``warnings.showwarning`` saved before
             entering the ``catch_warnings`` context.
@@ -600,8 +634,11 @@ class AccretionPipeline:
                 snap_id, record.category, record.message,
                 record.filename, record.lineno,
             )
-            showwarning(
-                record.message, record.category,
-                record.filename, record.lineno,
-                record.file, record.line,
-            )
+            try:
+                showwarning(
+                    record.message, record.category,
+                    record.filename, record.lineno,
+                    record.file, record.line,
+                )
+            except Exception as exc:
+                print(f"WARNING: could not replay warning display: {exc}")

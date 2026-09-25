@@ -116,10 +116,6 @@ class TestAccretionPipeline:
         assert len(hdr["snapshots"]) == 2
         assert cat.read_last_snapshot() is not None
 
-    def test_previous_resp_roundtrip(self, tmp_path):
-        pipeline, merger_handler, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
-        pipeline.run(str(tmp_path))
-
         bt = pipeline.orchestrator.birth_tracker
         at = pipeline.orchestrator.assembly_tracker
         assert bt is not None
@@ -127,9 +123,30 @@ class TestAccretionPipeline:
         assert bt._last_snapshot > 0
         assert len(at.current()) > 0
 
+        assert not os.path.exists(os.path.join(str(tmp_path), "checkpoint.zst"))
+
+        import json
+
+        progress_path = os.path.join(str(tmp_path), "progress.json")
+        assert os.path.exists(progress_path)
+        with open(progress_path) as f:
+            progress = json.load(f)
+        assert progress["snapshots"] == [0, 1]
+        assert progress["last_completed_snapshot"] == 1
+        assert progress["is_finished"] is True
+
     def test_no_trackers_pipeline(self, tmp_path):
+        output_dir = str(tmp_path)
+        os.makedirs(output_dir, exist_ok=True)
+
+        stale_file = os.path.join(output_dir, "stale_data.txt")
+        with open(stale_file, "w") as f:
+            f.write("stale")
+
         pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=1, with_trackers=False)
         pipeline.run(str(tmp_path))
+
+        assert not os.path.exists(stale_file)
 
         cat_path = os.path.join(str(tmp_path), "catalogue.hdf5")
         assert os.path.exists(cat_path)
@@ -137,30 +154,6 @@ class TestAccretionPipeline:
         cat = HDF5CatalogueReader(cat_path)
         hdr = cat.read_header()
         assert hdr["accretion_id"] == 1
-
-    def test_error_log_created_on_failure(self, tmp_path):
-        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
-
-        call_count = [0]
-        original_load = mock_reader.load
-
-        def failing_load(path):
-            call_count[0] += 1
-            if call_count[0] == 2:
-                raise RuntimeError("Simulated crash on snapshot 1")
-            return original_load(path)
-
-        mock_reader.load = failing_load
-
-        with pytest.raises(RuntimeError, match="Simulated crash"):
-            pipeline.run(str(tmp_path))
-
-        error_log_path = os.path.join(str(tmp_path), "error.log")
-        assert os.path.exists(error_log_path)
-        with open(error_log_path) as f:
-            content = f.read()
-        assert "RuntimeError" in content
-        assert "Snapshot 1" in content
 
     def test_warnings_log_created_on_warning(self, tmp_path):
         pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
@@ -191,6 +184,52 @@ class TestAccretionPipeline:
         assert "Snapshot 0" in content
         assert "UserWarning" in content
         assert "Simulated unresolved group" in content
+        # C01 regression: replaying a captured warning must not re-trigger
+        # the recorder and grow the log without bound -- the injected
+        # warning was raised exactly once, so it must be logged exactly
+        # once (the old bug replayed it into the log forever).
+        assert content.count("Simulated unresolved group") == 1
+
+    def test_whole_tree_empty_raises(self, tmp_path):
+        pipeline, merger_handler, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=1)
+        merger_handler._df = merger_handler._df.iloc[0:0]
+
+        with pytest.raises(RuntimeError, match="zero halos"):
+            pipeline.run(str(tmp_path))
+
+        assert not os.path.exists(os.path.join(str(tmp_path), "catalogue.hdf5"))
+
+    def test_empty_particles_snapshot_skipped(self, tmp_path):
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=3)
+        original_load = mock_reader.load
+        call_count = [0]
+
+        def sparse_load(path):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                empty = original_load(path)
+                return SnapshotData(
+                    index=np.array([], dtype=np.uint64),
+                    mass=np.array([], dtype=empty.mass.dtype),
+                    position=np.empty((0, 3), dtype=empty.position.dtype),
+                    velocity=np.empty((0, 3), dtype=empty.velocity.dtype),
+                    redshift=empty.redshift, time=empty.time,
+                )
+            return original_load(path)
+
+        mock_reader.load = sparse_load
+
+        old_filters = warnings.filters[:]
+        warnings.simplefilter("always")
+        try:
+            with pytest.warns(UserWarning, match="Snapshot 1 has zero particles"):
+                pipeline.run(str(tmp_path))
+        finally:
+            warnings.filters[:] = old_filters
+
+        cat_path = os.path.join(str(tmp_path), "catalogue.hdf5")
+        cat = HDF5CatalogueReader(cat_path)
+        assert cat.read_last_snapshot() == 2
 
     def test_checkpoint_restart(self, tmp_path):
         from roadrunner.io.serialization import load_checkpoint
@@ -211,6 +250,13 @@ class TestAccretionPipeline:
         with pytest.raises(RuntimeError, match="Simulated crash"):
             pipeline.run(str(tmp_path))
 
+        error_log_path = os.path.join(str(tmp_path), "error.log")
+        assert os.path.exists(error_log_path)
+        with open(error_log_path) as f:
+            content = f.read()
+        assert "RuntimeError" in content
+        assert "Snapshot 1" in content
+
         ckpt_path = os.path.join(str(tmp_path), "checkpoint.zst")
         assert os.path.exists(ckpt_path)
         ckpt = load_checkpoint(ckpt_path)
@@ -224,11 +270,9 @@ class TestAccretionPipeline:
         last_snap = cat_reader.read_last_snapshot()
         assert last_snap is not None
 
-    def test_successful_run_writes_no_checkpoint(self, tmp_path):
-        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
-        pipeline.run(str(tmp_path))
-
-        assert not os.path.exists(os.path.join(str(tmp_path), "checkpoint.zst"))
+        stale_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        with pytest.raises(RestartError, match="finished successfully"):
+            stale_pipeline.run(str(tmp_path), resume=True)
 
     def test_keyboard_interrupt_saves_checkpoint(self, tmp_path):
         from roadrunner.io.serialization import load_checkpoint
@@ -290,45 +334,6 @@ class TestAccretionPipeline:
         with pytest.raises(RestartError, match="do not match"):
             wider_pipeline.run(str(tmp_path), resume=True)
 
-    def test_progress_file_tracks_run(self, tmp_path):
-        import json
-
-        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
-        pipeline.run(str(tmp_path))
-
-        progress_path = os.path.join(str(tmp_path), "progress.json")
-        assert os.path.exists(progress_path)
-        with open(progress_path) as f:
-            progress = json.load(f)
-        assert progress["snapshots"] == [0, 1]
-        assert progress["last_completed_snapshot"] == 1
-        assert progress["is_finished"] is True
-
-    def test_stale_checkpoint_after_success_refuses(self, tmp_path):
-        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
-        original_load = mock_reader.load
-
-        call_count = [0]
-
-        def failing_load(path):
-            call_count[0] += 1
-            if call_count[0] == 2:
-                raise RuntimeError("Simulated crash on snapshot 1")
-            return original_load(path)
-
-        mock_reader.load = failing_load
-
-        with pytest.raises(RuntimeError, match="Simulated crash"):
-            pipeline.run(str(tmp_path))
-
-        call_count[0] = 0
-        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
-        resume_pipeline.run(str(tmp_path), resume=True)
-
-        stale_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
-        with pytest.raises(RestartError, match="finished successfully"):
-            stale_pipeline.run(str(tmp_path), resume=True)
-
     def test_sigint_guard_installed_during_save(self, tmp_path, monkeypatch):
         import signal as signal_mod
 
@@ -364,17 +369,3 @@ class TestAccretionPipeline:
         pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
         with pytest.raises(RestartError, match="corrupt or unreadable"):
             pipeline.run(output_dir, resume=True)
-
-    def test_fresh_run_wipes_output_dir(self, tmp_path):
-        output_dir = str(tmp_path)
-        os.makedirs(output_dir, exist_ok=True)
-
-        stale_file = os.path.join(output_dir, "stale_data.txt")
-        with open(stale_file, "w") as f:
-            f.write("stale")
-
-        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=1)
-        pipeline.run(output_dir)
-
-        assert not os.path.exists(stale_file)
-        assert os.path.exists(os.path.join(output_dir, "catalogue.hdf5"))
