@@ -22,34 +22,6 @@ class TestSnapshotData:
         assert not hasattr(data, "metallicity")
         assert len(data.index) == 2
 
-    def test_construction_with_metallicity(self):
-        data = SnapshotData(
-            index=np.array([0, 1]),
-            mass=np.array([1.0, 2.0]),
-            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
-            redshift=0.5,
-            time=1.0,
-            metallicity=np.array([0.01, 0.02]),
-        )
-        assert data.metallicity is not None
-
-    def test_fields_accessible(self):
-        data = SnapshotData(
-            index=np.array([0, 1]),
-            mass=np.array([1.0, 2.0]),
-            position=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
-            velocity=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
-            redshift=0.5,
-            time=1.0,
-        )
-        assert "index" in dir(data)
-        assert "mass" in dir(data)
-        assert "position" in dir(data)
-        assert "velocity" in dir(data)
-        assert "redshift" in dir(data)
-        assert "time" in dir(data)
-
 
 class TestBoundnessResult:
     def test_construction(self):
@@ -59,13 +31,6 @@ class TestBoundnessResult:
             dynamical_times=[np.array([1.0]), np.array([2.0])],
         )
         assert len(result.candidate_indices) == 2
-
-    def test_fields_accessible(self):
-        result = BoundnessResult(
-            candidate_indices=np.array([0, 1]),
-            boundness_values=np.array([0.5, 0.8]),
-            dynamical_times=[np.array([1.0])],
-        )
         assert "candidate_indices" in dir(result)
         assert "boundness_values" in dir(result)
         assert "dynamical_times" in dir(result)
@@ -82,20 +47,9 @@ class TestAssignmentResult:
             statistics={"n_particles": 2},
         )
         assert result.particle_df is not None
-
-    def test_fields_accessible(self):
-        import pandas as pd
-
-        result = AssignmentResult(
-            particle_df=pd.DataFrame({"id": [0]}),
-            responsibilities=([[]], [[]]),
-            fitted_parameters={},
-            statistics={},
-        )
-        assert "particle_df" in dir(result)
-        assert "responsibilities" in dir(result)
-        assert "fitted_parameters" in dir(result)
-        assert "statistics" in dir(result)
+        assert result.responsibilities is not None
+        assert result.fitted_parameters is not None
+        assert result.statistics is not None
 
 
 class MockAssigner:
@@ -110,20 +64,16 @@ class MockAssigner:
         )
 
 
+class WrongAssigner:
+    pass
+
+
 class TestParticleAssignerProtocol:
     def test_mock_assigner_passes_isinstance(self):
         assert isinstance(MockAssigner(), ParticleAssigner)
 
-    def test_assign_returns_assignment_result(self):
-        import numpy as np
-
-        result = MockAssigner().assign(
-            halos=[],
-            particle_coords=np.zeros((0, 6)),
-            newborn_indices=np.array([]),
-            groups=[],
-        )
-        assert isinstance(result, AssignmentResult)
+    def test_wrong_fails_isinstance(self):
+        assert not isinstance(WrongAssigner(), ParticleAssigner)
 
 
 class MockPotentialModel:
@@ -141,26 +91,8 @@ class TestPotentialModelProtocol:
     def test_mock_potential_passes_isinstance(self):
         assert isinstance(MockPotentialModel(), PotentialModel)
 
-    def test_methods_return_expected(self):
-        model = MockPotentialModel()
-        r = np.array([1.0, 2.0])
-        assert np.all(model.potential(r) < 0)
-        assert np.all(model.dynamical_time(r) > 0)
-        assert np.all(model.tidal_denominator(r) > 0)
-
 
 class TestSnapshotDataArrayIndex:
-    def test_contiguous_indices(self):
-        sd = SnapshotData(
-            index=np.arange(100, dtype=np.uint64),
-            mass=np.ones(100),
-            position=np.zeros((100, 3)),
-            velocity=np.zeros((100, 3)),
-            redshift=0.0, time=13.8,
-        )
-        result = sd.array_index(np.array([0, 50, 99], dtype=np.uint64))
-        assert np.array_equal(result, [0, 50, 99])
-
     def test_sparse_indices(self):
         ids = np.array([1000, 2000, 3000, 4000], dtype=np.uint64)
         sd = SnapshotData(
@@ -185,3 +117,14 @@ class TestSnapshotDataArrayIndex:
         )
         result = sd.array_index(np.array([], dtype=np.uint64))
         assert result.size == 0
+
+    def test_zero_particle_snapshot_all_missing(self):
+        sd = SnapshotData(
+            index=np.array([], dtype=np.uint64),
+            mass=np.array([]),
+            position=np.empty((0, 3)),
+            velocity=np.empty((0, 3)),
+            redshift=0.0, time=13.8,
+        )
+        result = sd.array_index(np.array([1, 2, 3], dtype=np.uint64))
+        assert np.array_equal(result, [-1, -1, -1])

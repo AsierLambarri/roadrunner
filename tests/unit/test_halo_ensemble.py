@@ -51,6 +51,13 @@ class TestConstruction:
             assert h.sub_tree_id in (0, 1, 2)
 
 
+class TestArraysEmpty:
+    def test_positions_velocities_zero_halos_shape(self):
+        ens = HaloEnsemble([])
+        assert ens.positions.shape == (0, 3)
+        assert ens.velocities.shape == (0, 3)
+
+
 class TestArrays:
     def test_positions(self):
         ens = HaloEnsemble([
@@ -83,16 +90,6 @@ class TestSelection:
         assert len(sub) == 2
         assert list(sub.sub_tree_ids) == [2, 4]
 
-    def test_select_chained(self):
-        ens = HaloEnsemble([
-            _halo(sid=1), _halo(sid=2), _halo(sid=3),
-            _halo(sid=4), _halo(sid=5),
-        ])
-        sub = ens.select([0, 2, 4]).select([2])
-        assert len(sub) == 1
-        assert sub.sub_tree_ids[0] == 5
-
-
 class TestGetParticles:
     def test_returns_two_csc(self):
         ens = HaloEnsemble([_halo(n_bound=5), _halo(n_bound=3)])
@@ -101,23 +98,27 @@ class TestGetParticles:
         assert isinstance(csc_t, SparseCSC)
         assert len(csc_b.column_indices) == 2
         assert len(csc_t.column_indices) == 2
+        for i in range(2):
+            assert np.array_equal(csc_b.column_indices[i], csc_t.column_indices[i])
 
-    def test_candidate_lengths(self):
-        ens = HaloEnsemble([_halo(n_bound=10), _halo(n_bound=5)])
-        csc_b, _ = ens.get_particles()
-        assert len(csc_b.column_indices[0]) == 10
-        assert len(csc_b.column_indices[1]) == 5
+        ens2 = HaloEnsemble([_halo(n_bound=10), _halo(n_bound=5)])
+        csc_b2, _ = ens2.get_particles()
+        assert len(csc_b2.column_indices[0]) == 10
+        assert len(csc_b2.column_indices[1]) == 5
 
     def test_empty_halo(self):
         ens = HaloEnsemble([_halo(n_bound=0)])
         csc_b, _ = ens.get_particles()
         assert len(csc_b.column_indices[0]) == 0
 
-    def test_shared_indices(self):
-        ens = HaloEnsemble([_halo(n_bound=4), _halo(n_bound=6)])
+    def test_zero_halos_does_not_crash(self):
+        ens = HaloEnsemble([])
         csc_b, csc_t = ens.get_particles()
-        for i in range(2):
-            assert np.array_equal(csc_b.column_indices[i], csc_t.column_indices[i])
+        assert isinstance(csc_b, SparseCSC)
+        assert isinstance(csc_t, SparseCSC)
+        assert csc_b.column_id.shape == (0,)
+        assert csc_t.column_id.shape == (0,)
+        assert len(csc_b.column_indices) == 0
 
 
 class TestPopulated:

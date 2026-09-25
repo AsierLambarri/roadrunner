@@ -81,12 +81,12 @@ class HaloEnsemble:
     @property
     def positions(self) -> np.ndarray:
         """Positions of all halos, shape ``(n_halos, 3)``."""
-        return np.array([h.xcen for h in self._halos], dtype=math_dtype())
+        return np.array([h.xcen for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
 
     @property
     def velocities(self) -> np.ndarray:
         """Velocities of all halos, shape ``(n_halos, 3)``."""
-        return np.array([h.velocity for h in self._halos], dtype=math_dtype())
+        return np.array([h.velocity for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
 
     @property
     def virial_radii(self) -> np.ndarray:
@@ -142,7 +142,7 @@ class HaloEnsemble:
                 boundness.append(empty_val)
                 tdyns.append(empty_val)
 
-            col_id = np.array([h.sub_tree_id for h in self._halos], dtype=GALAXY_ID)
+        col_id = np.array([h.sub_tree_id for h in self._halos], dtype=GALAXY_ID)
         return SparseCSC(candidates, boundness, column_id=col_id), SparseCSC(candidates, tdyns, column_id=col_id)
 
     def populated_indices(self) -> np.ndarray:

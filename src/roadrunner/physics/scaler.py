@@ -37,6 +37,11 @@ class StandardScaler:
         X : ndarray of shape (n_samples, n_features)
             Training data.
         """
+        if X.shape[0] == 0:
+            raise ValueError(
+                f"StandardScaler.fit received zero samples (X.shape={X.shape}); "
+                "cannot compute a scale from an empty snapshot or group."
+            )
         self.mean_ = np.mean(X, axis=0).astype(X.dtype, copy=False)
         diff = X.max(axis=0) - X.min(axis=0)
         diff[diff == 0] = 1.0

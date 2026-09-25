@@ -167,6 +167,8 @@ class SnapshotData:
             Local array indices for each queried ID; ``MISSING`` (-1) for
             IDs that are not present in this snapshot.
         """
+        if not len(self.index) or not len(sim_ids):
+            return np.full(len(sim_ids), -1, dtype=LOCAL_IDX)
         if self._index_sorter is None:
             self._index_sorter = np.argsort(self.index)
         sorted_ids = self.index[self._index_sorter]
