@@ -80,6 +80,43 @@ class TestHDF5AssignmentWriter:
             assert "hard_assignment" in hf
             assert hf.attrs["time"] == 13.0
 
+    def test_boundness_joined_by_particle_id_not_position(self, tmp_dir):
+        """C06: reproduces the audit's own repro -- responsibility rows
+        [0,1,2] paired with boundness stored as rows [2,0,1] -> values
+        [20,30,40] must land as [30,40,20] once joined by ID, and a
+        responsibility row with no matching boundness row must come out
+        NaN + invalid rather than a value belonging to a different particle.
+        """
+        os.makedirs(tmp_dir, exist_ok=True)
+        w = HDF5AssignmentWriter(tmp_dir)
+
+        resp_csc = SparseCSC(
+            [np.array([0, 1, 2, 3], dtype=np.uint64)],
+            [np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)],
+            column_id=np.array([1], dtype=np.int64),
+        )
+        bound_csc = SparseCSC(
+            [np.array([2, 0, 1], dtype=np.uint64)],
+            [np.array([20.0, 30.0, 40.0], dtype=np.float32)],
+            column_id=np.array([1], dtype=np.int64),
+        )
+        result = AssignmentResult(
+            particle_df=pd.DataFrame({"array_index": np.arange(4, dtype=np.uint64),
+                                       "Sub_tree_id": [1, 1, 1, 1]}),
+            responsibilities=resp_csc,
+            fitted_parameters={1: {}},
+            statistics={"groups": 1},
+        )
+        w.write_snapshot(0, 13.0, result, bound_csc)
+
+        path = os.path.join(tmp_dir, "assignment", "snapshot0000.hdf5")
+        with h5py.File(path, "r") as hf:
+            grp = hf["galaxies"]["1"]
+            np.testing.assert_array_equal(grp["indices"][:], [0, 1, 2, 3])
+            np.testing.assert_allclose(grp["boundness"][:3], [30.0, 40.0, 20.0])
+            assert np.isnan(grp["boundness"][3])
+            np.testing.assert_array_equal(grp["boundness_valid"][:], [True, True, True, False])
+
     def test_timescales(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
         w = HDF5AssignmentWriter(tmp_dir)

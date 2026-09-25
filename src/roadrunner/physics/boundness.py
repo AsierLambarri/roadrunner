@@ -96,10 +96,18 @@ def compute_halo_bound_particles(
         if valid.size == 0:
             halo.set_boundness(empty_indices, empty_values, empty_values)
         else:
+            # Sorted by particle index (C06): query_ball_point's own
+            # traversal order is unspecified, and everything downstream
+            # that consumes boundness by position (rather than by ID,
+            # like SparseCSC.to_dense or a set intersection) implicitly
+            # relies on a stable, predictable order. Sorting here once
+            # establishes that as a real invariant instead of leaving it
+            # to chance.
+            order = np.argsort(valid)
             halo.set_boundness(
-                valid.astype(LOCAL_IDX),
-                boundness[bound].astype(math_dtype(), copy=False),
-                tdyns[bound],
+                valid[order].astype(LOCAL_IDX),
+                boundness[bound][order].astype(math_dtype(), copy=False),
+                tdyns[bound][order],
             )
 
     return halos

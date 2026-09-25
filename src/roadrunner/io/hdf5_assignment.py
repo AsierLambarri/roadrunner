@@ -25,6 +25,48 @@ import numpy as np
 from roadrunner.helpers import select_float_dtype, select_uint_dtype
 
 
+def _aligned_boundness(resp_rows, bound_rows, bound_values, dtype):
+    """Join boundness values onto responsibility rows, by particle ID.
+
+    ``resp_rows`` and ``bound_rows`` are two independently-ordered
+    particle-index arrays for the same galaxy -- see C06: nothing
+    upstream guarantees they share a row order, and their particle
+    *sets* can genuinely differ too (a particle can carry nonzero
+    responsibility toward a galaxy without ever being one of that
+    galaxy's own boundness candidates). Missing entries get NaN,
+    flagged via the returned validity mask, rather than a fabricated
+    physical value or a value that silently belongs to another particle.
+
+    Parameters
+    ----------
+    resp_rows : ndarray of int
+        Particle indices in the order they'll be written (target order).
+    bound_rows : ndarray of int
+        Particle indices boundness values are keyed by (any order).
+    bound_values : ndarray
+        Values parallel to ``bound_rows``.
+    dtype : numpy.dtype
+        Storage dtype for the returned values array.
+
+    Returns
+    -------
+    values : ndarray of shape (len(resp_rows),)
+        ``NaN`` where no matching boundness row exists.
+    valid : ndarray of bool, shape (len(resp_rows),)
+    """
+    values = np.full(len(resp_rows), np.nan, dtype=dtype)
+    valid = np.zeros(len(resp_rows), dtype=bool)
+    if len(bound_rows):
+        order = np.argsort(bound_rows)
+        sorted_rows = bound_rows[order]
+        positions = np.searchsorted(sorted_rows, resp_rows)
+        possible = np.flatnonzero(positions < len(sorted_rows))
+        matched = possible[sorted_rows[positions[possible]] == resp_rows[possible]]
+        values[matched] = bound_values[order[positions[matched]]]
+        valid[matched] = True
+    return values, valid
+
+
 class HDF5AssignmentWriter:
     """Writes per-snapshot assignment data (responsibilities, parameters, hard labels) to HDF5.
 
@@ -111,16 +153,29 @@ class HDF5AssignmentWriter:
             else:
                 float_dtype = np.float32
 
+            # Boundness gets its own storage dtype, chosen from its own
+            # finite values -- not reused from the responsibility dtype
+            # above, which is picked from an unrelated value range (C06).
+            all_bound_vals = (
+                np.concatenate(boundness_csc.column_values)
+                if len(boundness_csc.column_values) else np.array([])
+            )
+            finite_bound_vals = all_bound_vals[np.isfinite(all_bound_vals)]
+            bound_dtype = self._pick_float_dtype(finite_bound_vals)
+
+            bound_col_by_gid = {
+                gid: j for j, gid in enumerate(boundness_csc.column_id)
+            }
+
             for j, gid in enumerate(all_gids):
                 resp_idx = resp_csc.column_indices[j]
                 resp_vals = resp_csc.column_values[j]
 
-                col_mask = boundness_csc.column_id == gid
-                col_pos = np.where(col_mask)[0]
-                bound_vals = (
-                    boundness_csc.column_values[col_pos[0]]
-                    if len(col_pos) > 0 and col_pos[0] < len(boundness_csc.column_values)
-                    else np.array([], dtype=np.float32)
+                col = bound_col_by_gid.get(gid)
+                bound_rows = boundness_csc.column_indices[col] if col is not None else np.array([], dtype=resp_idx.dtype)
+                bound_raw_vals = boundness_csc.column_values[col] if col is not None else np.array([])
+                bound_vals, bound_valid = _aligned_boundness(
+                    resp_idx, bound_rows, bound_raw_vals, bound_dtype,
                 )
 
                 grp = galaxies_grp.require_group(str(gid))
@@ -141,7 +196,12 @@ class HDF5AssignmentWriter:
                 )
                 grp.create_dataset(
                     "boundness",
-                    data=bound_vals.astype(float_dtype, copy=False),
+                    data=bound_vals,  # already bound_dtype from _aligned_boundness
+                    compression="gzip",
+                )
+                grp.create_dataset(
+                    "boundness_valid",
+                    data=bound_valid,
                     compression="gzip",
                 )
 

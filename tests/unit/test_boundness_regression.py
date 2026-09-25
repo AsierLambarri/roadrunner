@@ -97,6 +97,11 @@ class TestBoundnessRegression:
         for h_old, h_new in zip(old_result, new_result):
             i_old, e_old, t_old = h_old.get_boundness()
             i_new, e_new, t_new = h_new.get_boundness()
+            # `new` is sorted by particle index (C06); `old` (this file's
+            # frozen local reference) is not -- sort both the same way so
+            # this compares the underlying sets/values, not incidental order.
+            order = np.argsort(i_old)
+            i_old, e_old = i_old[order], e_old[order]
             np.testing.assert_array_equal(i_old, i_new,
                                           err_msg="Bound particle indices differ (Kepler)")
             np.testing.assert_allclose(e_old, e_new, atol=1e-5,
@@ -136,6 +141,11 @@ class TestBoundnessRegression:
         for h_old, h_new in zip(old_result, new_result):
             i_old, e_old, t_old = h_old.get_boundness()
             i_new, e_new, t_new = h_new.get_boundness()
+            # `new` is sorted by particle index (C06); `old` (this file's
+            # frozen local reference) is not -- sort both the same way so
+            # this compares the underlying sets/values, not incidental order.
+            order = np.argsort(i_old)
+            i_old, e_old, t_old = i_old[order], e_old[order], t_old[order]
             np.testing.assert_array_equal(i_old, i_new,
                                           err_msg="Bound particle indices differ (NFW)")
             np.testing.assert_allclose(e_old, e_new, atol=1e-5,
