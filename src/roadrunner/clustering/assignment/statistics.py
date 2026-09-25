@@ -19,8 +19,6 @@ entropy of responsibilities, and the average condition number of
 fitted covariances.
 """
 
-from collections import defaultdict
-
 import numpy as np
 
 from roadrunner._defaults import FRAGMENT_THRESHOLD, UNBOUND
@@ -88,27 +86,32 @@ class GMMAssignerStatistics:
             return self
 
         # ── Soft metrics (avg_conf, avg_entropy) ──────────────────
-        per_particle_max = defaultdict(float)
-        per_particle_resps = defaultdict(list)
-        for _, (indices, vals) in resp_map.items():
-            for pid, v in zip(indices, vals):
-                if v > per_particle_max[pid]:
-                    per_particle_max[pid] = v
-                per_particle_resps[pid].append(v)
+        # Vectorized over all (particle, component) responsibility
+        # entries at once via scatter-reductions, instead of a Python
+        # loop per entry -- see audit finding P02.
+        all_pids = np.concatenate([np.asarray(indices) for indices, _ in resp_map.values()])
+        all_vals = np.concatenate([np.asarray(vals) for _, vals in resp_map.values()])
 
-        self.avg_conf = float(np.mean(list(per_particle_max.values())))
+        per_particle_max = np.full(N, -np.inf)
+        np.maximum.at(per_particle_max, all_pids, all_vals)
+        touched = per_particle_max > -np.inf
+        self.avg_conf = float(np.mean(per_particle_max[touched]))
 
-        entropies = []
-        for _, rvals in per_particle_resps.items():
-            K = len(rvals)
-            if K <= 1:
-                entropies.append(0.0)
-            else:
-                arr = np.array(rvals, dtype=np.float64)
-                arr /= arr.sum()
-                H = -np.sum(arr * np.log(np.maximum(arr, 1e-30))) / np.log(K)
-                entropies.append(H)
-        self.avg_entropy = float(np.mean(entropies))
+        counts = np.zeros(N, dtype=np.int64)
+        np.add.at(counts, all_pids, 1)
+        sums = np.zeros(N, dtype=np.float64)
+        np.add.at(sums, all_pids, all_vals)
+        log_vals = np.log(np.maximum(all_vals, 1e-30))
+        weighted_log_sums = np.zeros(N, dtype=np.float64)
+        np.add.at(weighted_log_sums, all_pids, all_vals * log_vals)
+
+        K = counts[touched]
+        S = sums[touched]
+        T = weighted_log_sums[touched]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            H = -(T / S - np.log(S)) / np.log(K)
+        H = np.where(K <= 1, 0.0, H)
+        self.avg_entropy = float(np.mean(H))
 
         # ── Condition number (from scaled covariances) ────────────
         conds = []
