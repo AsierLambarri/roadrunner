@@ -77,7 +77,7 @@ birth_window_factor: 5.0       # Birth scoring window (set ≤ 0 to disable)
 enforce_initial_hosts: true    # Keep particles in initial host galaxy
 
 # ── Output ───────────────────────────────────────────────────────────────────
-output_dir: ~/roadrunner/output_npz/
+output_dir: /home/asier/roadrunner/output_npz/
 resume: false                  # Resume from checkpoint (true/false)
 save_particles: true           # Save particle positions/velocities to HDF5
 save_assignment: true          # Save soft assignment data to HDF5
