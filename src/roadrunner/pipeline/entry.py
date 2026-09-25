@@ -183,4 +183,5 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         start_snapshot=config.start_snapshot,
         end_snapshot=config.end_snapshot,
         resume=config.resume,
+        seed=config.seed,
     )

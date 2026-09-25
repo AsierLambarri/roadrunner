@@ -15,6 +15,7 @@ import pandas as pd
 
 from roadrunner._exceptions import RestartError
 from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
+from roadrunner.randomness import consumer_seed, random_seed
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_particles import HDF5ParticleWriter
@@ -63,9 +64,11 @@ class AccretionPipeline:
         self.part_writer = part_writer
         self.assign_writer = assign_writer
         self.logger = logger
+        self._base_seed = None
 
     def run(self, output_dir: str, *, start_snapshot: int | None = None,
-            end_snapshot: int | None = None, resume: bool = False) -> None:
+            end_snapshot: int | None = None, resume: bool = False,
+            seed: int | None = None) -> None:
         """Run the pipeline over the specified snapshot range.
 
         Parameters
@@ -78,6 +81,12 @@ class AccretionPipeline:
             Last snapshot to process (defaults to the latest known).
         resume : bool, default=False
             If ``True``, try to resume from a previously saved checkpoint.
+        seed : int or None, optional
+            Root seed for deterministic, restartable randomness (see
+            :mod:`roadrunner.randomness`). ``None`` on a fresh run
+            generates one and persists it; on resume, ``None`` adopts
+            the checkpointed seed, while an explicit value that
+            conflicts with the checkpoint raises :class:`RestartError`.
 
         Raises
         ------
@@ -87,6 +96,8 @@ class AccretionPipeline:
             snapshot with no particles is not an error: it is skipped
             with a warning (see :meth:`_process_snapshot`).
         """
+        if seed is not None and seed < 0:
+            raise ValueError(f"seed must be non-negative, got {seed}")
         if self.merger_handler.dataframe.empty:
             raise RuntimeError(
                 "The merger tree contains zero halos across all snapshots; "
@@ -110,13 +121,17 @@ class AccretionPipeline:
         )
 
         if resume:
-            previous_resp_sim, start_idx = self._try_resume(snapshot_ids)
+            previous_resp_sim, start_idx = self._try_resume(snapshot_ids, seed)
         else:
             previous_resp_sim, start_idx = None, 0
 
         self._ensure_merger_columns()
 
         if start_idx == 0:
+            self._base_seed = (
+                seed if seed is not None
+                else int(np.random.SeedSequence().generate_state(1)[0])
+            )
             if os.path.isdir(output_dir):
                 shutil.rmtree(output_dir)
             os.makedirs(output_dir, exist_ok=True)
@@ -134,8 +149,12 @@ class AccretionPipeline:
             snap_id = snapshot_ids[idx]
             print(f"\nSnapshot {snap_id}  ({idx + 1}/{len(snapshot_ids)})")
             showwarning = warnings.showwarning
+            consumer_seeds = (
+                {name: consumer_seed(self._base_seed, snap_id, name) for name in ("fit", "los")}
+                if self._base_seed is not None else {}
+            )
             try:
-                with warnings.catch_warnings(record=True) as records:
+                with warnings.catch_warnings(record=True) as records, random_seed(**consumer_seeds):
                     try:
                         snap_result = self._process_snapshot(
                             snap_id, idx, len(snapshot_ids), previous_resp_sim, t_start, dyn_snaps,
@@ -199,6 +218,7 @@ class AccretionPipeline:
                 save_checkpoint(self._checkpoint_path, {
                     "last_snapshot": snap_id,
                     "snapshots": list(snapshot_ids),
+                    "seed": self._base_seed,
                     "precision": {
                         "data": np.dtype(data_dtype()).name,
                         "math": np.dtype(math_dtype()).name,
@@ -297,12 +317,16 @@ class AccretionPipeline:
                 continue
         return resolved
 
-    def _try_resume(self, snapshot_ids):
+    def _try_resume(self, snapshot_ids, seed=None):
         """Attempt to load a checkpoint and determine the resume start index.
 
         Parameters
         ----------
         snapshot_ids : list of int
+        seed : int or None, optional
+            An explicitly requested root seed for this resume. Only
+            checked against the checkpoint's own seed for conflicts;
+            ``None`` means "adopt whatever the checkpoint has."
 
         Returns
         -------
@@ -367,6 +391,15 @@ class AccretionPipeline:
                     f"requested {current}. "
                     f"Delete the checkpoint and start a fresh run."
                 )
+        ckpt_seed = ckpt.get("seed")
+        if seed is not None and ckpt_seed is not None and seed != ckpt_seed:
+            raise RestartError(
+                f"Checkpoint seed {ckpt_seed} conflicts with requested seed {seed}. "
+                f"Omit 'seed' to resume with the checkpointed one, or delete the "
+                f"checkpoint and start a fresh run."
+            )
+        self._base_seed = ckpt_seed if ckpt_seed is not None else seed
+
         previous_resp_sim = ckpt.get("previous_resp")
         previous_parameters = ckpt.get("previous_parameters")
         if previous_parameters is not None:
@@ -420,6 +453,7 @@ class AccretionPipeline:
                 "halo_model": self.orchestrator.processing_config.halo_model,
                 "n_los": self.orchestrator.reduction_config.n_los,
                 "search_factor": self.orchestrator.processing_config.search_factor,
+                "seed": self._base_seed,
             },
             merger_tree_df=self.merger_handler.dataframe,
             equivalence_df=self.equiv_table.dataframe,

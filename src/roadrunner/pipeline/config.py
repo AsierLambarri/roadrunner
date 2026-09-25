@@ -62,6 +62,7 @@ class RunConfig:
 
     output_dir: str = "./output"
     resume: bool = False
+    seed: int | None = None
     save_particles: bool = True
     save_assignment: bool = True
     float_atol: float = 1e-4

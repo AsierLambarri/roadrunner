@@ -118,6 +118,21 @@ class TestXGMMAssigner:
             assert "weight" in params
             assert 0.0 <= params["weight"] <= 1.0
 
+    def test_seed_makes_fit_reproducible(self):
+        halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
+        groups = [[0], [1]]
+        result1 = XGMMAssigner(verbose=0).assign(
+            halos, coords, np.array([], dtype=np.uint64), groups, seed=1234,
+        )
+        result2 = XGMMAssigner(verbose=0).assign(
+            halos, coords, np.array([], dtype=np.uint64), groups, seed=1234,
+        )
+        for sid in result1.fitted_parameters:
+            np.testing.assert_array_equal(
+                result1.fitted_parameters[sid]["mean"],
+                result2.fitted_parameters[sid]["mean"],
+            )
+
     def test_newborn_handled(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]

@@ -53,6 +53,7 @@ from roadrunner._defaults import (
     precision,
 )
 from roadrunner.physics.halo_ensemble import HaloEnsemble
+from roadrunner.randomness import spawn_seeds
 
 from roadrunner.clustering.assignment import priors as prior
 
@@ -232,6 +233,10 @@ class XGMMAssigner:
             Indices of halos belonging to each overlapping group.
         **kwargs
             Additional arguments (``snap_id``, ``previous_resp``, etc.).
+            ``seed`` (int or None): root seed for this snapshot's fit
+            stage; each group gets an independent child seed spawned
+            from it, in the order ``groups`` is given (already sorted
+            largest-first by the caller). ``None`` uses OS entropy.
 
         Returns
         -------
@@ -259,8 +264,11 @@ class XGMMAssigner:
         ngal = np.concatenate(groups).size if groups else 0
         print(f"{ngal} in a total of {len(groups)} groups")
 
-        for group in groups:
-            self.parameters.update(self._process_group(group))
+        seed = kwargs.get("seed")
+        group_seeds = spawn_seeds(seed, len(groups)) if seed is not None else [None] * len(groups)
+
+        for group, group_seed in zip(groups, group_seeds):
+            self.parameters.update(self._process_group(group, seed=group_seed))
 
         self.particles_df.reset_index(inplace=True)
         csc_b, _ = self.ensemble.get_particles()
@@ -283,7 +291,7 @@ class XGMMAssigner:
              **self.statistics.values,
             })
 
-    def _process_group(self, group) -> dict:
+    def _process_group(self, group, seed=None) -> dict:
         """Process a single overlapping group of halos.
 
         Selects the appropriate fit path based on the number of
@@ -294,6 +302,9 @@ class XGMMAssigner:
         ----------
         group : list of int
             Indices of halos in this group.
+        seed : int or None, optional
+            Seed for this group's fit (only used by ``_fit_resolved``,
+            the only path that constructs a mixture instance).
 
         Returns
         -------
@@ -322,7 +333,7 @@ class XGMMAssigner:
             params, post_prob, nonz = self._fit_unresolved(gp_idx, group_subtrees, csc_b)
         else:
             params, post_prob, nonz = self._fit_resolved(
-                gp_idx, group_subtrees, csc_b
+                gp_idx, group_subtrees, csc_b, seed=seed
             )
 
         for i in range(len(group)):
@@ -426,7 +437,7 @@ class XGMMAssigner:
             }
         return params, post_prob, nonz
 
-    def _fit_resolved(self, gp_idx, group_subtrees, csc_b):
+    def _fit_resolved(self, gp_idx, group_subtrees, csc_b, seed=None):
         """Fit a resolved group with a proper XGMM fit.
 
         Scales coordinates, estimates initial parameters, builds
@@ -441,6 +452,10 @@ class XGMMAssigner:
             ``Sub_tree_id`` for each component.
         csc_b : SparseCSC
             Boundness matrix for this group.
+        seed : int or None, optional
+            Passed through as ``random_state`` to the mixture
+            constructor (accepts a plain seed int or an rng/state
+            object). ``None`` leaves the mixture's own default.
 
         Returns
         -------
@@ -460,6 +475,8 @@ class XGMMAssigner:
             verbose=self.verbose,
             **self.mixture_kwargs,
         )
+        if seed is not None:
+            run_kwargs["random_state"] = seed
 
         # Precision comes from the ambient scope (set once per run from the
         # user "single"/"double" knobs). Everything below is rebuilt per

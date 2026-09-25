@@ -274,6 +274,51 @@ class TestAccretionPipeline:
         with pytest.raises(RestartError, match="finished successfully"):
             stale_pipeline.run(str(tmp_path), resume=True)
 
+    def test_seed_persisted_in_checkpoint_and_restored_on_resume(self, tmp_path):
+        from roadrunner.io.serialization import load_checkpoint
+
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_load = mock_reader.load
+        call_count = [0]
+
+        def failing_load(path):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise RuntimeError("Simulated crash on snapshot 1")
+            return original_load(path)
+
+        mock_reader.load = failing_load
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            pipeline.run(str(tmp_path), seed=777)
+
+        ckpt = load_checkpoint(os.path.join(str(tmp_path), "checkpoint.zst"))
+        assert ckpt["seed"] == 777
+
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        resume_pipeline.run(str(tmp_path), resume=True)
+        assert resume_pipeline._base_seed == 777
+
+    def test_resume_with_conflicting_seed_raises(self, tmp_path):
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_load = mock_reader.load
+        call_count = [0]
+
+        def failing_load(path):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise RuntimeError("Simulated crash on snapshot 1")
+            return original_load(path)
+
+        mock_reader.load = failing_load
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            pipeline.run(str(tmp_path), seed=777)
+
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        with pytest.raises(RestartError, match="conflict"):
+            resume_pipeline.run(str(tmp_path), resume=True, seed=999)
+
     def test_keyboard_interrupt_saves_checkpoint(self, tmp_path):
         from roadrunner.io.serialization import load_checkpoint
 

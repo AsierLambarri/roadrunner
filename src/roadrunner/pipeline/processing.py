@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._mcf_types import AssignmentResult, ParticleAssigner, SnapshotData
+from roadrunner.randomness import current_seed
 from roadrunner.clustering.segmentation import HaloSegmenter
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.constants import DYN_TIME_FACTOR
@@ -100,7 +101,7 @@ def process_snapshot(
 
     result = assigner.assign(
         ensemble, particle_coords, newborn, groups,
-        previous_resp=previous_resp,
+        previous_resp=previous_resp, seed=current_seed("fit"),
     )
 
     result.particle_df = compute_particle_dynamical_timescales(

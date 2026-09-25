@@ -10,6 +10,7 @@ import pandas as pd
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
 from roadrunner.postprocessing.mixing import compute_riley_criterion
 from roadrunner.postprocessing.properties import compute_galaxy_properties
+from roadrunner.randomness import current_seed
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ def reduce_snapshot(
         min_particles_structural=config.min_particles_structural,
         ssc_nmin=max(config.ssc_nmin, config.min_particles_structural),
         ssc_alpha=config.ssc_alpha,
+        seed=current_seed("los"),
     )
 
     dynstate = (

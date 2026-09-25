@@ -269,6 +269,7 @@ def compute_galaxy_properties(
     min_particles_structural=MIN_PARTICLES_STRUCTURAL,
     ssc_nmin=SSC_NMIN,
     ssc_alpha=SSC_ALPHA,
+    seed=None,
 ):
     """Compute structural and kinematic properties for all galaxies.
 
@@ -300,6 +301,8 @@ def compute_galaxy_properties(
     min_particles_structural : int, default=MIN_PARTICLES_STRUCTURAL
     ssc_nmin : int, default=SSC_NMIN
     ssc_alpha : float, default=SSC_ALPHA
+    seed : int or None, optional
+        Seed for the line-of-sight sampling. ``None`` uses OS entropy.
 
     Returns
     -------
@@ -320,7 +323,7 @@ def compute_galaxy_properties(
         "r_t",
     ]
 
-    los_vectors = random_lines_of_sight(n_los)
+    los_vectors = random_lines_of_sight(n_los, seed=seed)
     los_matrices = np.array([rotation_matrix_from_los(los) for los in los_vectors],
                             dtype=math_dtype())
 
