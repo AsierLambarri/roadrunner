@@ -159,6 +159,8 @@ class WeightedKMeans:
         self : WeightedKMeans
         """
         X = np.ascontiguousarray(X)
+        if not np.issubdtype(X.dtype, np.floating):
+            X = X.astype(np.float64)
         _check_finite(X)
         n_samples, n_features = X.shape
         n_clusters = self.n_clusters
@@ -171,6 +173,12 @@ class WeightedKMeans:
                 raise ValueError(
                     f"point_weights must have shape ({n_samples},), got {w.shape}"
                 )
+            if not np.all(np.isfinite(w)):
+                raise ValueError("point_weights must be finite")
+            if np.any(w < 0):
+                raise ValueError("point_weights must be non-negative")
+            if not np.any(w > 0):
+                raise ValueError("point_weights must contain at least one positive value")
 
         if cluster_weights is None:
             allowed = np.ones((n_samples, n_clusters), dtype=bool)
@@ -178,6 +186,8 @@ class WeightedKMeans:
         else:
             cluster_weights = np.asarray(cluster_weights, dtype=X.dtype)
             _check_cluster_weights_shape(cluster_weights, n_samples, n_clusters)
+            if not np.all(np.isfinite(cluster_weights)):
+                raise ValueError("cluster_weights must be finite")
             allowed = np.ascontiguousarray(cluster_weights > 0)
             weighted_prior = cluster_weights * w[:, None]
 
@@ -270,7 +280,7 @@ class WeightedKMeans:
         -------
         labels : ndarray of shape (n_samples,)
         """
-        X = np.ascontiguousarray(X)
+        X = np.ascontiguousarray(X, dtype=self.cluster_centers_.dtype)
         _check_finite(X)
         n_samples, n_features = X.shape
 
@@ -290,7 +300,7 @@ class WeightedKMeans:
             if np.any(~allowed.any(axis=1)):
                 raise ValueError("each row of cluster_weights must allow at least one cluster")
 
-        centers = np.ascontiguousarray(self.cluster_centers_.astype(X.dtype))
+        centers = np.ascontiguousarray(self.cluster_centers_)
         w = np.ones(n_samples, dtype=X.dtype)
         n_chunks = max(1, min(get_num_threads(), n_samples))
 

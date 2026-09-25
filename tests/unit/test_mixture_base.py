@@ -66,6 +66,19 @@ class TestInitializeWeightsAndPrior:
         with pytest.raises(ValueError, match="non-negative"):
             bm._initialize_weights_and_prior(X, None, prior)
 
+    @pytest.mark.parametrize("point_weights,latent_prior,match", [
+        (np.array([1.0, np.nan, 1.0, 1.0, 1.0]), None, "finite"),
+        (np.array([1.0, np.inf, 1.0, 1.0, 1.0]), None, "finite"),
+        (np.zeros(5, dtype=np.float32), None, "positive value"),
+        (None, np.full((5, 3), np.nan, dtype=np.float32), "finite"),
+        (None, np.full((5, 3), np.inf, dtype=np.float32), "finite"),
+    ])
+    def test_invalid_weights_and_prior_raise(self, point_weights, latent_prior, match):
+        bm = _ConcreteMixture(n_components=3)
+        X = np.ones((5, 3), dtype=np.float32)
+        with pytest.raises(ValueError, match=match):
+            bm._initialize_weights_and_prior(X, point_weights, latent_prior)
+
     def test_latent_prior_not_mutated(self):
         bm = _ConcreteMixture(n_components=3)
         X = np.ones((10, 2), dtype=np.float32)

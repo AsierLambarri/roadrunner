@@ -238,6 +238,36 @@ class TestInputValidation:
         with pytest.raises(ValueError, match="NaN or infinity"):
             km.fit(X)
 
+    @pytest.mark.parametrize("point_weights,cluster_weights,match", [
+        (np.array([1.0, np.nan, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]), None, "finite"),
+        (np.array([1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]), None, "non-negative"),
+        (np.zeros(10), None, "positive value"),
+        (None, np.full((10, 2), np.inf), "finite"),
+    ])
+    def test_fit_raises_on_invalid_weights(self, point_weights, cluster_weights, match):
+        rng = np.random.default_rng(15)
+        X = rng.normal(size=(10, 2))
+        km = WeightedKMeans(n_clusters=2)
+        with pytest.raises(ValueError, match=match):
+            km.fit(X, point_weights=point_weights, cluster_weights=cluster_weights)
+
+    def test_int_input_preserves_float_precision(self):
+        # True mean of [0, 1] is 0.5 -- an int-dtype X must not truncate it.
+        X = np.array([[0], [1]], dtype=np.int64)
+        km = WeightedKMeans(n_clusters=1, init=np.array([[0.0]]))
+        km.fit(X)
+        assert np.isclose(km.cluster_centers_[0, 0], 0.5)
+
+        # predict() must not downcast the already-correct fitted centers to
+        # match a later int-dtype query either. Centers 0.9/1.9 (kept exact
+        # via max_iter=0) truncated to 0/1 would flip an integer query at 1
+        # from cluster 0 (correct: |1-0.9|=0.1 < |1-1.9|=0.9) to cluster 1.
+        km2 = WeightedKMeans(n_clusters=2, init=np.array([[0.9], [1.9]]), max_iter=0)
+        km2.fit(np.array([[0.9], [1.9]]))
+        assert np.array_equal(km2.cluster_centers_, [[0.9], [1.9]])
+        labels = km2.predict(np.array([[1]], dtype=np.int64))
+        assert labels[0] == 0
+
     def test_fit_raises_on_init_with_too_many_rows(self):
         rng = np.random.default_rng(12)
         X = rng.normal(size=(10, 2))

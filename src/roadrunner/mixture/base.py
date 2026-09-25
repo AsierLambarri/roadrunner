@@ -224,6 +224,8 @@ class BaseMixture(abc.ABC):
             latent_prior = np.asarray(latent_prior, dtype=X.dtype).copy()   # never rescale the caller's array
         if latent_prior.shape != (n_samples, self.n_components):
             raise ValueError(f"latent_prior must have shape {(n_samples, self.n_components)}")
+        if not np.all(np.isfinite(latent_prior)):
+            raise ValueError("latent_prior must be finite")
         if np.any(latent_prior < 0):
             raise ValueError("latent_prior must be non-negative")
 
@@ -233,6 +235,12 @@ class BaseMixture(abc.ABC):
             point_weights = np.asarray(point_weights, dtype=X.dtype)
         if point_weights.shape != (n_samples,):
             raise ValueError(f"point_weights must have shape {(n_samples, )}")
+        if not np.all(np.isfinite(point_weights)):
+            raise ValueError("point_weights must be finite")
+        if np.any(point_weights < 0):
+            raise ValueError("point_weights must be non-negative")
+        if not np.any(point_weights > 0):
+            raise ValueError("point_weights must contain at least one positive value")
 
 
 
