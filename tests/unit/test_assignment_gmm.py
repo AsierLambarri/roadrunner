@@ -109,6 +109,15 @@ class TestXGMMAssigner:
             assert isinstance(result.responsibilities.column_indices[j], np.ndarray)
             assert isinstance(result.responsibilities.column_values[j], np.ndarray)
 
+    def test_resolved_fit_includes_weight(self):
+        halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
+        groups = [[0], [1]]
+        assigner = XGMMAssigner(verbose=0)
+        result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
+        for sid, params in result.fitted_parameters.items():
+            assert "weight" in params
+            assert 0.0 <= params["weight"] <= 1.0
+
     def test_newborn_handled(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]

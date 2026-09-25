@@ -370,6 +370,7 @@ class XGMMAssigner:
             sid: {
                 "mean": means[0],
                 "count": float(nk[0]),
+                "weight": 1.0,
                 "covariance": covs[0],
                 "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
             }
@@ -411,6 +412,7 @@ class XGMMAssigner:
             np.ones(gp_idx.size, dtype=math_dtype()),
             self.cov_type, reg_covar=self.reg_covar,
         )
+        total_count = float(nk.sum())
         params = {}
         for i, sid in enumerate(group_subtrees):
             sid = int(sid)
@@ -418,6 +420,7 @@ class XGMMAssigner:
             params[sid] = {
                 "mean": means[i],
                 "count": float(nk[i]),
+                "weight": float(nk[i]) / total_count if total_count > 0 else 0.0,
                 "covariance": covs[i],
                 "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
             }
@@ -520,6 +523,7 @@ class XGMMAssigner:
                 params[sid] = {
                     "mean": natural["means"][sid],
                     "count": float(nk_after[i]),
+                    "weight": natural["weights"][sid],
                     "covariance": natural["covariances"][sid],
                     "covariance_condition": cond,
                 }
