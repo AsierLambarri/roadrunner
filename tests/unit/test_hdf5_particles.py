@@ -62,6 +62,26 @@ class TestHDF5ParticleWriter:
         assert np.allclose(mean, scaler.mean_)
         assert np.allclose(scale, scaler.scale_)
 
+    def test_custom_field_written_even_when_used_for_assignment(self, tmp_dir):
+        os.makedirs(tmp_dir, exist_ok=True)
+        rng = np.random.default_rng(0)
+        n = 20
+        snap = SnapshotData(
+            index=np.arange(n, dtype=np.uint64),
+            mass=rng.uniform(0.1, 10.0, n).astype(np.float64),
+            position=rng.uniform(-100, 100, (n, 3)).astype(np.float64),
+            velocity=rng.uniform(-200, 200, (n, 3)).astype(np.float64),
+            redshift=0.1,
+            time=13.0,
+            assign_fields=["position", "velocity", "metallicity"],
+            metallicity=rng.uniform(0, 1, n).astype(np.float64),
+        )
+        w = HDF5ParticleWriter(tmp_dir)
+        w.write_snapshot(0, 13.0, 0.1, snap)
+        path = os.path.join(tmp_dir, "particle_data", "snapshot0000.hdf5")
+        with h5py.File(path, "r") as hf:
+            assert "metallicity" in hf["data"]
+
     def test_multiple_snapshots(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
         w = HDF5ParticleWriter(tmp_dir)

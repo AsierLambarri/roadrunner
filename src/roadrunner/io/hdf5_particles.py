@@ -126,7 +126,11 @@ class HDF5ParticleWriter:
                 compression="gzip",
             )
 
-            for name in snapshot_data.extra_fields:
+            custom_fields = (
+                f for f in snapshot_data.fields
+                if f not in ("index", "mass", "position", "velocity")
+            )
+            for name in custom_fields:
                 arr = getattr(snapshot_data, name)
                 if np.issubdtype(arr.dtype, np.floating):
                     dtype = select_float_dtype(
