@@ -105,6 +105,69 @@ class TestProcessSnapshot:
         assert ens_large.nstars >= ens_small.nstars
 
 
+class TestSmallHaloOwnership:
+    """C05: a small halo's particles must not leak into (or bias) the fit
+    of the large group it was split out of."""
+
+    def test_large_group_fit_excludes_small_halos_particles(self):
+        id_big, id_small = 1, 2
+        rng = np.random.default_rng(0)
+
+        n_big, n_small = 6, 3
+        pos_big = rng.normal(scale=0.05, size=(n_big, 3))
+        pos_small = np.array([15.0, 0.0, 0.0]) + rng.normal(scale=0.05, size=(n_small, 3))
+        positions = np.vstack([pos_big, pos_small])
+        velocities = np.zeros_like(positions)  # E = phi(r) < 0 everywhere: unconditionally bound
+        n = positions.shape[0]
+
+        snap_data = SnapshotData(
+            index=np.arange(n, dtype=np.uint64),
+            mass=np.ones(n),
+            position=positions,
+            velocity=velocities,
+            redshift=0.0,
+            time=13.8,
+        )
+        snap_df = pd.DataFrame({
+            "Sub_tree_id": [id_big, id_small],
+            "Redshift": [0.0, 0.0],
+            "position_x": [0.0, 15.0], "position_y": [0.0, 0.0], "position_z": [0.0, 0.0],
+            "velocity_x": [0.0, 0.0], "velocity_y": [0.0, 0.0], "velocity_z": [0.0, 0.0],
+            "mass": [1e12, 1e9],
+            "virial_radius": [30.0, 5.0],
+            "scale_radius": [5.0, 1.0],
+        })
+
+        assigner = XGMMAssigner(
+            method="gmm", cov_type="full", max_iter=10, tol=1e-2,
+            min_particles=5, reg_covar=1e-6, prior_type="", verbose=0,
+        )
+        config = ProcessingConfig(min_particles=5)
+        newborn = np.arange(n, dtype=np.uint64)
+
+        ensemble, result = process_snapshot(
+            snap_data, snap_df, newborn, None, assigner, config,
+        )
+
+        # The 3 small-halo particles must be exclusively the small halo's:
+        # responsibility 1 under id_small, 0 under id_big.
+        dense = result.responsibilities.to_dense(columns=np.array([id_big, id_small]))
+        row_id = result.responsibilities.row_id
+        small_rows = np.arange(n_big, n)
+        pos_in_dense = np.searchsorted(row_id, small_rows)
+        np.testing.assert_allclose(dense[pos_in_dense, 0], 0.0, atol=1e-8)
+        np.testing.assert_allclose(dense[pos_in_dense, 1], 1.0, atol=1e-8)
+
+        # The big halo's fitted mean must reflect ONLY its own 6 particles
+        # (mean_x ~ 0), not the 3 contested ones at x=15 (which would pull
+        # it to x ~ 5.0 if they had leaked into the fit).
+        mean_big = np.asarray(result.fitted_parameters[id_big]["mean"])
+        assert mean_big[0] < 1.0, (
+            f"big halo's fitted mean_x={mean_big[0]} suggests the small "
+            "halo's particles leaked into its fit (expected ~0, not ~5)"
+        )
+
+
 class TestExactIntegerSubTreeId:
     """C09: halo identities above 2**53 must survive process_snapshot exactly."""
 

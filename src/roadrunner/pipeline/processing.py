@@ -83,12 +83,26 @@ def process_snapshot(
     csc_b, _ = ensemble.get_particles()
     pop_idx = ensemble.populated_indices()
     candidates = [csc_b.column_indices[i] for i in pop_idx]
+    values = [csc_b.column_values[i] for i in pop_idx]
 
     seg = HaloSegmenter(
         ensemble.positions[pop_idx],
         ensemble.virial_radii[pop_idx],
     )
     seg.overlap_groups().prune(candidates, config.min_particles, discard=False)
+
+    # Resolve contested particle ownership before any group is fit (C05):
+    # small halos always keep their own particles over the group they were
+    # split from, and ties between two small halos go to whichever has the
+    # higher boundness. HaloEnsemble.select()/__getitem__ return the same
+    # HaloModel references, so mutating boundness here is what makes every
+    # downstream consumer (the assigner, timescales) see corrected data.
+    removals = seg.resolve_ownership(candidates, values, ensemble.sub_tree_ids[pop_idx])
+    for local_h, rows in removals.items():
+        halo = ensemble[pop_idx[local_h]]
+        idx, ener, tdyn = halo.get_boundness()
+        keep = ~np.isin(idx, rows)
+        halo.set_boundness(idx[keep], ener[keep], tdyn[keep])
 
     groups = (
         sorted(
