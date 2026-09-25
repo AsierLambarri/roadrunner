@@ -18,6 +18,7 @@ Used by the halo segmenter to merge overlapping groups efficiently.
 from collections import defaultdict
 
 import numpy as np
+from scipy.spatial import KDTree
 
 
 class UnionFind:
@@ -113,12 +114,22 @@ def overlapping_groups(positions, radii, linking_length_func=None):
         return []
 
     if linking_length_func is None:
-        diff = positions[:, None, :] - positions[None, :, :]
-        dist2 = np.sum(diff**2, axis=2)
-        rsum2 = (radii[:, None] + radii[None, :]) ** 2
-        iu, ju = np.triu_indices(n, k=1)
-        mask = dist2[iu, ju] <= rsum2[iu, ju]
-        links = list(zip(iu[mask].tolist(), ju[mask].tolist()))
+        # KDTree candidate search + exact filter, instead of a dense
+        # O(H^2) pairwise matrix (see audit finding P05). Querying with
+        # r = radii + radii.max() cannot miss a true overlap (the real
+        # criterion dist <= r_i + r_j <= r_i + max_r), so it's safe to
+        # then re-check the exact criterion on candidates only.
+        tree = KDTree(positions)
+        max_r = radii.max()
+        neighbor_lists = tree.query_ball_point(positions, r=radii + max_r, workers=-1)
+        links = []
+        for i, neighbors in enumerate(neighbor_lists):
+            for j in neighbors:
+                if j <= i:
+                    continue
+                d2 = np.sum((positions[i] - positions[j]) ** 2)
+                if d2 <= (radii[i] + radii[j]) ** 2:
+                    links.append((i, j))
     else:
         links = [
             (i, j)
