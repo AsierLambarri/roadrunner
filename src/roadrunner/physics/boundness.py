@@ -78,7 +78,9 @@ def compute_halo_bound_particles(
         dist = np.linalg.norm(rel_pos, axis=1)
 
         E = halo.compute_energy(rel_pos, rel_vel, relative=True)
-        v_vir_sq = G_KM * halo._inner.M / halo.virial_radius * (1 + halo.redshift)
+        # Physical virial radius, matching compute_energy's own internal
+        # comoving->physical conversion (halo._1plusz) -- see C08.
+        v_vir_sq = G_KM * halo._inner.M / (halo.virial_radius * halo._1plusz)
         boundness = -E / v_vir_sq
 
         if isinstance(halo._inner, KeplerPotential):

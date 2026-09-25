@@ -322,6 +322,50 @@ class TestComputeGalaxyProperties:
         assert not np.isnan(row10["sigma"])
         assert not np.isnan(row10["sigma_los"])
 
+    def test_tidal_radius_uses_consistent_physical_frame(self):
+        # C08: host_Rs was already converted to physical, but distance
+        # wasn't, so they were combined in the wrong frame. Compute the
+        # expected r_t directly (correctly, by hand) and compare.
+        from roadrunner.physics.potentials import get_potential
+        from roadrunner.physics.timescales import compute_tidal_radius
+
+        z = 1.0
+        distance_comoving = 100.0
+        host_scale_radius_comoving = 20.0
+        host_virial_radius = 200.0
+        host_mass = 1e12
+        sat_mass = 1e9
+
+        factor = 1.0 / (1.0 + z)
+        host_Rs_physical = host_scale_radius_comoving * factor
+        host_c = host_virial_radius / host_scale_radius_comoving
+        physical_potential = get_potential("nfw", M=host_mass, Rs=host_Rs_physical, c=host_c)
+        expected_rt = compute_tidal_radius(
+            physical_potential, sat_mass, distance_comoving * factor
+        ) / factor
+
+        galaxy_particles = {10: np.arange(50)}
+        galaxy_table = pd.DataFrame({
+            "host_id": [1], "mass": [sat_mass],
+            "distance_to_acc_id": [distance_comoving],
+        }, index=pd.Index([10], name="Sub_tree_id"))
+        host_props = pd.Series({
+            "mass": host_mass, "scale_radius": host_scale_radius_comoving,
+            "virial_radius": host_virial_radius, "Redshift": z,
+        })
+        rng = np.random.default_rng(1)
+        coords = np.column_stack([
+            rng.normal(0, 1, (50, 3)), rng.normal(0, 10, (50, 3)),
+        ])
+        masses = np.ones(50)
+
+        result = compute_galaxy_properties(
+            accretion_id=1, particle_masses=masses, particle_coords=coords,
+            galaxy_bound=galaxy_particles, galaxy_table=galaxy_table,
+            host_props=host_props, halo_model="nfw", n_los=3,
+        )
+        assert result.iloc[0]["r_t"] == pytest.approx(expected_rt, rel=1e-6)
+
     def test_n_los_one_and_large_host_id_exact(self):
         rng = np.random.default_rng(42)
         N = 200

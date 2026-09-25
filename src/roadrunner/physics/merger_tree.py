@@ -214,6 +214,11 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         if n == 0:
             return {}
 
+        # Merger-tree positions/radii are assumed comoving unconditionally
+        # (C08 -- a deliberate, current assumption, not an oversight: the
+        # merger tree is always comoving in practice today, so this is
+        # not gated behind RunConfig.comoving like the particle-data side
+        # of the pipeline is).
         redshift = snap_df["Redshift"].values[0].astype(np.float32)
         positions = (
             snap_df[["position_x", "position_y", "position_z"]].to_numpy(
@@ -288,6 +293,8 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         if n == 0:
             return {}
 
+        # Merger-tree positions/radii assumed comoving unconditionally --
+        # same deliberate assumption as `_satellites_impl` above (C08).
         redshift = snap_df["Redshift"].values[0]
         positions = (
             snap_df[["position_x", "position_y", "position_z"]].to_numpy(

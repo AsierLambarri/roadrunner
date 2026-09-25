@@ -130,3 +130,21 @@ class TestFromSnapshotRow:
         result = halo.potential(r)
         assert np.isscalar(result) or result.size == 1
         assert np.all(np.isfinite(result))
+
+    def test_nfw_row_rs_respects_comoving_flag(self):
+        # C08: comoving=False must not also halve Rs -- same physical Rs
+        # either way, whether the input is comoving (converted here) or
+        # already physical (passed straight through).
+        z = 1.0
+        row_comoving = pd.Series({
+            "Sub_tree_id": 1, "position_x": 0.0, "position_y": 0.0, "position_z": 0.0,
+            "velocity_x": 0.0, "velocity_y": 0.0, "velocity_z": 0.0,
+            "mass": 1e12, "virial_radius": 100.0, "scale_radius": 20.0,
+            "Redshift": z, "Snapshot": 0,
+        })
+        row_physical = row_comoving.copy()
+        row_physical["scale_radius"] = 20.0 / (1 + z)  # already physical
+
+        halo_comoving = HaloModel.from_snapshot_row(row_comoving, model="nfw", comoving=True)
+        halo_physical = HaloModel.from_snapshot_row(row_physical, model="nfw", comoving=False)
+        assert np.isclose(halo_comoving._inner.Rs, halo_physical._inner.Rs)

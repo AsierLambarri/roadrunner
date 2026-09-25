@@ -35,6 +35,9 @@ class ReductionConfig:
         Shrink-sphere contraction factor.
     dynstate_snapshots : int, list, str, or None
         Which snapshots get dynamical-state classification.
+    comoving : bool, default=True
+        Whether particle coordinates are comoving (C08) -- passed to
+        the Riley criterion's local velocity-dispersion computation.
     """
     accretion_id: int
     halo_model: str = "kepler"
@@ -44,6 +47,7 @@ class ReductionConfig:
     ssc_nmin: int = 30
     ssc_alpha: float = 0.9
     dynstate_snapshots: int | list[int] | str | None = field(default_factory=lambda: [-2, -1])
+    comoving: bool = True
 
 
 def reduce_snapshot(
@@ -124,6 +128,7 @@ def reduce_snapshot(
             galaxy_allowed=galaxy_particles,
             galaxy_bound=galaxy_bound,
             redshift=snap_data.redshift,
+            comoving=config.comoving,
         )
         if compute_dynstate else pd.DataFrame()
     )

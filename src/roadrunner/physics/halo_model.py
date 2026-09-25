@@ -8,6 +8,23 @@ from roadrunner._defaults import LOCAL_IDX, math_dtype
 from roadrunner._mcf_types import PotentialModel
 
 
+def physical_length_factor(redshift, comoving):
+    """Comoving-to-physical length conversion factor.
+
+    Parameters
+    ----------
+    redshift : float
+    comoving : bool
+        If ``True``, lengths are comoving and need converting; if
+        ``False``, they're already physical and the factor is a no-op.
+
+    Returns
+    -------
+    factor : float
+    """
+    return 1.0 / (1.0 + redshift) if comoving else 1.0
+
+
 class HaloModel:
     """Single halo model containing a gravitational potential and boundness data.
 
@@ -209,7 +226,9 @@ class HaloModel:
         conc = row["virial_radius"] / row["scale_radius"]
         kwargs = {"M": row["mass"], "G": G_KM}
         if model.lower() == "nfw":
-            kwargs["Rs"] = row["scale_radius"] / (1 + row["Redshift"])
+            kwargs["Rs"] = row["scale_radius"] * physical_length_factor(
+                row["Redshift"], comoving
+            )
             kwargs["c"] = conc
         inner = get_potential(model, **kwargs)
         return cls(

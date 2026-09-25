@@ -137,6 +137,7 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         ssc_nmin=config.ssc_nmin,
         ssc_alpha=config.ssc_alpha,
         dynstate_snapshots=config.dynstate_snapshots,
+        comoving=config.comoving,
     )
 
     birth_tracker = BirthTracker(

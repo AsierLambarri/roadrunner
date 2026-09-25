@@ -105,6 +105,39 @@ class TestComputeRileyCriterion:
         assert len(result) == 2
         assert set(result["Sub_tree_id"]) == {10, 20}
 
+    def test_comoving_and_equivalent_physical_input_match(self):
+        # C08: same physical scenario in the two frame conventions must
+        # give the same result -- positions*factor + comoving=True should
+        # match already-physical positions + comoving=False. Keep
+        # f_bound well below RILEY_BOUND_THRESHOLD so the position-
+        # dependent local-dispersion branch actually runs.
+        rng = np.random.default_rng(7)
+        n = 200
+        masses = np.ones(n)
+        positions_physical = rng.normal(0, 10, (n, 3))
+        velocities = rng.normal(0, 50, (n, 3))
+        z = 1.0
+        factor = 1 + z
+
+        galaxy_allowed = {5: np.arange(n)}
+        galaxy_bound = {5: np.arange(20)}  # f_bound = 20/200 = 0.1, well below threshold
+
+        coords_comoving = np.column_stack([positions_physical * factor, velocities])
+        coords_physical = np.column_stack([positions_physical, velocities])
+
+        result_comoving = compute_riley_criterion(
+            main_id=1, particle_masses=masses, particle_coords=coords_comoving,
+            galaxy_allowed=galaxy_allowed, galaxy_bound=galaxy_bound,
+            redshift=z, comoving=True,
+        )
+        result_physical = compute_riley_criterion(
+            main_id=1, particle_masses=masses, particle_coords=coords_physical,
+            galaxy_allowed=galaxy_allowed, galaxy_bound=galaxy_bound,
+            redshift=z, comoving=False,
+        )
+        np.testing.assert_allclose(result_comoving["sigma50"], result_physical["sigma50"])
+        np.testing.assert_array_equal(result_comoving["dynstate"], result_physical["dynstate"])
+
     def test_f_bound_computed_from_intersection(self):
         rng = np.random.default_rng(42)
         masses = np.ones(100)

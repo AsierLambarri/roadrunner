@@ -18,6 +18,7 @@ from roadrunner.physics.constants import (
     RILEY_SVM_INTERCEPT,
     RILEY_WI
 )
+from roadrunner.physics.halo_model import physical_length_factor
 
 
 def _local_velocity_dispersion(pos, vel, nmin=10):
@@ -117,6 +118,7 @@ def compute_riley_criterion(
     galaxy_allowed,
     galaxy_bound,
     redshift,
+    comoving=True,
 ):
     """Compute the Riley dynamical-state criterion for all satellites.
 
@@ -130,13 +132,16 @@ def compute_riley_criterion(
         Host galaxy ``Sub_tree_id`` (skipped).
     particle_masses : ndarray of shape (n_particles,)
     particle_coords : ndarray of shape (n_particles, 6)
-        Phase-space coordinates (comoving).
+        Phase-space coordinates, in the frame ``comoving`` declares.
     galaxy_allowed : dict of {int: ndarray}
         Maps galaxy ID to array of allowed particle indices.
     galaxy_bound : dict of {int: ndarray}
         Maps galaxy ID to array of bound particle indices.
     redshift : float
         Snapshot redshift (for comoving-to-physical conversion).
+    comoving : bool, default=True
+        Whether ``particle_coords`` positions are comoving (C08) --
+        only comoving input needs the ``(1+z)`` conversion below.
 
     Returns
     -------
@@ -144,7 +149,7 @@ def compute_riley_criterion(
         Columns: ``Sub_tree_id``, ``mstar``, ``f_bound``, ``sigma50``,
         ``dynstate``.
     """
-    positions = particle_coords[:, :3] / (1 + redshift)
+    positions = particle_coords[:, :3] * physical_length_factor(redshift, comoving)
     velocities = particle_coords[:, 3:6]
 
     skip_ids = {main_id, UNBOUND}
