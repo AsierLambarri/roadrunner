@@ -82,7 +82,7 @@ def compute_halo_bound_particles(
         boundness = -E / v_vir_sq
 
         if isinstance(halo._inner, KeplerPotential):
-            a = -0.5 * halo._inner.G * halo._inner.M / np.maximum(-E, 1e-30)
+            a = -0.5 * halo._inner.G * halo._inner.M / np.minimum(E, -1e-30)
             tdyns = np.zeros_like(a, dtype=math_dtype())
             bound_a = a > 0
             tdyns[bound_a] = (_2PI * np.sqrt(

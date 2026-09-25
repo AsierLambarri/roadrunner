@@ -106,7 +106,7 @@ class TestBoundnessRegression:
             if i_new.size > 0:
                 assert np.all(np.isfinite(t_new)), \
                     "tdyn has non-finite values for bound particles (Kepler)"
-                assert np.all(t_new[t_new > 0] > 0), \
+                assert np.all(t_new > 0), \
                     "Bound particles should have positive tdyn (Kepler)"
 
     def test_nfw_same_indices_and_energies(self):
