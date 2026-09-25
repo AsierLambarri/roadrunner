@@ -22,7 +22,7 @@ with a non-uniform latent prior.
 import numpy as np
 
 from ._math import row_squared_norms
-from roadrunner._defaults import LOCAL_IDX, math_dtype
+from roadrunner._defaults import LOCAL_IDX
     
 def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=None):
     """K-means++ seeding with cluster-dependent per-point weights.
@@ -50,7 +50,7 @@ def kmeans_plusplus_prior(X, n_clusters, *, cluster_weights=None, random_state=N
     indices : ndarray of shape (n_clusters,)
         Indices of the selected centers in ``X``.
     """
-    X = np.asarray(X, dtype=math_dtype())
+    X = np.asarray(X)
     n_samples, n_features = X.shape
 
     if isinstance(random_state, (int, np.integer)):

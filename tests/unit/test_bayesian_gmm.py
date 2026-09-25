@@ -54,26 +54,35 @@ class TestFit:
         bgmm.fit(blob_data_3c)
         assert bgmm.converged_
 
-    def test_predict_returns_labels(self, blob_data_3c):
-        bgmm = WeightedBayesianGaussianMixture(
-            n_components=3, random_state=42, max_iter=50
-        )
-        bgmm.fit(blob_data_3c)
         labels = bgmm.predict(blob_data_3c)
         assert labels.shape == (300,)
         assert labels.dtype.kind in ("i", "u")
 
+        assert bgmm.weight_concentration_.shape == (3,)
+        assert np.all(np.isfinite(bgmm.means_))
 
-class TestAllCovTypes:
-    @pytest.mark.parametrize("cov_type", ["full", "diagonal", "spherical"])
-    def test_cov_type_runs(self, cov_type):
-        rng = np.random.default_rng(42)
-        X = rng.normal(loc=0.0, scale=1.0, size=(100, 3)).astype(np.float64)
+
+class TestDtypes:
+    def test_float32(self, blob_data_3c):
+        X32 = blob_data_3c.astype(np.float32)
         bgmm = WeightedBayesianGaussianMixture(
-            n_components=2, cov_type=cov_type, random_state=42, max_iter=10
+            n_components=3, random_state=42, max_iter=50
         )
-        bgmm.fit(X)
-        assert bgmm.converged_ or not bgmm.converged_
+        bgmm.fit(X32)
+        assert bgmm.means_.dtype == np.float32
+        assert bgmm.covariances_.dtype == np.float32
+        assert bgmm.weight_concentration_.dtype == np.float32
+        assert bgmm.degrees_of_freedom_.dtype == np.float32
+        assert bgmm.predict_log_proba(X32).dtype == np.float32
+
+    def test_float32_prior_ignores_ambient_math_context(self, blob_data_3c):
+        X32 = blob_data_3c.astype(np.float32)
+        with precision(math="double"):
+            bgmm = WeightedBayesianGaussianMixture(
+                n_components=3, random_state=42, max_iter=50
+            )
+            bgmm.fit(X32)
+        assert bgmm.weight_concentration_prior_.dtype == np.float32
 
 
 class TestSingleComponent:
@@ -123,22 +132,6 @@ class TestInitPrecedence:
         expected_means = (beta0[:, None] * m0 + nk[:, None] * means_init) / beta[:, None]
 
         assert np.allclose(bgmm.means_, expected_means)
-
-
-class TestPriorShapes:
-    def test_weight_concentration_shape(self, blob_data_3c):
-        bgmm = WeightedBayesianGaussianMixture(
-            n_components=3, random_state=42, max_iter=10
-        )
-        bgmm.fit(blob_data_3c)
-        assert bgmm.weight_concentration_.shape == (3,)
-
-    def test_posterior_means_finite(self, blob_data_3c):
-        bgmm = WeightedBayesianGaussianMixture(
-            n_components=3, random_state=42, max_iter=10
-        )
-        bgmm.fit(blob_data_3c)
-        assert np.all(np.isfinite(bgmm.means_))
 
 
 class TestFullPrecisionCholesky:

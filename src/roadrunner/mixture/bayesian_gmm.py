@@ -32,7 +32,6 @@ from scipy.linalg import solve_triangular
 
 from ._kmeans_plusplus import kmeans_plusplus_prior
 from ._math import entropy_sum, row_squared_norms
-from roadrunner._defaults import math_dtype
 from .base import BaseMixture
 from .weighted_gmm import (
     _check_counts,
@@ -75,13 +74,15 @@ def _log_wishart_norm(degrees_of_freedom, log_det_prec_chol, n_features):
     log_wishart_norm : float
         Log normalization of Wishart distribution.
     """
+    work_dtype = degrees_of_freedom.dtype
+    arange_nf = np.arange(n_features, dtype=work_dtype)
     return (
         - degrees_of_freedom * log_det_prec_chol
         - degrees_of_freedom * n_features * 0.5 * np.log(2)
         - np.sum(
-            gammaln(0.5 * (degrees_of_freedom - np.arange(n_features)[:, None])),
+            gammaln(0.5 * (degrees_of_freedom - arange_nf[:, None])),
             axis=0
-        )
+        ).astype(work_dtype, copy=False)
     )
 
 def _compute_precision_cholesky(covariances, cov_type):
@@ -342,32 +343,37 @@ class WeightedBayesianGaussianMixture(BaseMixture):
                 n_features
             )
 
-        self._check_weights_prior()
+        self._check_weights_prior(X)
         self._check_means_prior(X)
         self._check_precisions_prior(n_features)
         self._check_covariance_prior(X)
 
-    def _check_weights_prior(self):
+    def _check_weights_prior(self, X):
         """Check and initialise the weight concentration prior.
 
         If ``weight_concentration_prior`` is ``None``, sets a uniform
         prior ``1 / n_components``.  Otherwise validates the shape
         and broadcasts scalars to the component dimension.
+
+        Matches its sibling ``_check_*_prior`` methods: the prior's
+        dtype follows ``X.dtype``, not the ambient ``math_dtype()``
+        setting -- the class trusts what it was handed rather than
+        reading global config.
         """
         if self.weight_concentration_prior is None:
             self.weight_concentration_prior_ = np.full(
                 self.n_components,
                 1.0 / self.n_components,
-                dtype=math_dtype(),
+                dtype=X.dtype,
             )
         else:
             alpha = np.asarray(
                 self.weight_concentration_prior,
-                dtype=math_dtype()
+                dtype=X.dtype
             )
-    
+
             if alpha.ndim == 0:
-                alpha = np.full(self.n_components, alpha, dtype=math_dtype())
+                alpha = np.full(self.n_components, alpha, dtype=X.dtype)
     
             if alpha.shape != (self.n_components,):
                 raise ValueError(
@@ -773,12 +779,14 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             X, self.means_, self.precisions_cholesky_, self.cov_type
         ) - 0.5 * n_features * np.log(self.degrees_of_freedom_)
         
+        work_dtype = self.degrees_of_freedom_.dtype
+        arange_nf = np.arange(0, n_features, dtype=work_dtype)
         log_lambda = (
             n_features * np.log(2)
             + np.sum(digamma(
-                0.5 * (self.degrees_of_freedom_ - np.arange(0, n_features)[:, None])
+                0.5 * (self.degrees_of_freedom_ - arange_nf[:, None])
             ), axis=0)
-        )
+        ).astype(work_dtype, copy=False)
 
         return log_gauss + 0.5 * (log_lambda - n_features / self.mean_precision_)
 
