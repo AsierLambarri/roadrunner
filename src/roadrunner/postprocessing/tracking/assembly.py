@@ -207,6 +207,11 @@ class AssemblyTracker:
         "erase" had run this round -- picking up a particle that should
         already have been removed.
 
+        A galaxy absent from ``all_galaxies`` (i.e. gone from this
+        snapshot) is never updated here and cannot accrete; its frozen
+        infall list is only ever read (via ``satellites_history``),
+        never re-entered as an active node.
+
         Parameters
         ----------
         all_galaxies : set of int
