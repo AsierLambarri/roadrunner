@@ -121,3 +121,20 @@ class TestHDF5CatalogueWriter:
             sat_grp = hf["snapshots"]["0"]["satellite_relations"]
             assert set(sat_grp.keys()) == {"1"}  # galaxy 99 from the first attempt is gone
             np.testing.assert_array_equal(sat_grp["1"][:], [7])
+
+    def test_write_snapshot_skips_galaxies_without_satellites(self, tmp_dir):
+        """The satellite map lists every alive galaxy (empty set if it has
+        no satellites); the catalogue stores only actual hosts."""
+        os.makedirs(tmp_dir, exist_ok=True)
+        w = HDF5CatalogueWriter(tmp_dir)
+        merger = pd.DataFrame({"Sub_tree_id": [1], "mass": [1e10]})
+        equiv = pd.DataFrame({"snapshot": [0], "time": [13.8]})
+        w.write_header(1, [0], {}, merger, equiv)
+        w.write_snapshot(
+            snapshot_id=0, time=13.8,
+            properties_df=pd.DataFrame(), dynstate_df=pd.DataFrame(),
+            satellites_map={1: {2}, 2: set(), 3: set()},
+        )
+        with h5py.File(os.path.join(tmp_dir, "catalogue.hdf5"), "r") as hf:
+            sat_grp = hf["snapshots"]["0"]["satellite_relations"]
+            assert set(sat_grp.keys()) == {"1"}

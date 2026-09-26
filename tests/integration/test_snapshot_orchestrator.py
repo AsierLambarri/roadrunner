@@ -100,3 +100,12 @@ class TestSnapshotOrchestratorWithTrackers:
         assert at._last_snapshot == 1
         assert len(at.current()) > 0
         assert len(result2.result.particle_df) == len(result1.result.particle_df)
+
+        # The orchestrator builds a complete satellite map even from an
+        # empty input: every alive (populated) halo is a key, with an empty
+        # set here since none has satellites. The assembly tracker relies on
+        # this to hand buffered history to hosts without current satellites.
+        alive = set(result1.ensemble.sub_tree_ids[result1.ensemble.populated_indices()])
+        assert len(alive) > 0
+        assert set(result1.satellites) == alive
+        assert all(sats == set() for sats in result1.satellites.values())

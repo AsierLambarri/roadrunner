@@ -143,6 +143,8 @@ class HDF5CatalogueWriter:
                 del snap_grp["satellite_relations"]
             sat_grp = snap_grp.require_group("satellite_relations")
             for gal_id, sats in satellites_map.items():
+                if not sats:
+                    continue  # the map lists every alive galaxy; only hosts are stored
                 arr = np.asarray(list(sats), dtype=GALAXY_ID)
                 sat_grp.create_dataset(str(gal_id), data=arr, compression="gzip")
 

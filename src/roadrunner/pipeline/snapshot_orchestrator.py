@@ -117,8 +117,13 @@ class SnapshotOrchestrator:
             update_birth_tracker(self.birth_tracker, snap_id, snap_data, result)
 
         pop_ids = set(ensemble.sub_tree_ids[ensemble.populated_indices()])
-        satellites = {k: (v & pop_ids) for k, v in satellites.items()
-                      if k in pop_ids and (v & pop_ids)}
+        # Complete over the alive (populated) halos: every one is a key,
+        # with an empty set when it has no satellites. The assembly
+        # tracker gives buffered satellite history to exactly the keys of
+        # this map, so a host whose last satellite just merged in must
+        # still appear. Satellites are restricted to alive halos; dead
+        # ones are never keys.
+        satellites = {g: satellites.get(g, set()) & pop_ids for g in pop_ids}
 
         if self.assembly_tracker is not None:
             update_assembly_tracker(

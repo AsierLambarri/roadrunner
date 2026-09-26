@@ -20,6 +20,24 @@ class AssemblyTracker:
     have ever been accreted by that galaxy (including those inherited
     from merged satellites).
 
+    Each snapshot, :meth:`update` ingests the current birth map, the
+    current particle assignment, and the current satellite map, and it
+    keeps the previous ``n_sat_history - 1`` satellite maps in a buffer.
+    The satellite map must list every galaxy alive this snapshot as a
+    key, with an empty set when it has no satellites.
+    :meth:`_get_current_sat_history` gives buffered history to exactly
+    those keys, so an alive host whose last satellite just merged in
+    still inherits it. It then runs two steps:
+
+    1. Birth bookkeeping for every galaxy whose birth set changed, dead
+       ones included: birth hosts are chosen over an accumulation
+       window, so a galaxy can gain or lose birth particles after it
+       has died.
+    2. Accretion for alive galaxies only, over the current plus
+       buffered satellite graph. Dead galaxies neither gain satellites
+       nor accrete; their infall lists are only read, by hosts that
+       list them as satellites.
+
     Parameters
     ----------
     n_sat_history : int, default=2
@@ -39,9 +57,15 @@ class AssemblyTracker:
     def _get_current_sat_history(self, satellites_map):
         """Combine current and buffered satellite maps into one history.
 
+        Entries exist exactly for the keys of the current map. Because
+        that map lists every alive galaxy (empty set if none), every
+        alive galaxy gets its buffered satellites, and dead galaxies get
+        no entry at all.
+
         Parameters
         ----------
         satellites_map : dict of {int: set of int}
+            Complete over the alive galaxies.
 
         Returns
         -------
@@ -174,10 +198,12 @@ class AssemblyTracker:
         assignment_map : dict of {int: set of int}
         birth_map : dict of {int: set of int}
         satellites_map : dict of {int: set of int}
+            Must list every galaxy alive this snapshot as a key, with an
+            empty set when it has no satellites (see the class docstring).
         freeze_galaxies : list of int or None, optional
         """
         if snapshot_id > self._last_snapshot:
-            all_galaxies = (
+            alive_galaxies = (
                 set(assignment_map.keys())
                 | set(satellites_map.keys())
                 | set(h for sats in satellites_map.values() for h in sats)
@@ -185,7 +211,7 @@ class AssemblyTracker:
             satellites_history = self._get_current_sat_history(satellites_map)
 
             self._update(
-                all_galaxies,
+                alive_galaxies,
                 assignment_map,
                 birth_map,
                 satellites_history,
@@ -198,7 +224,7 @@ class AssemblyTracker:
             # skipped (`snapshot_id > self._last_snapshot` would be False).
             self._last_snapshot = snapshot_id
 
-    def _update(self, all_galaxies, assignment_map, birth_map, satellites_history, freeze_galaxies):
+    def _update(self, alive_galaxies, assignment_map, birth_map, satellites_history, freeze_galaxies):
         """Core update logic: propagate infall lists across satellites.
 
         Two flat passes, not one combined loop: birth-map deltas have
@@ -211,14 +237,15 @@ class AssemblyTracker:
         "erase" had run this round -- picking up a particle that should
         already have been removed.
 
-        A galaxy absent from ``all_galaxies`` (i.e. gone from this
-        snapshot) is never updated here and cannot accrete; its frozen
-        infall list is only ever read (via ``satellites_history``),
-        never re-entered as an active node.
+        A galaxy absent from ``alive_galaxies`` (dead this snapshot)
+        still gets pass 1's birth bookkeeping, but never enters pass 2:
+        it cannot gain satellites or accrete. Its infall list is only
+        read, by hosts that list it in ``satellites_history``.
 
         Parameters
         ----------
-        all_galaxies : set of int
+        alive_galaxies : set of int
+            Galaxies alive this snapshot: pass 2's node set.
         assignment_map : dict of {int: set of int}
         birth_map : dict of {int: set of int}
         satellites_history : dict of {int: set of int}
@@ -229,26 +256,29 @@ class AssemblyTracker:
         for g in freeze_galaxies:
             self._frozen.add(g)
 
-        # Pass 1: birth-map deltas. Order-independent -- apply for every
-        # galaxy before any accretion reads an infall list.
+        # Pass 1: birth bookkeeping for every galaxy whose birth set differs
+        # from the previous snapshot's -- alive or dead. A birth host is
+        # chosen over an accumulation window, so a galaxy can gain or lose
+        # birth particles after it has died, and `_previous_birth_map`
+        # (end of this method) records every galaxy's set as applied: a
+        # galaxy skipped here would lose its change for good. Both maps'
+        # keys are visited, since a galaxy whose births all moved away
+        # appears only in the previous one; unchanged sets are skipped.
+        # Order-independent, and completed for every galaxy before any
+        # accretion reads an infall list.
         #
-        # Replaces (not mutates) `self._infall_lists[g]` (C02): a checkpoint
-        # capture taken before this call may hold a reference to the
-        # current set object, so it must never be edited in place -- only
-        # ever swapped out for a new one. Guarded on an actual delta (or a
-        # first-ever appearance, to match the old auto-vivifying behavior
-        # exactly) so an untouched galaxy costs nothing here, not O(its
-        # current size) every snapshot. Parenthesized explicitly: erase
-        # must happen *after* the union, not (per operator precedence,
-        # `-` binds tighter than `|`) silently folded into `added` first.
-        for g in all_galaxies:
-            prev_birth = self._previous_birth_map.get(g, _EMPTY)
+        # Sets are replaced, never edited in place (C02): a checkpoint
+        # capture may still reference the old object. Parenthesized
+        # explicitly -- `-` binds tighter than `|`, and the erase must run
+        # after the union.
+        previous = self._previous_birth_map
+        for g in birth_map.keys() | previous.keys():
             curr_birth = birth_map.get(g, _EMPTY)
-            added = curr_birth - prev_birth
-            removed = prev_birth - curr_birth
-            if added or removed or g not in self._infall_lists:
-                current = self._infall_lists.get(g, _EMPTY)
-                self._infall_lists[g] = (current | added) - removed
+            prev_birth = previous.get(g, _EMPTY)
+            if curr_birth == prev_birth:
+                continue
+            current = self._infall_lists.get(g, _EMPTY)
+            self._infall_lists[g] = (current | (curr_birth - prev_birth)) - (prev_birth - curr_birth)
 
         # Pass 2: satellite accretion, SCC-ordered and flattened (see
         # _strongly_connected_components / _flatten_components). The
@@ -256,7 +286,7 @@ class AssemblyTracker:
         # has run for every galaxy, ``curr_birth <= self._infall_lists[g]``
         # already holds, so intersecting with it again adds nothing
         # (verified empirically, not just asserted).
-        components = self._strongly_connected_components(all_galaxies, satellites_history)
+        components = self._strongly_connected_components(alive_galaxies, satellites_history)
         for g in tqdm(self._flatten_components(components), desc="Updating each galaxy..."):
             if g in self._frozen:
                 continue

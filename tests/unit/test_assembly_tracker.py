@@ -49,11 +49,12 @@ class TestAssemblyTracker:
         # builds explicitly across two update() calls:
         #   snapshot 0: satellites_map={2: {1}}          (2 hosts 1)
         #   snapshot 1: satellites_map={1: {2}, 2: {3}}  (1 hosts 2; 2 also
-        #     hosts 3, which is what keeps 2 a *current* key so the buffer
-        #     can enrich it -- _get_current_sat_history only ever enriches
-        #     existing current-map keys, never introduces new ones, so a
-        #     lone A/B swap with no other current relation for B can't form
-        #     a real cycle; this is the minimal fixture that actually does)
+        #     hosts 3. _get_current_sat_history enriches exactly the
+        #     current-map keys, so 2 must be a key for the buffer to add
+        #     its old edge to 1. The pipeline's maps list every alive
+        #     galaxy (empty set if none), so there even a lone A/B swap
+        #     would form the cycle; this hand-built map keeps 2 a key via
+        #     its edge to 3 instead.)
         # The merged history at snapshot 1 is then {1: {2}, 2: {1, 3}}: a
         # genuine mutual 1<->2 component, plus 2's one-way edge to 3.
         # Hand-derived and cross-checked against an independent gold-
@@ -254,32 +255,26 @@ class TestAssemblyTracker:
             birth_map={1: {10}, 2: {20}},
             satellites_map={1: {2}},
         )
-        # Snapshot 1: galaxy 2 is still a satellite of 1 (history buffer keeps it)
-        # Even though satellites_map is empty, the buffer from snap 0 preserves
-        # the relationship for n_sat_history snapshots.
-        # BUT: _get_current_sat_history starts from the current map keys.
-        # If the current satellites_map is {}, sat_history starts empty
-        # and the buffer is never consulted. This is by design: particles
-        # only flow through galaxies with an active current satellite link.
+        # Snapshot 1: galaxy 2 is still a satellite of 1.
         tracker.update(
             snapshot_id=1,
             assignment_map={1: {10}, 2: {20}},
             birth_map={1: {10}, 2: {20}},
             satellites_map={1: {2}},
         )
-        # Snapshot 2: satellites_map empty, buffer has [{1:{2}}] from snap 1.
-        # sat_history starts empty → no satellites → inheritance stops.
+        # Snapshot 2: the link is gone, but both galaxies are alive, so
+        # both are keys (the complete map the orchestrator passes). The
+        # buffer still holds 1 -> 2 from snapshots 0 and 1, so galaxy 1
+        # does consult it -- but 1 is assigned none of 2's stars, so it
+        # accretes nothing: A_1 & infall[2] == {10} & {20} == set().
         tracker.update(
             snapshot_id=2,
             assignment_map={1: {10}, 2: {20}},
             birth_map={1: {10}, 2: {20}},
-            satellites_map={},
+            satellites_map={1: set(), 2: set()},
         )
         result = tracker.current()
-        # Without an active satellite link, galaxy 2's particles stay with 2.
-        # Galaxy 1 only has its own birth particles.
         assert result[1] == {10}
-        # But galaxy 2 still has its own infall list
         assert result[2] == {20}
 
 
@@ -380,3 +375,142 @@ class TestAssemblyTrackerRecovery:
         )
         assert ref["frozen"] == captured_frozen
         assert 1 not in ref["frozen"]
+
+
+class TestAssemblyTrackerContract:
+    """S01 and dead-galaxy births: birth bookkeeping covers every galaxy
+    whose birth set changed (dead ones included); accretion covers alive
+    galaxies only, each with its buffered satellites -- given the
+    complete satellite map the orchestrator passes (every alive galaxy
+    a key, empty set if it has no satellites)."""
+
+    def _merger_snapshot_0(self, tracker):
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={1: {10}, 2: {20, 21}},
+            birth_map={1: {10}, 2: {20, 21}},
+            satellites_map={1: {2}, 2: set()},
+        )
+
+    def test_merged_satellite_accreted_by_host_left_without_satellites(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        self._merger_snapshot_0(tracker)
+        # Snapshot 1: 2 has merged into 1 -- 2 is gone, its star 20 is now
+        # assigned to 1, and 1 has no current satellite: {1: set()}.
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={1: {10, 20}},
+            birth_map={1: {10}, 2: {20, 21}},
+            satellites_map={1: set()},
+        )
+        assert tracker.current()[1] == {10, 20}
+        assert tracker.current()[2] == {20, 21}  # dead: read, never updated by accretion
+
+        # Why the orchestrator must pass complete maps: if the host is
+        # dropped from the map instead (the old filter), the buffer is
+        # never consulted and the merged star is lost.
+        incomplete = AssemblyTracker(n_sat_history=2)
+        self._merger_snapshot_0(incomplete)
+        incomplete.update(
+            snapshot_id=1,
+            assignment_map={1: {10, 20}},
+            birth_map={1: {10}, 2: {20, 21}},
+            satellites_map={},
+        )
+        assert incomplete.current()[1] == {10}
+
+    def test_buffered_relation_expires(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        self._merger_snapshot_0(tracker)
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={1: {10, 20}},
+            birth_map={1: {10}, 2: {20, 21}},
+            satellites_map={1: set()},
+        )
+        # Snapshot 2: 2's star 21 is now assigned to 1, but the buffer only
+        # holds snapshot 1's map, where 1 had no satellites -- expired.
+        tracker.update(
+            snapshot_id=2,
+            assignment_map={1: {10, 20, 21}},
+            birth_map={1: {10}, 2: {20, 21}},
+            satellites_map={1: set()},
+        )
+        assert tracker.current()[1] == {10, 20}
+
+    def test_dead_galaxy_gets_no_satellite_history(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={3: {30}, 4: {40}},
+            birth_map={3: {30}, 4: {40}},
+            satellites_map={3: {4}, 4: set()},
+        )
+        # Snapshot 1: 3 has died (absent from the complete map). Despite
+        # the buffered 3 -> 4, it gets no history: it cannot gain satellites.
+        history = tracker._get_current_sat_history({4: set()})
+        assert history == {4: set()}
+
+    def test_dead_galaxy_birth_changes_are_applied(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={5: {50, 51}, 6: {60}},
+            birth_map={5: {50, 51}, 6: {60}},
+            satellites_map={5: set(), 6: set()},
+        )
+        # Snapshot 1: 5 has died, and particle 51's birth leader switches
+        # to 6 -- dead 5 must lose it, not keep it forever.
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={6: {51, 60}},
+            birth_map={5: {50}, 6: {51, 60}},
+            satellites_map={6: set()},
+        )
+        assert tracker.current()[5] == {50}
+        assert tracker.current()[6] == {51, 60}
+        # Snapshot 2: particle 52 finalizes with birth host 5, still dead
+        # -- 5 must gain it.
+        tracker.update(
+            snapshot_id=2,
+            assignment_map={6: {51, 52, 60}},
+            birth_map={5: {50, 52}, 6: {51, 60}},
+            satellites_map={6: set()},
+        )
+        assert tracker.current()[5] == {50, 52}
+
+    def test_galaxy_whose_births_all_moved_away_loses_them(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={7: {70}, 8: {80}},
+            birth_map={7: {70}, 8: {80}},
+            satellites_map={7: set(), 8: set()},
+        )
+        # Snapshot 1: 7 has died and has no birth entry left at all -- it
+        # appears only in the previous birth map, and must still lose 70.
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={8: {70, 80}},
+            birth_map={8: {70, 80}},
+            satellites_map={8: set()},
+        )
+        assert tracker.current()[7] == set()
+        assert tracker.current()[8] == {70, 80}
+
+    def test_unchanged_birth_set_is_not_rebuilt(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={1: {10}},
+            birth_map={1: {10}},
+            satellites_map={1: set()},
+        )
+        before = tracker._infall_lists[1]
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={1: {10}},
+            birth_map={1: {10}},
+            satellites_map={1: set()},
+        )
+        assert tracker._infall_lists[1] is before
