@@ -177,7 +177,6 @@ class AssemblyTracker:
         freeze_galaxies : list of int or None, optional
         """
         if snapshot_id > self._last_snapshot:
-            self._last_snapshot = snapshot_id
             all_galaxies = (
                 set(assignment_map.keys())
                 | set(satellites_map.keys())
@@ -193,6 +192,11 @@ class AssemblyTracker:
                 [] if freeze_galaxies is None else freeze_galaxies,
             )
             self._sat_history_buffer.append(satellites_map)
+            # Advance only after both mutations above succeed (C02): if
+            # `_update` raises partway, `_last_snapshot` must not already
+            # claim this snapshot is done, or a retry would be silently
+            # skipped (`snapshot_id > self._last_snapshot` would be False).
+            self._last_snapshot = snapshot_id
 
     def _update(self, all_galaxies, assignment_map, birth_map, satellites_history, freeze_galaxies):
         """Core update logic: propagate infall lists across satellites.
@@ -227,11 +231,24 @@ class AssemblyTracker:
 
         # Pass 1: birth-map deltas. Order-independent -- apply for every
         # galaxy before any accretion reads an infall list.
+        #
+        # Replaces (not mutates) `self._infall_lists[g]` (C02): a checkpoint
+        # capture taken before this call may hold a reference to the
+        # current set object, so it must never be edited in place -- only
+        # ever swapped out for a new one. Guarded on an actual delta (or a
+        # first-ever appearance, to match the old auto-vivifying behavior
+        # exactly) so an untouched galaxy costs nothing here, not O(its
+        # current size) every snapshot. Parenthesized explicitly: erase
+        # must happen *after* the union, not (per operator precedence,
+        # `-` binds tighter than `|`) silently folded into `added` first.
         for g in all_galaxies:
             prev_birth = self._previous_birth_map.get(g, _EMPTY)
             curr_birth = birth_map.get(g, _EMPTY)
-            self._infall_lists[g].update(curr_birth - prev_birth)
-            self._infall_lists[g].difference_update(prev_birth - curr_birth)
+            added = curr_birth - prev_birth
+            removed = prev_birth - curr_birth
+            if added or removed or g not in self._infall_lists:
+                current = self._infall_lists.get(g, _EMPTY)
+                self._infall_lists[g] = (current | added) - removed
 
         # Pass 2: satellite accretion, SCC-ordered and flattened (see
         # _strongly_connected_components / _flatten_components). The
@@ -249,7 +266,11 @@ class AssemblyTracker:
             accreted = A_g & self._infall_lists.get(self._unbound_default, _EMPTY)
             for h in satellites_history.get(g, _EMPTY):
                 accreted |= A_g & self._infall_lists.get(h, _EMPTY)
-            self._infall_lists[g].update(accreted)
+            # Same replace-not-mutate/guard treatment as Pass 1 (C02) --
+            # this mutates the same `_infall_lists[g]` sets and needs the
+            # identical safety, not just Pass 1's own galaxies.
+            if accreted or g not in self._infall_lists:
+                self._infall_lists[g] = self._infall_lists.get(g, _EMPTY) | accreted
 
         self._previous_birth_map = dict(birth_map)
 
@@ -262,6 +283,32 @@ class AssemblyTracker:
         """
         return self._infall_lists
 
+    def _cheap_snapshot(self):
+        """Cheap, checkpoint-safe reference capture (C02).
+
+        O(n_galaxies), not O(total particles ever accreted): safe to
+        call every snapshot because ``_update`` never mutates an
+        existing ``_infall_lists[g]``/``_previous_birth_map`` in place,
+        only ever replaces it wholesale. ``_frozen``/``_sat_history_buffer``
+        *are* mutated in place elsewhere, so those still get a real copy
+        here (cheap regardless -- both are small, bounded containers).
+
+        Returns
+        -------
+        ref : dict
+            Pass to :meth:`_serialize` to get a checkpoint-write-safe,
+            fully independent form (only worth doing at actual
+            checkpoint-write time, not every snapshot).
+        """
+        return {
+            "infall_lists": dict(self._infall_lists),
+            "previous_birth_map": self._previous_birth_map,
+            "frozen": set(self._frozen),
+            "sat_history_buffer": list(self._sat_history_buffer),
+            "last_snapshot": self._last_snapshot,
+            "unbound_default": self._unbound_default,
+        }
+
     def _get_state(self):
         """Serialise the tracker state for checkpointing.
 
@@ -269,13 +316,33 @@ class AssemblyTracker:
         -------
         state : dict
         """
+        return self._serialize(self._cheap_snapshot())
+
+    @staticmethod
+    def _serialize(ref):
+        """Convert a :meth:`_cheap_snapshot` reference into a fully
+        independent, plain-container form safe for pickling/disk
+        checkpointing.
+
+        This is the O(total elements) conversion -- call only at actual
+        checkpoint-write time (i.e. on failure), not every snapshot.
+
+        Parameters
+        ----------
+        ref : dict
+            Output of :meth:`_cheap_snapshot`.
+
+        Returns
+        -------
+        state : dict
+        """
         return {
-            "infall_lists": {k: list(v) for k, v in self._infall_lists.items()},
-            "previous_birth_map": {k: list(v) for k, v in self._previous_birth_map.items()},
-            "frozen": set(self._frozen),
-            "sat_history_buffer": list(self._sat_history_buffer),
-            "last_snapshot": self._last_snapshot,
-            "unbound_default": self._unbound_default,
+            "infall_lists": {k: list(v) for k, v in ref["infall_lists"].items()},
+            "previous_birth_map": {k: list(v) for k, v in ref["previous_birth_map"].items()},
+            "frozen": ref["frozen"],
+            "sat_history_buffer": ref["sat_history_buffer"],
+            "last_snapshot": ref["last_snapshot"],
+            "unbound_default": ref["unbound_default"],
         }
 
     def _set_state(self, state):

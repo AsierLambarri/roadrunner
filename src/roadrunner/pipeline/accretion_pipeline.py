@@ -121,13 +121,14 @@ class AccretionPipeline:
         )
 
         if resume:
-            previous_resp_sim, start_idx = self._try_resume(snapshot_ids, seed)
+            previous_resp_sim, start_idx, last_good = self._try_resume(snapshot_ids, seed)
         else:
-            previous_resp_sim, start_idx = None, 0
+            previous_resp_sim, start_idx, last_good = None, 0, None
 
         self._ensure_merger_columns()
 
-        if start_idx == 0:
+        if not resume:
+            # Genuine fresh run: pick a fresh seed, wipe and reinitialize.
             self._base_seed = (
                 seed if seed is not None
                 else int(np.random.SeedSequence().generate_state(1)[0])
@@ -135,6 +136,15 @@ class AccretionPipeline:
             if os.path.isdir(output_dir):
                 shutil.rmtree(output_dir)
             os.makedirs(output_dir, exist_ok=True)
+            self._initialize_run(snapshot_ids)
+        elif start_idx == 0:
+            # Resumed, but nothing had succeeded yet (a `last_snapshot:
+            # None` checkpoint -- C02/C03): self._base_seed was already
+            # correctly restored by _try_resume from the checkpoint, so it
+            # must not be regenerated here, and output_dir already holds
+            # this run's real (if incomplete) state, so it must not be
+            # wiped. _initialize_run is idempotent (write_header already
+            # uses _del_existing), safe to rerun.
             self._initialize_run(snapshot_ids)
 
         self._write_progress(
@@ -144,7 +154,21 @@ class AccretionPipeline:
         )
 
         t_start = time.time()
-        last_good = None  # (snap_id, previous_resp_sim, fitted_parameters)
+        # last_good: (snap_id, previous_resp_sim, fitted_parameters,
+        # birth_tracker_ref, assembly_tracker_ref) for the last snapshot
+        # that fully completed -- seeded from the checkpoint on a real
+        # resume. When nothing has completed yet, capture the trackers'
+        # still-untouched state here, before the first snapshot can
+        # mutate them (C02): reading them live at failure time instead
+        # would pick up whatever that first snapshot already applied.
+        if last_good is None:
+            bt = self.orchestrator.birth_tracker
+            at = self.orchestrator.assembly_tracker
+            last_good = (
+                None, previous_resp_sim, None,
+                bt._cheap_snapshot() if bt is not None else None,
+                at._cheap_snapshot() if at is not None else None,
+            )
         for idx in range(start_idx, len(snapshot_ids)):
             snap_id = snapshot_ids[idx]
             print(f"\nSnapshot {snap_id}  ({idx + 1}/{len(snapshot_ids)})")
@@ -171,8 +195,12 @@ class AccretionPipeline:
             if snap_result is None:
                 continue  # this snapshot had zero halos or zero particles
             previous_resp_sim = snap_result.previous_resp_sim
+            bt = self.orchestrator.birth_tracker
+            at = self.orchestrator.assembly_tracker
             last_good = (
                 snap_id, previous_resp_sim, snap_result.result.fitted_parameters,
+                bt._cheap_snapshot() if bt is not None else None,
+                at._cheap_snapshot() if at is not None else None,
             )
             self._write_progress(snapshot_ids, snap_id, False)
 
@@ -185,25 +213,33 @@ class AccretionPipeline:
         Builds the checkpoint payload exactly as the former per-snapshot
         save did (same keys plus the run's ``snapshots`` list, same
         :func:`save_checkpoint` call) for the last fully completed
-        snapshot, using live tracker state. Never raises from the save
-        itself: a failing error-save (e.g. ``MemoryError`` while pickling)
-        must not mask the original failure; it only prints a warning.
+        snapshot. Never raises from the save itself: a failing error-save
+        (e.g. ``MemoryError`` while pickling) must not mask the original
+        failure; it only prints a warning.
 
-        ``SIGINT`` is deferred while the checkpoint is written (re-raised
-        afterwards), so a second Ctrl-C cannot skip or tear the save.
-        Requires the main thread, like all signal handling.
+        ``SIGINT`` is deferred for the whole save, including serializing
+        the tracker references, so a second Ctrl-C cannot skip or tear
+        it. Requires the main thread, like all signal handling.
 
-        Note: both trackers guard reprocessing with ``_last_snapshot``
-        and apply idempotent set operations, so resuming is exact unless
-        the failure struck inside ``birth._add_update_particles``'s
-        per-particle loop (double-added weights on resume) or inside
-        ``assembly._update``'s galaxy loop (partial infall lists stand).
+        The trackers are never read live here (C02): ``last_good`` holds
+        references captured when the state it describes was complete --
+        right after a snapshot finished, or before the first snapshot
+        started -- and both trackers only ever *replace* their mutable
+        containers rather than editing them in place, so those
+        references stay valid however far the *current*, failing
+        snapshot's processing got. A retry always starts from a clean
+        pre-attempt state, not a partially-mutated one.
+
+        Parameters
+        ----------
+        last_good : tuple
+            ``(snap_id, previous_resp_sim, fitted_parameters,
+            birth_tracker_ref, assembly_tracker_ref)`` for the last
+            snapshot that fully completed. ``snap_id`` is ``None`` when
+            nothing has completed yet, and the tracker references then
+            hold the untouched pre-run state.
+        snapshot_ids : list of int
         """
-        if last_good is None:
-            return  # nothing completed; a fresh rerun is equivalent
-        snap_id, previous_resp_sim, fitted_parameters = last_good
-        bt = self.orchestrator.birth_tracker
-        at = self.orchestrator.assembly_tracker
         deferred = {}
 
         def _defer(signum, frame):
@@ -215,6 +251,15 @@ class AccretionPipeline:
             except ValueError:
                 old_handler = None  # non-main thread: proceed unguarded
             try:
+                snap_id, previous_resp_sim, fitted_parameters, bt_ref, at_ref = last_good
+                bt_state = (
+                    self.orchestrator.birth_tracker._serialize(bt_ref)
+                    if bt_ref is not None else None
+                )
+                at_state = (
+                    self.orchestrator.assembly_tracker._serialize(at_ref)
+                    if at_ref is not None else None
+                )
                 save_checkpoint(self._checkpoint_path, {
                     "last_snapshot": snap_id,
                     "snapshots": list(snapshot_ids),
@@ -225,8 +270,8 @@ class AccretionPipeline:
                     },
                     "previous_resp": previous_resp_sim,
                     "previous_parameters": fitted_parameters,
-                    "birth_tracker": bt._get_state() if bt is not None else None,
-                    "assembly_tracker": at._get_state() if at is not None else None,
+                    "birth_tracker": bt_state,
+                    "assembly_tracker": at_state,
                 })
             finally:
                 if old_handler is not None:
@@ -333,6 +378,14 @@ class AccretionPipeline:
         previous_resp_sim : SparseCSC or None
         start_idx : int
             Index in ``snapshot_ids`` to resume from.
+        last_good : tuple or None
+            ``(last_completed, previous_resp_sim, previous_parameters,
+            birth_tracker_ref, assembly_tracker_ref)``, seeded from this
+            checkpoint's own (just-restored) state so a failure on the
+            very first snapshot of this resumed run has a correct
+            fallback to persist (C02) -- or ``None`` if the checkpoint
+            itself represents "nothing succeeded yet" (``last_snapshot``
+            is ``None``).
         """
         try:
             ckpt = load_checkpoint(self._checkpoint_path)
@@ -353,7 +406,11 @@ class AccretionPipeline:
                 f"Delete it and start a fresh run."
             )
         last_completed = ckpt["last_snapshot"]
-        if last_completed not in snapshot_ids:
+        # `last_completed is None` means "nothing succeeded yet" (C02/C03)
+        # -- a legitimate checkpoint state, not an error; the membership
+        # and snapshot-list checks below only apply once something real
+        # was recorded.
+        if last_completed is not None and last_completed not in snapshot_ids:
             raise RestartError(
                 f"Checkpoint snapshot {last_completed} not in snapshot range. "
                 f"Delete the checkpoint and start a fresh run."
@@ -378,7 +435,7 @@ class AccretionPipeline:
                     f"the checkpoint is stale. "
                     f"Delete the checkpoint and start a fresh run."
                 )
-        next_idx = snapshot_ids.index(last_completed) + 1
+        next_idx = 0 if last_completed is None else snapshot_ids.index(last_completed) + 1
         ckpt_precision = ckpt.get("precision")
         if ckpt_precision is not None:
             current = {
@@ -405,18 +462,36 @@ class AccretionPipeline:
         if previous_parameters is not None:
             self.orchestrator.assigner.parameters = previous_parameters
 
+        bt = self.orchestrator.birth_tracker
+        at = self.orchestrator.assembly_tracker
         bt_state = ckpt.get("birth_tracker")
-        if bt_state is not None and self.orchestrator.birth_tracker is not None:
-            self.orchestrator.birth_tracker._set_state(bt_state)
+        if bt_state is not None and bt is not None:
+            bt._set_state(bt_state)
         at_state = ckpt.get("assembly_tracker")
-        if at_state is not None and self.orchestrator.assembly_tracker is not None:
-            self.orchestrator.assembly_tracker._set_state(at_state)
+        if at_state is not None and at is not None:
+            at._set_state(at_state)
+
+        # Seed `last_good` from this checkpoint's own (just-restored)
+        # state (C02): if the very first snapshot of this resumed run
+        # also fails, `_save_error_checkpoint` must fall back to this
+        # correct prior state, not a bare `None` that would clobber it
+        # with a bogus "nothing succeeded" checkpoint.
+        last_good = None
+        if last_completed is not None:
+            last_good = (
+                last_completed, previous_resp_sim, previous_parameters,
+                bt._cheap_snapshot() if bt is not None else None,
+                at._cheap_snapshot() if at is not None else None,
+            )
 
         if next_idx >= len(snapshot_ids):
             print(f"Snapshot {last_completed} was the last snapshot. Nothing to resume.")
-            return previous_resp_sim, len(snapshot_ids)
-        print(f"Resuming after snapshot {last_completed}, starting at snapshot {snapshot_ids[next_idx]}")
-        return previous_resp_sim, next_idx
+            return previous_resp_sim, len(snapshot_ids), last_good
+        if last_completed is None:
+            print(f"Resuming with nothing yet completed, starting at snapshot {snapshot_ids[next_idx]}")
+        else:
+            print(f"Resuming after snapshot {last_completed}, starting at snapshot {snapshot_ids[next_idx]}")
+        return previous_resp_sim, next_idx, last_good
 
     def _ensure_merger_columns(self):
         """Ensure merger tree columns (scale radius, host, distance) are computed.

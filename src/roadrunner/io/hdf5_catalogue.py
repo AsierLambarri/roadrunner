@@ -111,6 +111,13 @@ class HDF5CatalogueWriter:
 
             snap_grp.attrs["time"] = float(time)
 
+            # C03: this snapshot's group may already hold data from a
+            # crashed, partially-completed prior attempt (a retry after
+            # resume reprocesses the same snapshot_id from scratch) --
+            # clear each dataset first, matching the _del_existing idiom
+            # write_header/write_finalize already use, so a retry doesn't
+            # crash on h5py's "name already exists".
+            self._del_existing(snap_grp, "galaxy_properties")
             if not properties_df.empty:
                 ds = snap_grp.create_dataset(
                     "galaxy_properties",
@@ -119,6 +126,7 @@ class HDF5CatalogueWriter:
                 )
                 ds.attrs["Snapshot"] = int(snapshot_id)
 
+            self._del_existing(snap_grp, "riley_criterion")
             if not dynstate_df.empty:
                 ds = snap_grp.create_dataset(
                     "riley_criterion",
@@ -127,6 +135,12 @@ class HDF5CatalogueWriter:
                 )
                 ds.attrs["Snapshot"] = int(snapshot_id)
 
+            # Delete the whole subgroup, not just per-galaxy names: a
+            # retry's satellites_map can have a different galaxy-ID set
+            # than a partial prior attempt, so per-name deletion could
+            # leave stale entries behind.
+            if "satellite_relations" in snap_grp:
+                del snap_grp["satellite_relations"]
             sat_grp = snap_grp.require_group("satellite_relations")
             for gal_id, sats in satellites_map.items():
                 arr = np.asarray(list(sats), dtype=GALAXY_ID)

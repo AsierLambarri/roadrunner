@@ -281,3 +281,102 @@ class TestAssemblyTracker:
         assert result[1] == {10}
         # But galaxy 2 still has its own infall list
         assert result[2] == {20}
+
+
+class TestAssemblyTrackerRecovery:
+    """C02: `_last_snapshot` must not advance on a partial failure, and a
+    `_cheap_snapshot()` reference must survive later updates untouched."""
+
+    def test_last_snapshot_not_advanced_on_partial_failure(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        original_update = tracker._update
+        calls = {"n": 0}
+
+        def failing_update(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("simulated mid-update failure")
+            return original_update(*args, **kwargs)
+
+        tracker._update = failing_update
+        with pytest.raises(RuntimeError, match="simulated mid-update failure"):
+            tracker.update(
+                snapshot_id=0,
+                assignment_map={1: {10, 20}},
+                birth_map={1: {10, 20}},
+                satellites_map={},
+            )
+        assert tracker._last_snapshot == -1  # unchanged: the update never completed
+
+        # A retry of the SAME snapshot_id must actually run, not be skipped.
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={1: {10, 20}},
+            birth_map={1: {10, 20}},
+            satellites_map={},
+        )
+        assert tracker._last_snapshot == 0
+        assert tracker.current()[1] == {10, 20}
+
+    def test_pass1_erase_after_union_precedence(self):
+        # Regression for the `current | added - removed` operator-
+        # precedence bug: `-` binds tighter than `|`, so an unparenthesized
+        # rewrite would silently drop this erasure.
+        tracker = AssemblyTracker(n_sat_history=2)
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={1: {10, 20}},
+            birth_map={1: {10, 20}},
+            satellites_map={},
+        )
+        assert tracker.current()[1] == {10, 20}
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={1: {10, 20}},
+            birth_map={1: {10}},
+            satellites_map={},
+        )
+        assert tracker.current()[1] == {10}
+
+    def test_cheap_snapshot_infall_lists_unaffected_by_later_update(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={1: {10, 20, 30}, 2: {30}},
+            birth_map={1: {10, 20}, 2: {30}},
+            satellites_map={1: {2}},
+        )
+        ref = tracker._cheap_snapshot()
+        captured_1 = set(ref["infall_lists"][1])
+
+        # snapshot 1 erases 20 from galaxy 1 (Pass 1) and drives accretion
+        # for galaxy 2 via the satellite link (Pass 2) -- both passes
+        # mutate `_infall_lists`, so both must be covered.
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={1: {10, 20, 30}, 2: {30}},
+            birth_map={1: {10}, 2: {30}},
+            satellites_map={1: {2}},
+        )
+        assert ref["infall_lists"][1] == captured_1
+
+    def test_cheap_snapshot_frozen_unaffected_by_later_freeze(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        tracker.update(
+            snapshot_id=0,
+            assignment_map={1: {10}, 2: {20}},
+            birth_map={1: {10}, 2: {20}},
+            satellites_map={},
+        )
+        ref = tracker._cheap_snapshot()
+        captured_frozen = set(ref["frozen"])
+        assert 1 not in captured_frozen
+        tracker.update(
+            snapshot_id=1,
+            assignment_map={1: {10}, 2: {20}},
+            birth_map={1: {10}, 2: {20}},
+            satellites_map={},
+            freeze_galaxies=[1],
+        )
+        assert ref["frozen"] == captured_frozen
+        assert 1 not in ref["frozen"]

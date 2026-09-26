@@ -397,7 +397,7 @@ class TestAccretionPipeline:
             return real_save(path, data, *a, **k)
 
         monkeypatch.setattr(ap_mod, "save_checkpoint", spy_save)
-        pipeline._save_error_checkpoint((0, None, {}), [0])
+        pipeline._save_error_checkpoint((0, None, {}, None, None), [0])
 
         assert seen["during"] is not before
         assert signal_mod.getsignal(signal_mod.SIGINT) is before
@@ -414,3 +414,198 @@ class TestAccretionPipeline:
         pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
         with pytest.raises(RestartError, match="corrupt or unreadable"):
             pipeline.run(output_dir, resume=True)
+
+    def test_writer_failure_after_tracker_mutation_then_resume(self, tmp_path):
+        """C02/C03: a failure inside a writer, AFTER orchestrator.process()
+        has already fully mutated the trackers for that snapshot, must
+        checkpoint tracker state as of the PREVIOUS snapshot -- not the
+        just-mutated one -- and a resume must cleanly reprocess the
+        failed snapshot exactly once (neither skipped nor double-run).
+        This is the exact gap the prior checkpoint mechanism had no
+        coverage for: every other failure-injection test raises before
+        orchestrator.process() ever runs."""
+        from roadrunner.io.serialization import load_checkpoint
+
+        # Relies on cat_writer.write_snapshot running BEFORE
+        # part_writer.write_snapshot within _process_snapshot (verified
+        # directly in accretion_pipeline.py) -- otherwise this wouldn't
+        # actually exercise the C03 retry path at all.
+        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_write = pipeline.part_writer.write_snapshot
+        call_count = [0]
+
+        def failing_write(snapshot_id, time, redshift, snapshot_data):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise RuntimeError("Simulated crash inside part_writer on snapshot 1")
+            return original_write(snapshot_id, time, redshift, snapshot_data)
+
+        pipeline.part_writer.write_snapshot = failing_write
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            pipeline.run(str(tmp_path))
+
+        ckpt_path = os.path.join(str(tmp_path), "checkpoint.zst")
+        ckpt = load_checkpoint(ckpt_path)
+        assert ckpt["last_snapshot"] == 0
+        # The checkpoint's tracker payload must reflect snapshot 0 only --
+        # not snapshot 1, whose orchestrator.process() already ran
+        # (fully mutating the trackers) before part_writer raised.
+        assert ckpt["assembly_tracker"]["last_snapshot"] == 0
+        assert ckpt["birth_tracker"]["last_snapshot"] == 0
+
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        resume_pipeline.run(str(tmp_path), resume=True)
+
+        # Snapshot 1 must have been fully, cleanly reprocessed: the
+        # trackers now report it as done (not stuck at 0, which is what
+        # AssemblyTracker's old set-_last_snapshot-before-_update bug
+        # would silently cause on a retry).
+        assert resume_pipeline.orchestrator.assembly_tracker._last_snapshot == 1
+        assert resume_pipeline.orchestrator.birth_tracker._last_snapshot == 1
+
+        # The retried cat_writer.write_snapshot call for snapshot 1 (which
+        # already succeeded once, before part_writer raised) must not
+        # crash on "name already exists" (C03).
+        cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
+        assert cat_reader.read_last_snapshot() == 1
+
+    def test_resume_from_initial_state_checkpoint(self, tmp_path):
+        """C02/C03: a failure on the very first snapshot must still write
+        a usable checkpoint (last_snapshot: None) instead of skipping the
+        save entirely, and resuming from it must reprocess from snapshot
+        0 -- not raise RestartError -- while preserving the original
+        run's seed rather than silently regenerating a new random one."""
+        from roadrunner.io.serialization import load_checkpoint
+
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+
+        def failing_load(path):
+            raise RuntimeError("Simulated crash on the very first snapshot")
+
+        mock_reader.load = failing_load
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            pipeline.run(str(tmp_path), seed=123)
+
+        ckpt_path = os.path.join(str(tmp_path), "checkpoint.zst")
+        assert os.path.exists(ckpt_path)
+        ckpt = load_checkpoint(ckpt_path)
+        assert ckpt["last_snapshot"] is None
+        assert ckpt["seed"] == 123
+
+        error_log_path = os.path.join(str(tmp_path), "error.log")
+        assert os.path.exists(error_log_path)
+        with open(error_log_path) as f:
+            error_log_before = f.read()
+
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        # No explicit seed=: must adopt the checkpointed one, not
+        # regenerate a fresh random one (the run()'s `if not resume:`
+        # seed-regeneration block must not fire here).
+        resume_pipeline.run(str(tmp_path), resume=True)
+
+        assert resume_pipeline._base_seed == 123
+        cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
+        assert cat_reader.read_last_snapshot() == 1  # both snapshots completed
+
+        # output_dir must not have been wiped: the crashed attempt's own
+        # error.log survives the resume (proving `elif start_idx == 0:`
+        # took the non-destructive branch, not `if not resume:`'s wipe).
+        assert os.path.exists(error_log_path)
+        with open(error_log_path) as f:
+            assert f.read().startswith(error_log_before)
+
+    def test_first_snapshot_of_resumed_run_fails_preserves_prior_checkpoint(self, tmp_path):
+        """C02: the specific gap the multi-lens design review caught in an
+        earlier draft -- if snapshot 0 succeeds, the run crashes on
+        snapshot 1 (checkpointing snapshot 0's state), and then the FIRST
+        snapshot processed during the resumed run (snapshot 1 again) ALSO
+        fails, the second checkpoint must still correctly reflect
+        snapshot 0's tracker state -- not get clobbered with a bogus
+        `last_snapshot: None` "nothing succeeded" checkpoint, which is
+        what happens if `last_good` is left hardcoded to `None` at the
+        top of a resumed run instead of being seeded from the checkpoint
+        `_try_resume` just loaded."""
+        from roadrunner.io.serialization import load_checkpoint
+
+        pipeline, _, mock_reader, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        original_load = mock_reader.load
+        call_count = [0]
+
+        def failing_load(path):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise RuntimeError("Simulated crash on snapshot 1, first attempt")
+            return original_load(path)
+
+        mock_reader.load = failing_load
+
+        with pytest.raises(RuntimeError, match="first attempt"):
+            pipeline.run(str(tmp_path))
+
+        ckpt = load_checkpoint(os.path.join(str(tmp_path), "checkpoint.zst"))
+        assert ckpt["last_snapshot"] == 0
+
+        # Resume, but make the FIRST snapshot processed this resumed run
+        # (snapshot 1 again) fail too -- e.g. inside part_writer, well
+        # after orchestrator.process() has mutated the trackers.
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+
+        def always_failing_write(snapshot_id, time, redshift, snapshot_data):
+            raise RuntimeError("Simulated crash on snapshot 1, resumed attempt")
+
+        resume_pipeline.part_writer.write_snapshot = always_failing_write
+
+        with pytest.raises(RuntimeError, match="resumed attempt"):
+            resume_pipeline.run(str(tmp_path), resume=True)
+
+        ckpt2 = load_checkpoint(os.path.join(str(tmp_path), "checkpoint.zst"))
+        assert ckpt2["last_snapshot"] == 0  # must NOT have become None
+        assert ckpt2["assembly_tracker"]["last_snapshot"] == 0
+        assert ckpt2["birth_tracker"]["last_snapshot"] == 0
+
+        # A further resume (this time letting it succeed) must still work.
+        final_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        final_pipeline.run(str(tmp_path), resume=True)
+        cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
+        assert cat_reader.read_last_snapshot() == 1
+
+    def test_first_snapshot_writer_failure_checkpoints_pristine_trackers(self, tmp_path):
+        """C02: on a fresh run, snapshot 0's orchestrator.process() mutates
+        the trackers before its writers run. If a writer then fails,
+        nothing has completed yet -- but the checkpoint must still carry
+        the untouched pre-run tracker state, not whatever snapshot 0
+        already applied. Otherwise it would claim `last_snapshot: None`
+        while its trackers say snapshot 0 is done, and a retry could
+        apply snapshot 0 twice."""
+        from roadrunner.io.serialization import load_checkpoint
+
+        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+
+        def failing_write(snapshot_id, time, redshift, snapshot_data):
+            raise RuntimeError("Simulated crash inside part_writer on snapshot 0")
+
+        pipeline.part_writer.write_snapshot = failing_write
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            pipeline.run(str(tmp_path), seed=7)
+
+        # Sanity: snapshot 0 really did mutate the live trackers first.
+        assert pipeline.orchestrator.birth_tracker._last_snapshot == 0
+        assert pipeline.orchestrator.assembly_tracker._last_snapshot == 0
+
+        ckpt = load_checkpoint(os.path.join(str(tmp_path), "checkpoint.zst"))
+        assert ckpt["last_snapshot"] is None
+        assert ckpt["birth_tracker"]["last_snapshot"] == -1
+        assert ckpt["assembly_tracker"]["last_snapshot"] == -1
+        assert len(ckpt["birth_tracker"]["active"]) == 0
+        assert len(ckpt["assembly_tracker"]["infall_lists"]) == 0
+
+        resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        resume_pipeline.run(str(tmp_path), resume=True)
+        assert resume_pipeline._base_seed == 7
+        assert resume_pipeline.orchestrator.birth_tracker._last_snapshot == 1
+        assert resume_pipeline.orchestrator.assembly_tracker._last_snapshot == 1
+        cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
+        assert cat_reader.read_last_snapshot() == 1

@@ -151,3 +151,44 @@ class TestBirthTracker:
         df1 = tracker.finalize()
         df2 = tracker2.finalize()
         assert len(df1) == len(df2)
+
+
+class TestBirthTrackerRecovery:
+    """C02: a `_cheap_snapshot()` reference must survive later updates
+    untouched, and the batched `_birth_map` merge must exactly match
+    today's per-particle `.add()` semantics."""
+
+    def test_cheap_snapshot_active_counts_unaffected_by_later_update(self):
+        tracker = BirthTracker(factor=5, window="gaussian")
+        tracker.update(t_snap=0.0, snapshot_id=0,
+                       particle_ids=np.array([1]),
+                       host_ids=np.array([10]),
+                       timescales=np.array([2.0]))
+        ref = tracker._cheap_snapshot()
+        captured_counts = dict(ref["active"][1].counts)
+
+        # galaxy 20 competes on the next snapshot -- must not retroactively
+        # appear in the earlier captured reference's counts.
+        tracker.update(t_snap=1.0, snapshot_id=1,
+                       particle_ids=np.array([1]),
+                       host_ids=np.array([20]),
+                       timescales=np.array([2.0]))
+        assert dict(ref["active"][1].counts) == captured_counts
+        assert 20 not in ref["active"][1].counts
+
+    def test_birth_map_batched_merge_matches_per_particle_add(self):
+        tracker = BirthTracker(factor=5, window="gaussian")
+        # particle 1: tau=0 -> finalizes immediately in galaxy 10 at snap 0.
+        tracker.update(t_snap=0.0, snapshot_id=0,
+                       particle_ids=np.array([1]),
+                       host_ids=np.array([10]),
+                       timescales=np.array([0.0]))
+        assert tracker._birth_map[10] == {1}
+        # particle 2: also galaxy 10, finalizes at snap 1 -- the batched
+        # merge must preserve particle 1 from the prior call's result,
+        # not overwrite it.
+        tracker.update(t_snap=1.0, snapshot_id=1,
+                       particle_ids=np.array([2]),
+                       host_ids=np.array([10]),
+                       timescales=np.array([0.0]))
+        assert tracker._birth_map[10] == {1, 2}

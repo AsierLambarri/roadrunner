@@ -179,7 +179,16 @@ class BirthTracker:
                 info = self._active[p]
                 if self.enforce_initial_hosts and host not in info.initial_hosts:
                     continue
-                info.counts[host] += delta
+                # Replace (not mutate) `info.counts` (C02): a checkpoint
+                # capture taken before this call may hold a reference to
+                # this same ActiveParticleInfo object, so it must never be
+                # edited in place. Cost is proportional to this particle's
+                # own (small, bounded) host count, not to len(self._active).
+                new_counts = defaultdict(float, info.counts)
+                new_counts[host] += delta
+                self._active[p] = ActiveParticleInfo(
+                    info.t0, info.snap0, info.tau, new_counts, info.initial_hosts,
+                )
 
         not_active = ~is_active
         if np.any(not_active):
@@ -228,6 +237,12 @@ class BirthTracker:
         ----------
         t_snap : float
         """
+        # Batch newly-finalized ids per galaxy in a local, call-scoped dict
+        # (cheap: never shared, safe to mutate freely), then merge into
+        # `self._birth_map` once per touched galaxy at the end (C02) --
+        # replaces, rather than `.add()`s into, the existing set, so a
+        # checkpoint capture from before this call stays untouched.
+        newly = defaultdict(set)
         while self._heap and self._heap[0][0] <= t_snap:
             _, p_to_finalize = heapq.heappop(self._heap)
             if p_to_finalize not in self._active:
@@ -243,7 +258,10 @@ class BirthTracker:
                 timescale=info.tau,
             )
 
-            self._birth_map[birth_id].add(p_to_finalize)
+            newly[birth_id].add(p_to_finalize)
+
+        for birth_id, new_ids in newly.items():
+            self._birth_map[birth_id] = self._birth_map.get(birth_id, set()) | new_ids
 
     def update(self, t_snap, snapshot_id, particle_ids, host_ids, timescales, weights=None):
         """Update the tracker with particles from a new snapshot.
@@ -298,6 +316,32 @@ class BirthTracker:
             birth_map.setdefault(info.leader_host, set()).add(p)
         return birth_map
 
+    def _cheap_snapshot(self):
+        """Cheap, checkpoint-safe reference capture (C02).
+
+        O(n_active + n_finalized_so_far's container size), not a
+        recursive deep copy: safe to call every snapshot because
+        ``_add_update_particles``/``_finalize_particles`` never mutate an
+        existing ``ActiveParticleInfo``/``_birth_map[g]`` in place, only
+        ever replace them wholesale.
+
+        Returns
+        -------
+        ref : dict
+            Pass to :meth:`_serialize` to get a checkpoint-write-safe,
+            fully independent form (only worth doing at actual
+            checkpoint-write time, not every snapshot).
+        """
+        return {
+            "active": dict(self._active),
+            "finalized": dict(self._finalized),
+            "heap": list(self._heap),
+            "birth_map": dict(self._birth_map),
+            "factor": self.factor,
+            "last_snapshot": self._last_snapshot,
+            "enforce_initial_hosts": self.enforce_initial_hosts,
+        }
+
     def _get_state(self):
         """Serialise the tracker state for checkpointing.
 
@@ -305,14 +349,34 @@ class BirthTracker:
         -------
         state : dict
         """
+        return self._serialize(self._cheap_snapshot())
+
+    @staticmethod
+    def _serialize(ref):
+        """Convert a :meth:`_cheap_snapshot` reference into a fully
+        independent, plain-container form safe for pickling/disk
+        checkpointing.
+
+        This is the O(total elements) conversion -- call only at actual
+        checkpoint-write time (i.e. on failure), not every snapshot.
+
+        Parameters
+        ----------
+        ref : dict
+            Output of :meth:`_cheap_snapshot`.
+
+        Returns
+        -------
+        state : dict
+        """
         return {
-            "active": dict(self._active),
-            "finalized": dict(self._finalized),
-            "heap": list(self._heap),
-            "birth_map": {k: list(v) for k, v in self._birth_map.items()},
-            "factor": self.factor,
-            "last_snapshot": self._last_snapshot,
-            "enforce_initial_hosts": self.enforce_initial_hosts,
+            "active": ref["active"],
+            "finalized": ref["finalized"],
+            "heap": ref["heap"],
+            "birth_map": {k: list(v) for k, v in ref["birth_map"].items()},
+            "factor": ref["factor"],
+            "last_snapshot": ref["last_snapshot"],
+            "enforce_initial_hosts": ref["enforce_initial_hosts"],
         }
 
     def _set_state(self, state):
