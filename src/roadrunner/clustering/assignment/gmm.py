@@ -193,6 +193,8 @@ class XGMMAssigner:
         One of ``'gmm'``, ``'bgmm'``, or ``'svi-bgmm'``.
     use_bgmm_priors : bool, default=True
         Use fitted parameters from the previous snapshot as BGMM priors.
+        Halos without them (first snapshot, newborns, or with this off)
+        take their own pre-fit estimate as the prior reference.
     mass_weighting : bool, default=False
         Weight each particle by its current mass in the fits, instead
         of counting particles. Weights are normalised per fitted group
@@ -547,9 +549,10 @@ class XGMMAssigner:
                         init_params="kmeans++",
                     )
                     prior_kwargs = self._build_prior_kwargs(
-                        group_subtrees, csc_b, scaler, n_comp, gp_idx, w)
-                    # Unweighted fits pass no weights: the BGMM's
-                    # data-derived default priors then keep np.cov.
+                        group_subtrees, csc_b, scaler, n_comp, gp_idx, w,
+                        nk, covs)
+                    # Unweighted fits pass no weights: bitwise the
+                    # unweighted path.
                     fit_kwargs = {"point_weights": w} if self.mass_weighting else {}
                     gmm = self.mixture_class(
                         **init_kwargs, **prior_kwargs, **run_kwargs
@@ -596,11 +599,16 @@ class XGMMAssigner:
         return params, post_prob, nonz
 
     def _build_prior_kwargs(self, group_subtrees, csc_b, scaler, n_comp,
-                            gp_idx, w):
-        """Build BGMM prior kwargs from the previous snapshot's fitted parameters.
+                            gp_idx, w, nk_init, covs_init):
+        """Build explicit BGMM prior kwargs for every component of a group.
 
-        Returns an empty dict when the method is not BGMM, priors
-        are disabled, or there is no previous snapshot data.
+        Each component's prior is built from a reference count and
+        covariance: its previous snapshot's fitted parameters when
+        available (and ``use_bgmm_priors``), otherwise its own pre-fit
+        estimate (first snapshot, newborn halos). The covariance prior
+        scales the reference by the halo's growth, measured with its
+        pre-fit expected count, and by ``priors.covariance_scale(n)``.
+        Returns an empty dict when the method is not BGMM.
 
         Parameters
         ----------
@@ -618,6 +626,11 @@ class XGMMAssigner:
             Fit weights of the group's particles: each component's bound
             count is the total weight of its bound particles, in the
             same units as the fitted ``count``.
+        nk_init : ndarray of shape (n_comp,)
+            Pre-fit expected counts (the initial responsibilities,
+            carrying the previous snapshot's, summed with weights ``w``).
+        covs_init : ndarray
+            Pre-fit covariances in scaled coordinates (``cov_type`` shape).
 
         Returns
         -------
@@ -625,9 +638,9 @@ class XGMMAssigner:
             BGMM constructor kwargs (``mean_prior``, ``covariance_prior``,
             ``weight_concentration_prior``, etc.).
         """
-        if (self.method != "bgmm" or not self.use_bgmm_priors
-                or self.previous_parameters is None):
+        if self.method != "bgmm":
             return {}
+        history = self.previous_parameters if self.use_bgmm_priors else None
 
         md = math_dtype()
         n_f = self.particle_coords.shape[1]
@@ -662,20 +675,21 @@ class XGMMAssigner:
                 ]).astype(md, copy=False)
                 mp[i] = (pos6 - scaler.mean_) * s
 
-            p = self.previous_parameters.get(sid_int)
-            if p is None:
-                continue
-
-            nk_n1 = max(p.get("count", 1.0), 1.0)
             n_b = max(bound_counts[i], 1.0)
+            n_now = max(float(nk_init[i]), 1.0)
+            p = history.get(sid_int) if history else None
+            if p is not None:
+                nk_n1 = max(p.get("count", 1.0), 1.0)
+                ref_vars = prior.degrade_covariance(p["covariance"], n_f)
+            else:
+                # No history: the halo's own pre-fit estimate is the
+                # reference (its scaled variances back in natural units).
+                nk_n1 = n_now
+                ref_vars = prior.degrade_covariance(np.asarray(covs_init[i]), n_f) / s**2
 
             wp[i] = prior.weight_concentration_prior(nk_n1, n_b, n_comp)
             pp[i] = prior.mean_precision_prior(nk_n1, n_b)
-            cp[i] = prior.covariance_prior(
-                prior.degrade_covariance(p["covariance"], n_f),
-                nk_n1, n_b,
-                s, dof, self.cov_type,
-            )
+            cp[i] = prior.covariance_prior(ref_vars, nk_n1, n_now, s, dof, self.cov_type)
 
         return dict(
             mean_prior=np.asarray(mp, dtype=md),

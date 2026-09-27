@@ -41,7 +41,10 @@ UNRESOLVED_GROUP_RATIO = 10        # N < RATIO * n_comp triggers flat assignment
 
 # ── BGMM priors ────────────────────────────────────────────────────
 PRIOR_DOF_OFFSET = 4               # degrees_of_freedom = n_features + offset
-PRIOR_COVARIANCE_SCALE = 0.04      # scale factor for covariance_prior
+PRIOR_COVARIANCE_SCALE_SMALL = 1.0 # covariance_prior scale f(n) at n <= PRIOR_SCALE_N_SMALL
+PRIOR_COVARIANCE_SCALE_LARGE = 0.7 # f(n) at n >= PRIOR_SCALE_N_LARGE, flat beyond
+PRIOR_SCALE_N_SMALL = 10.0         # f(n) is linear in n between these two counts
+PRIOR_SCALE_N_LARGE = 300.0
 PRIOR_WEIGHT_DIVISOR = 5.0         # nk / divisor → weight_concentration_prior
 PRIOR_MEAN_DIVISOR = 10.0          # nk / divisor → mean_precision_prior
 
@@ -136,7 +139,10 @@ __all__ = [
     "SSC_ALPHA",
     "UNRESOLVED_GROUP_RATIO",
     "PRIOR_DOF_OFFSET",
-    "PRIOR_COVARIANCE_SCALE",
+    "PRIOR_COVARIANCE_SCALE_SMALL",
+    "PRIOR_COVARIANCE_SCALE_LARGE",
+    "PRIOR_SCALE_N_SMALL",
+    "PRIOR_SCALE_N_LARGE",
     "PRIOR_WEIGHT_DIVISOR",
     "PRIOR_MEAN_DIVISOR",
     "CORESET_ALPHA_BASE",

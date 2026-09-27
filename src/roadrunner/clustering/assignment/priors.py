@@ -20,7 +20,10 @@ per-component prior kwargs from previous snapshot parameters.
 import numpy as np
 
 from roadrunner._defaults import (
-    PRIOR_COVARIANCE_SCALE,
+    PRIOR_COVARIANCE_SCALE_LARGE,
+    PRIOR_COVARIANCE_SCALE_SMALL,
+    PRIOR_SCALE_N_LARGE,
+    PRIOR_SCALE_N_SMALL,
     PRIOR_WEIGHT_DIVISOR,
     PRIOR_MEAN_DIVISOR,
 )
@@ -50,20 +53,48 @@ def degrade_covariance(cov, n_features):
         return np.diag(cov)
 
 
-def covariance_prior(diag_vars, nk_n1, n_bound, s, dof, cov_type):
+def covariance_scale(n):
+    """Covariance-prior scale ``f(n)`` for a halo with ``n`` particles.
+
+    Linear in ``n`` from ``PRIOR_COVARIANCE_SCALE_SMALL`` at
+    ``PRIOR_SCALE_N_SMALL`` to ``PRIOR_COVARIANCE_SCALE_LARGE`` at
+    ``PRIOR_SCALE_N_LARGE``, and flat outside that range. The prior's
+    ``nu0`` pseudo-points are centred on ``f(n)`` times the reference
+    variance, so a small scale shrinks small halos, whose own particles
+    barely outweigh the pseudo-points.
+
+    Parameters
+    ----------
+    n : float
+        The halo's (expected) particle count, in the fit's weight units.
+
+    Returns
+    -------
+    scale : float
+    """
+    t = (n - PRIOR_SCALE_N_SMALL) / (PRIOR_SCALE_N_LARGE - PRIOR_SCALE_N_SMALL)
+    t = min(max(t, 0.0), 1.0)
+    return (PRIOR_COVARIANCE_SCALE_SMALL
+            + (PRIOR_COVARIANCE_SCALE_LARGE - PRIOR_COVARIANCE_SCALE_SMALL) * t)
+
+
+def covariance_prior(diag_vars, nk_n1, n_current, s, dof, cov_type):
     """Scale per-dimension variances to the BGMM-expected covariance shape.
 
-    The scaling factor is ``dof * n_bound / nk_n1 * PRIOR_COVARIANCE_SCALE``,
-    and the result is reshaped according to ``cov_type``.
+    The scaling factor is ``dof * n_current / nk_n1 * covariance_scale(n_current)``:
+    the halo's growth since the reference times ``f(n)``. The result is
+    reshaped according to ``cov_type``.
 
     Parameters
     ----------
     diag_vars : ndarray of shape (n_features,)
-        Per-dimension variances in natural coordinates.
+        Reference per-dimension variances in natural coordinates.
     nk_n1 : float
-        Previous snapshot effective count.
-    n_bound : float
-        Current snapshot bound count.
+        Reference effective count (previous snapshot's fitted count).
+    n_current : float
+        The halo's expected count this snapshot: its pre-fit
+        responsibilities summed, so particles shared with a neighbour
+        count only fractionally.
     s : ndarray of shape (n_features,)
         StandardScaler ``scale_`` values.
     dof : float
@@ -76,7 +107,7 @@ def covariance_prior(diag_vars, nk_n1, n_bound, s, dof, cov_type):
     cov_prior : float or ndarray
         Covariance prior in the shape expected by the BGMM constructor.
     """
-    scale = dof * n_bound / max(nk_n1, 1.0) * PRIOR_COVARIANCE_SCALE
+    scale = dof * n_current / max(nk_n1, 1.0) * covariance_scale(n_current)
     scaled = diag_vars * s**2 * scale
 
     if cov_type == "spherical":
