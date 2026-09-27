@@ -125,6 +125,53 @@ class TestSelectionAPI:
                 path, sphere=((0, 0, 0), 1.0), bbox=((0, 0, 0), (1, 1, 1)))
 
 
+class TestMaskedReads:
+    """H03: a filtered load reads only the selected rows (block-wise for
+    HDF5, member by member for NPZ) and must equal a full load masked
+    afterwards, field by field and in file order."""
+
+    @pytest.mark.parametrize("ids", [
+        IDS[[1, 3, 4]],                              # subset
+        IDS[::-1],                                   # everything, shuffled
+        IDS[[2, 2, 5]],                              # duplicates
+        np.array([7, 8], dtype=np.uint64),           # absent only
+        np.array([7, 104, 109], dtype=np.uint64),    # absent and present
+        np.array([], dtype=np.uint64),               # empty selection
+    ])
+    def test_filtered_load_equals_masked_full_load(self, reader_and_path, ids):
+        reader, path = reader_and_path
+        full = reader.load(path)
+        sub = reader.load(path, particle_indices=ids)
+        keep = np.isin(full.index, ids)
+        assert sub.fields == full.fields
+        for f in full.fields:
+            np.testing.assert_array_equal(getattr(sub, f), getattr(full, f)[keep], err_msg=f)
+        assert (sub.redshift, sub.time) == (full.redshift, full.time)
+
+    @pytest.mark.parametrize("chunks", [None, (4,)])
+    def test_hdf5_block_edges(self, tmp_path, monkeypatch, chunks):
+        # Blocks of 3 rows (rounded up to the chunk length when chunked)
+        # split the 10 rows unevenly; skipped blocks must not shift rows.
+        from roadrunner.readers import particle_data_reader as pdr
+        monkeypatch.setattr(pdr, "READ_BLOCK_ROWS", 3)
+        path = os.path.join(str(tmp_path), "blocks.hdf5")
+        data = np.column_stack([np.arange(N, dtype=float), -np.arange(N, dtype=float)])
+        with h5py.File(path, "w") as hf:
+            hf.create_dataset("x", data=data, chunks=None if chunks is None else chunks + (2,))
+        rng = np.random.default_rng(0)
+        with h5py.File(path, "r") as hf:
+            for mask in (np.zeros(N, bool), np.ones(N, bool), rng.random(N) < 0.3,
+                         np.r_[np.zeros(9, bool), True]):
+                np.testing.assert_array_equal(pdr._read_rows(hf["x"], mask), data[mask])
+
+    def test_hdf5_select_indices_block_wise(self, tmp_path, monkeypatch):
+        from roadrunner.readers import particle_data_reader as pdr
+        monkeypatch.setattr(pdr, "READ_BLOCK_ROWS", 3)
+        reader, path = _make_reader(tmp_path, ParticleDataSnapshotReader)
+        ids = reader.select_indices(path, sphere=((4.5, 0.0, 0.0), 2.6))
+        assert set(ids.tolist()) == {102, 103, 104, 105, 106, 107}
+
+
 class TestEntrySelection:
     @staticmethod
     def _patch(monkeypatch, reader_mock):

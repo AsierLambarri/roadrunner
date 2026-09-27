@@ -5,6 +5,12 @@ Supports two NPZ formats:
   ``coords`` keys with 6-D coordinates.
 - Generic format: expects a 2-D array with columns
   ``[id, mass, x, y, z, vx, vy, vz, metallicity]``.
+
+With a particle-ID filter, the mock format loads ``indices`` first and
+then one field at a time, masking each as soon as it is loaded and
+converting only the selected rows, so peak memory is one full field
+plus the selection. (A compressed ``.npz`` member can only be read
+whole; the generic single-array format is masked right after loading.)
 """
 
 from __future__ import annotations
@@ -119,39 +125,43 @@ class NPZSnapshotReader:
         """
         redshift, time = self._snap_info[file_path]
         raw = np.load(file_path, allow_pickle=False)
+        ids = (particle_indices if particle_indices is not None
+               else self._particle_filter)
 
         extra = {}
         dt = data_dtype()
         if self._mock_sim:
             indices = raw["indices"]
-            masses = np.asarray(raw["masses"], dtype=dt)
-            coords = np.asarray(raw["coords"], dtype=dt)
+            mask = None if ids is None else np.isin(indices, ids)
+
+            def take(key):
+                # Each member is loaded, masked and released in turn.
+                values = raw[key]
+                return values if mask is None else values[mask]
+
+            if mask is not None:
+                indices = indices[mask]
+            masses = np.asarray(take("masses"), dtype=dt)
+            coords = np.asarray(take("coords"), dtype=dt)
             positions = coords[:, :3]
             velocities = coords[:, 3:6]
             if "metallicity" in raw:
-                extra["metallicity"] = np.asarray(raw["metallicity"], dtype=dt)
+                extra["metallicity"] = np.asarray(take("metallicity"), dtype=dt)
         else:
             arr = raw if isinstance(raw, np.ndarray) else raw[raw.files[0]]
             indices = arr[:, 0].astype(SIM_ID)
+            if ids is not None:
+                mask = np.isin(indices, ids)
+                arr, indices = arr[mask], indices[mask]
             masses = arr[:, 1].astype(dt)
             positions = arr[:, 2:5].astype(dt)
             velocities = arr[:, 5:8].astype(dt)
             if arr.shape[1] >= 9:
                 extra["metallicity"] = arr[:, 8].astype(dt)
 
-        snap = SnapshotData(
+        return SnapshotData(
             index=indices, mass=masses, position=positions,
             velocity=velocities, redshift=redshift, time=time,
             assign_fields=self._assign_fields,
             **extra,
-        )
-        ids = (particle_indices if particle_indices is not None
-               else self._particle_filter)
-        if ids is None:
-            return snap
-        mask = np.isin(snap.index, ids)
-        fields = {f: getattr(snap, f)[mask] for f in snap.fields}
-        return SnapshotData(
-            redshift=snap.redshift, time=snap.time,
-            assign_fields=snap._assign_fields, **fields,
         )

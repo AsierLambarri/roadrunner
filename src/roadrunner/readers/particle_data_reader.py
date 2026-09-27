@@ -7,6 +7,11 @@ The HDF5 file must contain:
 
 Extra datasets (e.g. ``data/metallicity``) are optional and are
 loaded as-is (stored in raw physical units).
+
+With a particle-ID filter, only ``data/indices`` is read in full; every
+other dataset is read in contiguous row blocks and masked block by
+block, so peak memory is one block plus the selected rows rather than
+the whole snapshot.
 """
 
 from __future__ import annotations
@@ -17,6 +22,44 @@ import numpy as np
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
+
+READ_BLOCK_ROWS = 1 << 20   # rows per block for masked reads
+
+
+def _block_rows(ds):
+    """Block length for masked reads: ``READ_BLOCK_ROWS`` rounded up to
+    a whole number of the dataset's HDF5 chunks (when chunked)."""
+    chunk = ds.chunks[0] if ds.chunks else 1
+    return -(-READ_BLOCK_ROWS // chunk) * chunk
+
+
+def _read_rows(ds, mask):
+    """Read the rows of an HDF5 dataset selected by a boolean mask.
+
+    Walks the dataset in contiguous row blocks and keeps the selected
+    rows of each, in file order; blocks without a selected row are not
+    read at all. Sequential block reads avoid the cost of scattered
+    HDF5 fancy indexing.
+
+    Parameters
+    ----------
+    ds : h5py.Dataset
+    mask : ndarray of bool, shape (ds.shape[0],)
+
+    Returns
+    -------
+    rows : ndarray of shape (mask.sum(),) + ds.shape[1:]
+    """
+    out = np.empty((int(np.count_nonzero(mask)),) + ds.shape[1:], dtype=ds.dtype)
+    block = _block_rows(ds)
+    pos = 0
+    for start in range(0, ds.shape[0], block):
+        m = mask[start:start + block]
+        k = int(np.count_nonzero(m))
+        if k:
+            out[pos:pos + k] = ds[start:start + block][m]
+            pos += k
+    return out
 
 
 class ParticleDataSnapshotReader:
@@ -86,14 +129,21 @@ class ParticleDataSnapshotReader:
         indices : ndarray of uint64
             Simulation IDs of the particles inside the region.
         """
-        saved = self._particle_filter
-        self._particle_filter = None
-        try:
-            snap = self.load(file_path)
-        finally:
-            self._particle_filter = saved
-        mask = self._region_mask(snap.position, sphere=sphere, bbox=bbox)
-        return snap.index[mask]
+        # Only indices and positions are needed: read positions block by
+        # block and keep the region mask, ignoring any particle filter.
+        with h5py.File(file_path, "r") as hf:
+            indices = hf["data/indices"][:]
+            mean = hf["data/scaler/mean"][:]
+            scale = hf["data/scaler/scale"][:]
+            ds = hf["data/positions"]
+            inv_s = 1.0 / scale
+            dt = data_dtype()
+            inside = np.empty(indices.size, dtype=bool)
+            block = _block_rows(ds)
+            for start in range(0, ds.shape[0], block):
+                pos = (ds[start:start + block] * inv_s[:3] + mean[:3]).astype(dt)
+                inside[start:start + block] = self._region_mask(pos, sphere=sphere, bbox=bbox)
+        return indices[inside]
 
     def load(self, file_path: str, particle_indices=None) -> SnapshotData:
         """Load a snapshot from an HDF5 file.
@@ -111,11 +161,20 @@ class ParticleDataSnapshotReader:
         snap_data : SnapshotData
             Loaded particle data.
         """
+        ids = (particle_indices if particle_indices is not None
+               else self._particle_filter)
         with h5py.File(file_path, "r") as hf:
             indices = hf["data/indices"][:]
-            masses = hf["data/masses"][:]
-            pos_scaled = hf["data/positions"][:]
-            vel_scaled = hf["data/velocities"][:]
+            mask = None if ids is None else np.isin(indices, ids)
+            if mask is not None:
+                indices = indices[mask]
+
+            def read(ds):
+                return ds[:] if mask is None else _read_rows(ds, mask)
+
+            masses = read(hf["data/masses"])
+            pos_scaled = read(hf["data/positions"])
+            vel_scaled = read(hf["data/velocities"])
             mean = hf["data/scaler/mean"][:]
             scale = hf["data/scaler/scale"][:]
             redshift = hf["header"].attrs["redshift"]
@@ -125,7 +184,7 @@ class ParticleDataSnapshotReader:
             for name in self._extra_fields:
                 key = f"data/{name}"
                 if key in hf:
-                    extra[name] = hf[key][:]
+                    extra[name] = read(hf[key])
 
         inv_s = 1.0 / scale
         dt = data_dtype()
@@ -136,19 +195,9 @@ class ParticleDataSnapshotReader:
             if np.issubdtype(np.asanyarray(extra[name]).dtype, np.floating):
                 extra[name] = np.asarray(extra[name], dtype=dt)
 
-        snap = SnapshotData(
+        return SnapshotData(
             index=indices, mass=masses, position=positions,
             velocity=velocities, redshift=redshift, time=time,
             assign_fields=self._assign_fields,
             **extra,
-        )
-        ids = (particle_indices if particle_indices is not None
-               else self._particle_filter)
-        if ids is None:
-            return snap
-        mask = np.isin(snap.index, ids)
-        fields = {f: getattr(snap, f)[mask] for f in snap.fields}
-        return SnapshotData(
-            redshift=snap.redshift, time=snap.time,
-            assign_fields=snap._assign_fields, **fields,
         )
