@@ -19,6 +19,7 @@ from roadrunner.physics.constants import (
     RILEY_WI
 )
 from roadrunner.physics.halo_model import physical_length_factor
+from roadrunner.threads import tree_workers
 
 
 def _local_velocity_dispersion(pos, vel, nmin=10):
@@ -51,7 +52,7 @@ def _local_velocity_dispersion(pos, vel, nmin=10):
     data[:, 3:] = vel / wi
 
     tree = KDTree(data)
-    _, idx = tree.query(data, k=n, workers=-1)
+    _, idx = tree.query(data, k=n, workers=tree_workers())
 
     local_disp = np.empty(N, dtype=math_dtype())
     for k in range(N):

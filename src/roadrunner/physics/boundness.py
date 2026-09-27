@@ -20,6 +20,7 @@ from roadrunner._defaults import LOCAL_IDX, math_dtype
 
 from roadrunner.physics.constants import G_KM
 from roadrunner.physics.potentials import KeplerPotential
+from roadrunner.threads import tree_workers
 
 
 def compute_halo_bound_particles(
@@ -66,7 +67,7 @@ def compute_halo_bound_particles(
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
-                halo.xcen, r=search_factor * halo.virial_radius, workers=-1
+                halo.xcen, r=search_factor * halo.virial_radius, workers=tree_workers()
             )
         )
         if local.size == 0:

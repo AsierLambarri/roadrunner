@@ -20,6 +20,8 @@ from collections import defaultdict
 import numpy as np
 from scipy.spatial import KDTree
 
+from roadrunner.threads import tree_workers
+
 
 class UnionFind:
     """Union-Find (disjoint set) data structure with path compression.
@@ -121,7 +123,7 @@ def overlapping_groups(positions, radii, linking_length_func=None):
         # then re-check the exact criterion on candidates only.
         tree = KDTree(positions)
         max_r = radii.max()
-        neighbor_lists = tree.query_ball_point(positions, r=radii + max_r, workers=-1)
+        neighbor_lists = tree.query_ball_point(positions, r=radii + max_r, workers=tree_workers())
         links = []
         for i, neighbors in enumerate(neighbor_lists):
             for j in neighbors:

@@ -14,6 +14,7 @@ from roadrunner._defaults import GALAXY_ID, UNBOUND
 
 from roadrunner.physics.constants import G_KM, DUFFY_A, DUFFY_B, DUFFY_C, DUFFY_PIVOT_MASS, MIN_DISTANCE
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
+from roadrunner.threads import tree_workers
 
 
 def nfw_cmz_relation_duffy(M: float | np.ndarray, z: float) -> float | np.ndarray:
@@ -243,7 +244,7 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             host_id = sub_ids[i]
 
             idx_neighbors = np.asarray(
-                tree.query_ball_point(pos_i, r=rvir_factor * rvirs[i], workers=10)
+                tree.query_ball_point(pos_i, r=rvir_factor * rvirs[i], workers=tree_workers())
             )
             idx_neighbors = idx_neighbors[idx_neighbors != i]
             if idx_neighbors.size == 0:
@@ -321,7 +322,7 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
             vel_i = velocities[i]
 
             idx_neighbors = np.asarray(
-                tree.query_ball_point(pos_i, r=rvir_factor * rvirs[i], workers=10)
+                tree.query_ball_point(pos_i, r=rvir_factor * rvirs[i], workers=tree_workers())
             )
 
             idx_neighbors = idx_neighbors[idx_neighbors != i]

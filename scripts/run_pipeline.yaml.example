@@ -93,6 +93,7 @@ enforce_initial_hosts: true     # Keep particles in initial host galaxy
 # ── Output ───────────────────────────────────────────────────────────────────
 output_dir: ./output
 resume: false                   # Resume from checkpoint (true/false)
+# threads: 8                   # Thread budget for numba, BLAS and KDTree queries (default: all cores)
 save_particles: true            # Save particle positions/velocities to HDF5
 save_assignment: true           # Save soft assignment data to HDF5
 float_atol: 1e-4                # Floating-point precision for saved data

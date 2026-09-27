@@ -16,6 +16,7 @@ import pandas as pd
 from roadrunner._exceptions import RestartError
 from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
 from roadrunner.randomness import consumer_seed, random_seed
+from roadrunner.threads import thread_budget
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_particles import HDF5ParticleWriter
@@ -532,6 +533,7 @@ class AccretionPipeline:
                 # attribute does not mass-weight.
                 "mass_weighting": getattr(self.orchestrator.assigner, "mass_weighting", False),
                 "seed": self._base_seed,
+                "threads": thread_budget(),
             },
             merger_tree_df=self.merger_handler.dataframe,
             equivalence_df=self.equiv_table.dataframe,

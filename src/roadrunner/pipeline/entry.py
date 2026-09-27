@@ -7,6 +7,7 @@ import os
 import warnings
 
 from roadrunner._defaults import precision
+from roadrunner.threads import threads
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.snapshot import SnapshotReader
 from roadrunner.readers.npz_reader import NPZSnapshotReader
@@ -27,17 +28,17 @@ from roadrunner.postprocessing.tracking.birth import BirthTracker
 from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
 
 
-def _with_precision_scope(func):
-    """Run ``func`` inside the precision scope from its ``RunConfig``."""
+def _with_run_scope(func):
+    """Run ``func`` inside the precision and thread scopes from its ``RunConfig``."""
     @functools.wraps(func)
     def wrapper(config, *args, **kwargs):
         cfg = config if isinstance(config, RunConfig) else RunConfig(**config)
-        with precision(data=cfg.data_precision, math=cfg.math_precision):
+        with precision(data=cfg.data_precision, math=cfg.math_precision), threads(cfg.threads):
             return func(config, *args, **kwargs)
     return wrapper
 
 
-@_with_precision_scope
+@_with_run_scope
 def run_accretion_history(config: RunConfig | dict) -> None:
     """Run the full accretion history pipeline from a configuration.
 
