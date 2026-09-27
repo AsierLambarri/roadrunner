@@ -52,6 +52,7 @@ npz_mock_sim: false             # true for roadrunner mock NPZ format
 # ── Assigner ──────────────────────────────────────────────────────────────────
 assignment_method: gmm          # gmm (standard EM) or bgmm (variational Bayesian)
 use_bgmm_priors: true           # Use previous snapshot as BGMM prior (bgmm only)
+mass_weighting: false           # Weight particles by current mass in the fits (gmm/bgmm)
 data_precision: single          # data precision: single, double
 math_precision: single          # single, double
 cov_type: full                  # full, diagonal, spherical

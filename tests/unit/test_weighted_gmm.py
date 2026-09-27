@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 
 from roadrunner._defaults import precision
-from roadrunner.mixture.weighted_gmm import WeightedGaussianMixture, _check_counts
+from roadrunner.mixture.weighted_gmm import (
+    WeightedGaussianMixture,
+    _check_counts,
+    _estimate_gaussian_parameters,
+)
 
 
 @pytest.fixture
@@ -114,32 +118,36 @@ class TestInPlaceMutation:
         assert np.array_equal(counts, counts_copy)
 
 
-class TestCheckCountsSum:
-    def test_wrong_sum_raises(self):
-        counts = np.array([10.0, 10.0, 10.0])  # sums to 30, not 100
-        with pytest.raises(ValueError, match="must sum to"):
-            _check_counts(counts, n_components=3, n_samples=100)
-
-    def test_sum_equal_to_n_samples_passes(self):
-        counts = np.array([33.0, 33.0, 34.0])  # sums to 100
-        result = _check_counts(counts, n_components=3, n_samples=100)
-        assert np.array_equal(result, counts)
-
-    def test_float32_rounding_within_rtol_passes(self):
-        # Relative drift of 2.5e-5 on a large N: within rtol=1e-3, should not raise.
-        n_samples = 200_000
-        counts = np.full(4, n_samples / 4, dtype=np.float32)
-        counts[0] += 5.0
-        _check_counts(counts, n_components=4, n_samples=n_samples)
-
-    def test_sum_far_outside_rtol_raises(self):
-        n_samples = 200_000
-        counts = np.full(4, n_samples / 4, dtype=np.float32)
-        counts[0] += n_samples * 0.1  # relative drift 0.1, well outside rtol=1e-3
-        with pytest.raises(ValueError, match="must sum to"):
-            _check_counts(counts, n_components=4, n_samples=n_samples)
+class TestCheckCounts:
+    def test_any_total_passes(self):
+        # Only the proportions set the initial weights; a weighted fit's
+        # counts are in weight units, so the total is not checked.
+        counts = np.array([10.0, 10.0, 10.0])
+        assert np.array_equal(_check_counts(counts, n_components=3), counts)
 
     def test_negative_counts_raises(self):
         counts = np.array([-1.0, 50.0, 51.0])
         with pytest.raises(ValueError, match="non-negative"):
-            _check_counts(counts, n_components=3, n_samples=100)
+            _check_counts(counts, n_components=3)
+
+
+class TestPointWeights:
+    def test_integer_weights_equal_replicated_data(self, blob_data_3c):
+        X = blob_data_3c.astype(np.float64)
+        rng = np.random.default_rng(3)
+        w = rng.integers(1, 4, X.shape[0]).astype(np.float64)
+        rep = np.repeat(np.arange(X.shape[0]), w.astype(int))
+        resp0 = np.zeros((X.shape[0], 3))
+        resp0[np.arange(X.shape[0]), np.repeat([0, 1, 2], X.shape[0] // 3)] = 1.0
+        nk, xk, sk = _estimate_gaussian_parameters(X, resp0, w, "full", 1e-6)
+
+        def fit(data, pw):
+            return WeightedGaussianMixture(
+                n_components=3, counts_init=nk, means_init=xk, covariance_init=sk,
+                max_iter=15, tol=0.0,
+            ).fit(data, point_weights=pw)
+
+        weighted, replicated = fit(X, w), fit(X[rep], None)
+        for attr in ("means_", "covariances_", "weights_", "lower_bounds_"):
+            np.testing.assert_allclose(getattr(weighted, attr), getattr(replicated, attr),
+                                       rtol=1e-9, atol=0, err_msg=attr)

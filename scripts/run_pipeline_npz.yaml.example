@@ -43,6 +43,7 @@ assign_fields: [position, velocity]     # default if omitted
 # ── Assigner ──────────────────────────────────────────────────────────────────
 assignment_method: bgmm          # XGMM method: gmm (standard EM) or bgmm (variational Bayesian)
 use_bgmm_priors: true           # Use previous snapshot as BGMM prior (bgmm only)
+mass_weighting: false           # Weight particles by current mass in the fits (gmm/bgmm)
 data_precision: single          # data precision: single, double
 math_precision: single          # XGMM math precision: single, double
 cov_type: full                 # Covariance type: full, diagonal, spherical

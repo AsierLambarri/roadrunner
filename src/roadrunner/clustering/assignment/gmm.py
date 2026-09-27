@@ -193,6 +193,17 @@ class XGMMAssigner:
         One of ``'gmm'``, ``'bgmm'``, or ``'svi-bgmm'``.
     use_bgmm_priors : bool, default=True
         Use fitted parameters from the previous snapshot as BGMM priors.
+    mass_weighting : bool, default=False
+        Weight each particle by its current mass in the fits, instead
+        of counting particles. Weights are normalised per fitted group
+        to sum to the group's effective sample size
+        ``(sum m)**2 / sum m**2`` (see :meth:`_group_weights`), so the
+        mass unit drops out, the BGMM priors compete with the data's
+        actual information, and equal masses reproduce the unweighted
+        fit exactly. Fitted ``count`` values, and the bound counts of
+        the BGMM temporal priors, are then in these weighted units.
+        Requires ``particle_masses`` in :meth:`assign`. Not supported
+        by ``'svi-bgmm'``.
     **mixture_kwargs
         Additional keyword arguments forwarded to the mixture
         constructor (e.g. ``n_svi_iters``, ``batch_size`` for SVI).
@@ -201,7 +212,7 @@ class XGMMAssigner:
     def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
                  min_particles=10, reg_covar=1e-6, prior_type="",
                  verbose=1, method="gmm", use_bgmm_priors=True,
-                 **mixture_kwargs):
+                 mass_weighting=False, **mixture_kwargs):
         self.cov_type = cov_type
         self.max_iter = max_iter
         self.tol = tol
@@ -215,6 +226,9 @@ class XGMMAssigner:
         self.previous_parameters = None
         self.parameters: dict[int, dict] = {}
         self.use_bgmm_priors = use_bgmm_priors
+        if mass_weighting and method == "svi-bgmm":
+            raise ValueError("mass_weighting is not supported with method='svi-bgmm'")
+        self.mass_weighting = mass_weighting
         self.mixture_kwargs = mixture_kwargs
 
     def assign(self, halos, particle_coords, newborn_indices, groups,
@@ -237,6 +251,8 @@ class XGMMAssigner:
             stage; each group gets an independent child seed spawned
             from it, in the order ``groups`` is given (already sorted
             largest-first by the caller). ``None`` uses OS entropy.
+            ``particle_masses`` (ndarray of shape (n_particles,)):
+            current particle masses, required with ``mass_weighting``.
 
         Returns
         -------
@@ -254,6 +270,9 @@ class XGMMAssigner:
         self.particle_coords = particle_coords
         self.newborn_indices = newborn_indices
         self.previous_resp = kwargs.get("previous_resp", {})
+        self.particle_masses = kwargs.get("particle_masses")
+        if self.mass_weighting and self.particle_masses is None:
+            raise ValueError("mass_weighting requires particle_masses")
 
         N = particle_coords.shape[0]
         self.particles_df = pd.DataFrame(
@@ -348,6 +367,31 @@ class XGMMAssigner:
 
         return params
 
+    def _group_weights(self, gp_idx):
+        """Per-particle fit weights of one group, in the ambient math precision.
+
+        Ones when counting particles. With ``mass_weighting``,
+        ``w_i = m_i * sum(m) / sum(m**2)``: proportional to mass and
+        summing to the group's effective sample size
+        ``ESS = sum(m)**2 / sum(m**2) <= N_g``, the number of equal-mass
+        particles carrying the same information. Computed in float64
+        via the mean-1 masses ``u``, so equal masses give exactly 1.
+
+        Parameters
+        ----------
+        gp_idx : ndarray of int64
+            Particle indices of the group.
+
+        Returns
+        -------
+        weights : ndarray of shape (len(gp_idx),)
+        """
+        if not self.mass_weighting:
+            return np.ones(gp_idx.size, dtype=math_dtype())
+        u = np.asarray(self.particle_masses[gp_idx], dtype=np.float64)
+        u /= u.mean()
+        return (u / np.mean(u * u)).astype(math_dtype(), copy=False)
+
     def _fit_single(self, gp_idx, group_subtrees):
         """Fit a single-component group (only one halo).
 
@@ -372,7 +416,7 @@ class XGMMAssigner:
 
         nk, means, covs = _estimate_gaussian_parameters(
             self.particle_coords[gp_idx], post_prob,
-            np.ones(gp_idx.size, dtype=math_dtype()),
+            self._group_weights(gp_idx),
             self.cov_type, reg_covar=self.reg_covar,
         )
         sid = int(group_subtrees[0])
@@ -420,7 +464,7 @@ class XGMMAssigner:
 
         nk, means, covs = _estimate_gaussian_parameters(
             self.particle_coords[gp_idx], post_prob,
-            np.ones(gp_idx.size, dtype=math_dtype()),
+            self._group_weights(gp_idx),
             self.cov_type, reg_covar=self.reg_covar,
         )
         total_count = float(nk.sum())
@@ -491,8 +535,9 @@ class XGMMAssigner:
                     scaler = StandardScaler()
                     coords = scaler.fit_transform(
                         self.particle_coords[gp_idx].astype(md, copy=False))
+                    w = self._group_weights(gp_idx)
                     prior, nk, means, covs, cov_t = self._estimate_initial_params(
-                        coords, csc_b)
+                        coords, csc_b, w)
                     init_kwargs = dict(
                         n_components=n_comp,
                         counts_init=np.asarray(nk, dtype=md),
@@ -502,10 +547,13 @@ class XGMMAssigner:
                         init_params="kmeans++",
                     )
                     prior_kwargs = self._build_prior_kwargs(
-                        group_subtrees, csc_b, scaler, n_comp)
+                        group_subtrees, csc_b, scaler, n_comp, gp_idx, w)
+                    # Unweighted fits pass no weights: the BGMM's
+                    # data-derived default priors then keep np.cov.
+                    fit_kwargs = {"point_weights": w} if self.mass_weighting else {}
                     gmm = self.mixture_class(
                         **init_kwargs, **prior_kwargs, **run_kwargs
-                    ).fit(coords, latent_prior=prior)
+                    ).fit(coords, latent_prior=prior, **fit_kwargs)
                 break
             except (np.linalg.LinAlgError, ValueError):
                 if math_name == "double":
@@ -528,7 +576,7 @@ class XGMMAssigner:
         }
         natural = self.get_parameters_natural(scaled, scaler)
 
-        nk_after = post_prob.sum(axis=0)
+        nk_after = (post_prob * w[:, None]).sum(axis=0)
 
         params = {}
         for i, sid in enumerate(group_subtrees):
@@ -547,7 +595,8 @@ class XGMMAssigner:
 
         return params, post_prob, nonz
 
-    def _build_prior_kwargs(self, group_subtrees, csc_b, scaler, n_comp):
+    def _build_prior_kwargs(self, group_subtrees, csc_b, scaler, n_comp,
+                            gp_idx, w):
         """Build BGMM prior kwargs from the previous snapshot's fitted parameters.
 
         Returns an empty dict when the method is not BGMM, priors
@@ -563,6 +612,12 @@ class XGMMAssigner:
             Fitted scaler for this group.
         n_comp : int
             Number of components.
+        gp_idx : ndarray of int64
+            Particle indices of the group (sorted).
+        w : ndarray of shape (len(gp_idx),)
+            Fit weights of the group's particles: each component's bound
+            count is the total weight of its bound particles, in the
+            same units as the fitted ``count``.
 
         Returns
         -------
@@ -588,8 +643,10 @@ class XGMMAssigner:
         wp = np.full(n_comp, 1.0 / n_comp, dtype=md)
         pp = np.ones(n_comp, dtype=md)
 
-        bound_counts = np.array([len(c) for c in csc_b.column_indices],
-                                dtype=md)
+        bound_counts = np.array(
+            [w[np.searchsorted(gp_idx, c)].sum(dtype=np.float64)
+             for c in csc_b.column_indices],
+            dtype=md)
 
         tid_to_idx = dict(zip(self.ensemble.sub_tree_ids,
                               range(len(self.ensemble.sub_tree_ids))))
@@ -628,7 +685,7 @@ class XGMMAssigner:
             degrees_of_freedom_prior=dof,
         )
 
-    def _estimate_initial_params(self, coords, csc_b):
+    def _estimate_initial_params(self, coords, csc_b, w):
         """Estimate initial mixture parameters from boundness and previous responsibilities.
 
         Merges the boundness matrix with previous responsibilities
@@ -641,6 +698,8 @@ class XGMMAssigner:
             Scaled phase-space coordinates.
         csc_b : SparseCSC
             Boundness matrix.
+        w : ndarray of shape (n_particles,)
+            Fit weights of the particles.
 
         Returns
         -------
@@ -655,7 +714,6 @@ class XGMMAssigner:
         cov_t : str
             Covariance type.
         """
-        n_samples = coords.shape[0]
         n_components = len(csc_b.column_indices)
 
         prior = row_l1_normalize(
@@ -677,8 +735,7 @@ class XGMMAssigner:
             resp = prior
 
         nk, means_init, covs_init = _estimate_gaussian_parameters(
-            coords, resp, np.ones(n_samples, dtype=math_dtype()),
-            self.cov_type, reg_covar=self.reg_covar,
+            coords, resp, w, self.cov_type, reg_covar=self.reg_covar,
         )
 
         return prior, nk, means_init, covs_init, self.cov_type

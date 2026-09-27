@@ -6,10 +6,10 @@
 #
 # Implements a full variational-Bayes treatment of Gaussian mixtures
 # with a Normal-Wishart prior over (mu, Sigma) and a Dirichlet prior
-# over the mixing weights.  Assumes unit point weights, and supports a
-# ``latent_prior`` used as per-point soft-label evidence, and the
-# ``counts_init`` / ``means_init`` / ``covariance_init`` initialisation
-# convention.
+# over the mixing weights.  Supports per-point weights (a point of
+# weight w counts w times), a ``latent_prior`` used as per-point
+# soft-label evidence, and the ``counts_init`` / ``means_init`` /
+# ``covariance_init`` initialisation convention.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez
@@ -40,6 +40,35 @@ from .weighted_gmm import (
     _check_covariances,
     _estimate_gaussian_parameters
 )
+
+
+def _frequency_weighted_covariance(X, point_weights, cov_type):
+    """Sample covariance of the data with point n repeated ``w_n`` times.
+
+    ``sum_n w_n d_n d_n^T / (sum_n w_n - 1)`` with ``d_n = x_n - x_w``
+    and ``x_w`` the weighted mean: what ``np.cov`` / ``np.var(ddof=1)``
+    return on the replicated data. Computed in float64, like those.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples, n_features)
+    point_weights : ndarray of shape (n_samples,)
+    cov_type : {'full', 'diag', 'diagonal', 'spherical'}
+
+    Returns
+    -------
+    cov : ndarray of shape (n_features, n_features), (n_features,) or ()
+        float64.
+    """
+    x = np.asarray(X, dtype=np.float64)
+    w = np.asarray(point_weights, dtype=np.float64)
+    diff = x - np.average(x, axis=0, weights=w)
+    wdiff = w[:, None] * diff
+    denom = w.sum() - 1.0
+    if cov_type == "full":
+        return wdiff.T @ diff / denom
+    var = np.einsum("ij,ij->j", wdiff, diff) / denom
+    return var if cov_type in ("diag", "diagonal") else var.mean()
 
 
 def _log_dirichlet_norm(alpha):
@@ -308,7 +337,7 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         else:
             self.precisions_ = self.precisions_cholesky_**2        
             
-    def _check_parameters(self, X):
+    def _check_parameters(self, X, point_weights=None):
         """Check the values and shapes of weights, covariances, and means.
 
         Validates user-provided initialisation parameters and
@@ -318,8 +347,11 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         Parameters
         ----------
         X : ndarray of shape (n_samples, n_features)
+        point_weights : ndarray of shape (n_samples,) or None, optional
+            Per-point weights of a weighted fit, used by the
+            data-derived default mean and covariance priors.
         """
-        n_samples, n_features = X.shape
+        _, n_features = X.shape
         if self.cov_type not in ["spherical", "diagonal", "full"]:
             raise ValueError("provided covariance type is not valid.")
 
@@ -327,7 +359,6 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             self.counts_init = _check_counts(
                 self.counts_init,
                 self.n_components,
-                n_samples
             )
         if self.means_init is not None:
             self.means_init = _check_means(
@@ -344,9 +375,9 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             )
 
         self._check_weights_prior(X)
-        self._check_means_prior(X)
+        self._check_means_prior(X, point_weights)
         self._check_precisions_prior(n_features)
-        self._check_covariance_prior(X)
+        self._check_covariance_prior(X, point_weights)
 
     def _check_weights_prior(self, X):
         """Check and initialise the weight concentration prior.
@@ -384,21 +415,27 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             self.weight_concentration_prior_ = alpha
 
 
-    def _check_means_prior(self, X):
+    def _check_means_prior(self, X, point_weights=None):
         """Check and initialise the mean priors.
 
         If ``mean_prior`` is ``None``, sets it to the global data mean
-        (tiled for each component).  Also validates the ``mean_precision_prior``.
+        (weighted when ``point_weights`` is given), tiled for each
+        component.  Also validates the ``mean_precision_prior``.
 
         Parameters
         ----------
         X : ndarray of shape (n_samples, n_features)
+        point_weights : ndarray of shape (n_samples,) or None, optional
         """
         _, n_features = X.shape
         
         if self.mean_prior is None:
+            data_mean = (
+                X.mean(axis=0) if point_weights is None
+                else np.average(X, axis=0, weights=point_weights)
+            )
             mean_prior = np.tile(
-                X.mean(axis=0).astype(X.dtype, copy=False),
+                data_mean.astype(X.dtype, copy=False),
                 (self.n_components, 1)
             )
         else:
@@ -447,15 +484,17 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self.mean_prior_ = mean_prior        
         self.mean_precision_prior_ = beta
         
-    def _check_covariance_prior(self, X):
+    def _check_covariance_prior(self, X, point_weights=None):
         """Check and initialise the covariance prior.
 
         If ``covariance_prior`` is ``None``, estimates it from the
-        sample covariance of ``X``.  Handles all ``cov_type`` shapes.
+        sample covariance of ``X`` (frequency-weighted when
+        ``point_weights`` is given).  Handles all ``cov_type`` shapes.
 
         Parameters
         ----------
         X : ndarray of shape (n_samples, n_features)
+        point_weights : ndarray of shape (n_samples,) or None, optional
         """
         _, n_features = X.shape        
         
@@ -463,12 +502,18 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             # np.cov/np.var always compute in float64: cast back to the
             # working precision (prior arrays are small).
             md = X.dtype
-            base = {
-                "full": lambda x: np.cov(x.T).astype(md, copy=False),
-                "diag": lambda x: np.var(x, axis=0, ddof=1).astype(md, copy=False),
-                "diagonal": lambda x: np.var(x, axis=0, ddof=1).astype(md, copy=False),
-                "spherical": lambda x: np.asarray(np.var(x, axis=0, ddof=1).mean(), dtype=md),
-            }[self.cov_type](X)
+            if point_weights is None:
+                base = {
+                    "full": lambda x: np.cov(x.T).astype(md, copy=False),
+                    "diag": lambda x: np.var(x, axis=0, ddof=1).astype(md, copy=False),
+                    "diagonal": lambda x: np.var(x, axis=0, ddof=1).astype(md, copy=False),
+                    "spherical": lambda x: np.asarray(np.var(x, axis=0, ddof=1).mean(), dtype=md),
+                }[self.cov_type](X)
+            else:
+                base = np.asarray(
+                    _frequency_weighted_covariance(X, point_weights, self.cov_type),
+                    dtype=md,
+                )
     
             if self.cov_type == "full":
                 cov_prior = np.tile(
@@ -549,25 +594,23 @@ class WeightedBayesianGaussianMixture(BaseMixture):
             or self.covariance_init is None
         )
         
-    def _initialize_complete(self, X, resp, _):
+    def _initialize_complete(self, X, resp, point_weights):
         """Initialise Gaussian mixture parameters from a complete set of responsibilities.
 
-        When ``resp`` is provided, estimates nk, xk, sk and delegates
-        to the ``_estimate_*`` methods.  User-provided inits take
-        precedence.
+        When ``resp`` is provided, estimates the weighted nk, xk, sk
+        and delegates to the ``_estimate_*`` methods.  User-provided
+        inits take precedence.
 
         Parameters
         ----------
         X : ndarray of shape (n_samples, n_features)
         resp : ndarray of shape (n_samples, n_components) or None
-        _ : unused (placeholder for point_weights)
+        point_weights : ndarray of shape (n_samples,)
         """
-        n_samples, _ = X.shape
-        
         nk, xk, sk = None, None, None
         if resp is not None:
             nk, xk, sk = _estimate_gaussian_parameters(
-                X, resp, np.ones(X.shape[0], dtype=X.dtype), self.cov_type, self.reg_covar
+                X, resp, point_weights, self.cov_type, self.reg_covar
             )
 
         nk = nk if self.counts_init is None else np.asarray(self.counts_init, dtype=X.dtype)
@@ -578,14 +621,13 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         self._estimate_means(nk, xk)
         self._estimate_covariances(nk, xk, sk)
 
-    def _initialize_means(self, X, _, alpha):
+    def _initialize_means(self, X, point_weights, alpha):
         """Initializes the means of the clusters through kmeans++ algorithm and taking into account
         the provided prior's information and ordering. If means_init is provided, those are used directly.
         """
-        n_samples, n_features = X.shape
-
         if self.means_init is None:
-            means, _ = kmeans_plusplus_prior(X, self.n_components, cluster_weights=alpha, random_state=self.random_state)
+            weighted_prior = alpha * point_weights[:, None]
+            means, _ = kmeans_plusplus_prior(X, self.n_components, cluster_weights=weighted_prior, random_state=self.random_state)
         else:
             means = self.means_init
 
@@ -726,23 +768,24 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         
         self.covariances_ /= self.degrees_of_freedom_
 
-    def _m_step(self, X, resp, _):
+    def _m_step(self, X, resp, point_weights):
         """M-step: update weights, means, and covariances.
 
-        Estimates Gaussian parameters from the current responsibilities,
-        then delegates to ``_estimate_weights``, ``_estimate_means``,
-        and ``_estimate_covariances``.
+        Estimates the weighted sufficient statistics
+        ``N_k = sum_n w_n r_nk`` and the weighted mean ``x_k`` and
+        scatter ``S_k`` from the current responsibilities, then
+        delegates to ``_estimate_weights``, ``_estimate_means``, and
+        ``_estimate_covariances``: the conjugate updates are those of
+        the unweighted model with these statistics.
 
         Parameters
         ----------
         X : ndarray of shape (n_samples, n_features)
         resp : ndarray of shape (n_samples, n_components)
-        _ : unused (placeholder for point_weights)
+        point_weights : ndarray of shape (n_samples,)
         """
-        n_samples, _ = X.shape
-
         nk, xk, sk = _estimate_gaussian_parameters(
-            X, resp, np.ones(X.shape[0], dtype=X.dtype), self.cov_type, self.reg_covar
+            X, resp, point_weights, self.cov_type, self.reg_covar
         )
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
@@ -790,18 +833,23 @@ class WeightedBayesianGaussianMixture(BaseMixture):
 
         return log_gauss + 0.5 * (log_lambda - n_features / self.mean_precision_)
 
-    def _compute_lower_bound(self, log_resp, log_prob_norm, _, log_alpha):
+    def _compute_lower_bound(self, log_resp, log_prob_norm, point_weights, log_alpha):
         """Compute the variational lower bound (ELBO).
 
         Responsibility entropy plus the expected log latent prior
         ``sum_nk r_nk log(alpha_nk)``, the Dirichlet and Wishart
-        normalisations, and the mean-precision term.
+        normalisations, and the mean-precision term.  Valid right
+        after the M-step, when every term built from the sufficient
+        statistics cancels against ``-E log q(theta)``.  With point
+        weights the statistics are the weighted ones, and the two
+        per-point sums (entropy and latent prior) weight each point
+        by ``w_n``.
 
         Parameters
         ----------
         log_resp : ndarray of shape (n_samples, n_components)
         log_prob_norm : ndarray of shape (n_samples,)
-        _ : unused (placeholder for point_weights)
+        point_weights : ndarray of shape (n_samples,)
         log_alpha : ndarray of shape (n_samples, n_components)
             Log latent prior (rows scaled to sum to ``n_components``).
 
@@ -824,6 +872,7 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         ).sum()
 
         resp = np.exp(log_resp)
+        resp *= point_weights[:, None]   # point n counts w_n times
 
         return (
             - entropy_sum(log_resp, resp)
@@ -834,23 +883,3 @@ class WeightedBayesianGaussianMixture(BaseMixture):
         )
 
 
-
-        
-    def fit(self, X, latent_prior=None):
-        """Fit the Bayesian GMM to the data.
-
-        Parameters
-        ----------
-        X : ndarray of shape (n_samples, n_features)
-        latent_prior : SparseCSC or None, optional
-            Per-point-per-component responsibility prior.
-
-        Returns
-        -------
-        self : WeightedBayesianGaussianMixture
-        """
-        return super().fit(
-            X, 
-            latent_prior=latent_prior,
-            point_weights=np.ones(X.shape[0], dtype=np.asanyarray(X).dtype)
-        )

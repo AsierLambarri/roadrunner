@@ -38,14 +38,17 @@ from .base import BaseMixture
 
 
 
-def _check_counts(counts, n_components, n_samples):
+def _check_counts(counts, n_components):
     """Validate that *counts* has the expected shape and non-negative values.
+
+    The total is not checked: only the proportions set the initial
+    mixing weights, and a weighted fit's counts are in units of the
+    point weights rather than of points.
 
     Parameters
     ----------
     counts : ndarray or None
     n_components : int
-    n_samples : int
 
     Returns
     -------
@@ -63,8 +66,6 @@ def _check_counts(counts, n_components, n_samples):
 
     if np.any(counts < 0):
         raise ValueError("counts must be non-negative")
-    if not np.isclose(counts.sum(), n_samples, rtol=1e-3):
-        raise ValueError(f"counts must sum to {n_samples}, got {counts.sum()}")
 
     return counts
 
@@ -467,7 +468,7 @@ class WeightedGaussianMixture(BaseMixture):
         """
         pass
 
-    def _check_parameters(self, X):
+    def _check_parameters(self, X, point_weights=None):
         """Check the values and shapes of weights, covariances, and means.
 
         Validates user-provided ``counts_init``, ``means_init``, and
@@ -478,8 +479,10 @@ class WeightedGaussianMixture(BaseMixture):
         ----------
         X : ndarray of shape (n_samples, n_features)
             Training data (used only for shape inference).
+        point_weights : ndarray or None, optional
+            Unused: the GMM has no data-derived priors.
         """
-        n_samples, n_features = X.shape
+        _, n_features = X.shape
         if self.cov_type not in ["spherical", "diagonal", "full"]:
             raise ValueError("provided covariance type is not valid.")
 
@@ -487,7 +490,6 @@ class WeightedGaussianMixture(BaseMixture):
             self.counts_init = _check_counts(
                 self.counts_init,
                 self.n_components,
-                n_samples
             )
         if self.means_init is not None:
             self.means_init = _check_means(

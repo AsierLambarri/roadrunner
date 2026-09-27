@@ -116,6 +116,7 @@ def process_snapshot(
     result = assigner.assign(
         ensemble, particle_coords, newborn, groups,
         previous_resp=previous_resp, seed=current_seed("fit"),
+        particle_masses=snap_data.mass,
     )
 
     result.particle_df = compute_particle_dynamical_timescales(

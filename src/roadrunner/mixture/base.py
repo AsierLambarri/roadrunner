@@ -153,13 +153,17 @@ class BaseMixture(abc.ABC):
         """
 
     @abc.abstractmethod
-    def _check_parameters(self, X):
+    def _check_parameters(self, X, point_weights=None):
         """Validate and initialise all prior/hyper-parameters.
 
         Parameters
         ----------
         X : ndarray of shape (n_samples, n_features)
             Training data (used to infer default priors).
+        point_weights : ndarray of shape (n_samples,) or None, optional
+            The caller's (validated) per-point weights, or ``None`` if
+            the fit is unweighted. Data-derived default priors use the
+            weighted statistics when given.
         """
 
     @abc.abstractmethod
@@ -417,7 +421,10 @@ class BaseMixture(abc.ABC):
         X : ndarray of shape (n_samples, n_features)
             Training data.
         point_weights : ndarray of shape (n_samples,), optional
-            Per-point weights (defaults to uniform).
+            Per-point weights (defaults to uniform). A point of weight
+            ``w_n`` counts ``w_n`` times: the fit on integer weights
+            equals the unweighted fit on the data with each point
+            repeated ``w_n`` times.
         latent_prior : ndarray of shape (n_samples, n_components), optional
             Per-point, per-component prior weights (``None`` = flat).
 
@@ -434,8 +441,9 @@ class BaseMixture(abc.ABC):
         if self.verbose > 0:
             print(f"Initialization 0; n_samples={n_samples}, n_features={n_features}, n_components={self.n_components}")
 
-        self._check_parameters(X)
+        weights_given = point_weights is not None
         point_weights, alpha, log_alpha = self._initialize_weights_and_prior(X, point_weights, latent_prior)
+        self._check_parameters(X, point_weights if weights_given else None)
         self._initialize_parameters(X, point_weights, alpha)
 
         t1 = time()

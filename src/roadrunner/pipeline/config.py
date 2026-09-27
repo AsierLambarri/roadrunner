@@ -38,6 +38,7 @@ class RunConfig:
 
     assignment_method: str = "gmm"
     use_bgmm_priors: bool = True
+    mass_weighting: bool = False
     data_precision: str = "single"
     math_precision: str = "single"
     svi_iters: int = 1000

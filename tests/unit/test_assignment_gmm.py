@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from roadrunner._mcf_types import ParticleAssigner
 from roadrunner.clustering.assignment.gmm import (
@@ -199,3 +200,77 @@ class TestXGMMAssigner:
         assigner = XGMMAssigner(verbose=0)
         result = assigner.assign([h1, h2], coords, np.array([], dtype=np.uint64), groups)
         assert result.particle_df is not None
+
+
+def _two_halo_group(n=200):
+    """Two halos jointly fit as one resolved group, with separated clusters."""
+    rng = np.random.default_rng(11)
+    coords = np.vstack([
+        rng.normal(-10.0, 3.0, (n // 2, 6)),
+        rng.normal(10.0, 3.0, (n // 2, 6)),
+    ])
+    h1 = _make_halo([-10.0, -10.0, -10.0], sub_tree_id=1)
+    h2 = _make_halo([10.0, 10.0, 10.0], sub_tree_id=2)
+    for h, rows in ((h1, np.arange(0, 3 * n // 4)), (h2, np.arange(n // 4, n))):
+        h.set_boundness(rows.astype(np.uint64),
+                        np.linspace(0.1, 0.9, rows.size, dtype=np.float32),
+                        np.full(rows.size, 0.1, dtype=np.float32))
+    return [h1, h2], coords
+
+
+class TestMassWeighting:
+    def test_group_weights(self):
+        masses = np.array([1.0, 2.0, 3.0, 6.0])
+        gp_idx = np.array([0, 2, 3])
+        number = XGMMAssigner(verbose=0)
+        np.testing.assert_array_equal(number._group_weights(gp_idx), np.ones(3))
+        mass = XGMMAssigner(verbose=0, mass_weighting=True)
+        mass.particle_masses = masses
+        w = mass._group_weights(gp_idx)
+        m = masses[gp_idx]
+        np.testing.assert_allclose(w, m * m.sum() / (m ** 2).sum(), rtol=1e-6)
+        assert np.isclose(w.sum(), m.sum() ** 2 / (m ** 2).sum())    # the ESS
+        mass.particle_masses = np.full(4, 3.7e4)
+        np.testing.assert_array_equal(mass._group_weights(gp_idx), np.ones(3))
+
+    def test_single_halo_mean_is_mass_weighted(self):
+        halos, coords = _setup_mock_halos(n_halos=1, n_particles=60)
+        masses = np.random.default_rng(2).uniform(1.0, 10.0, 60)
+        result = XGMMAssigner(verbose=0, mass_weighting=True).assign(
+            halos, coords, np.array([], dtype=np.uint64), [[0]], particle_masses=masses,
+        )
+        params = result.fitted_parameters[1]
+        np.testing.assert_allclose(params["mean"], np.average(coords, axis=0, weights=masses),
+                                   rtol=1e-5)
+        assert np.isclose(params["count"], masses.sum() ** 2 / (masses ** 2).sum(), rtol=1e-5)
+
+    @pytest.mark.parametrize("method", ["gmm", "bgmm"])
+    def test_equal_masses_reproduce_counting(self, method):
+        halos, coords = _two_halo_group()
+        masses = np.full(coords.shape[0], 1e4)
+        results = [
+            XGMMAssigner(verbose=0, method=method, mass_weighting=mw).assign(
+                halos, coords, np.array([], dtype=np.uint64), [[0, 1]],
+                seed=3, particle_masses=masses,
+            )
+            for mw in (False, True)
+        ]
+        number, mass = (r.responsibilities for r in results)
+        # GMM: bitwise. BGMM: the data-derived default priors take the
+        # weighted formula instead of np.cov, equal up to rounding.
+        rtol = 0 if method == "gmm" else 1e-4
+        for a, b in zip(number.column_values, mass.column_values):
+            np.testing.assert_allclose(a, b, rtol=rtol, atol=1e-6 if rtol else 0)
+        np.testing.assert_array_equal(results[0].particle_df["Sub_tree_id"],
+                                      results[1].particle_df["Sub_tree_id"])
+
+    def test_requires_masses(self):
+        halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
+        with pytest.raises(ValueError, match="particle_masses"):
+            XGMMAssigner(verbose=0, mass_weighting=True).assign(
+                halos, coords, np.array([], dtype=np.uint64), [[0], [1]],
+            )
+
+    def test_rejected_with_svi(self):
+        with pytest.raises(ValueError, match="svi-bgmm"):
+            XGMMAssigner(method="svi-bgmm", mass_weighting=True)

@@ -296,3 +296,99 @@ class TestSklearnParity:
         skl_lbs = np.asarray(skl.lower_bounds_)
         assert np.allclose(ours_lbs, skl_lbs, rtol=1e-10, atol=1e-12)
         assert np.isclose(ours.lower_bound_, skl.lower_bound_, rtol=1e-10, atol=1e-12)
+
+
+# ── point weights (a point of weight w counts w times) ──────────────
+
+_EXPLICIT_PRIORS = {
+    "full": dict(covariance_prior=np.eye(2)),
+    "diagonal": dict(covariance_prior=np.ones(2)),
+    "spherical": dict(covariance_prior=1.0),
+}
+
+
+@pytest.fixture
+def weighted_blobs():
+    rng = np.random.default_rng(7)
+    sizes = [150, 120, 100]
+    X = np.vstack([
+        rng.normal([-2, 0], [1.0, 0.3], (sizes[0], 2)),
+        rng.normal([2, 0], [0.3, 1.0], (sizes[1], 2)),
+        rng.normal([0, 3], 0.5, (sizes[2], 2)),
+    ])
+    w = rng.integers(1, 4, X.shape[0]).astype(np.float64)
+    prior = rng.gamma(1.0, size=(X.shape[0], 3)) + 1e-3
+    prior *= rng.random((X.shape[0], 3)) > 0.3
+    prior[prior.sum(axis=1) == 0, 0] = 1.0
+    resp0 = np.zeros((X.shape[0], 3))
+    resp0[np.arange(X.shape[0]), np.repeat([0, 1, 2], sizes)] = 1.0
+    return X, w, prior, resp0
+
+
+def _fit_bgmm(X, prior, resp0, cov_type, point_weights=None, explicit_priors=True):
+    """BGMM from a fixed complete init (the weighted statistics of resp0),
+    run for a fixed number of iterations."""
+    w_init = np.ones(X.shape[0]) if point_weights is None else point_weights
+    nk, xk, sk = _estimate_gaussian_parameters(X, resp0, w_init, cov_type, 1e-6)
+    priors = dict(
+        weight_concentration_prior=0.5, mean_prior=np.zeros(2),
+        mean_precision_prior=2.0, degrees_of_freedom_prior=3.0,
+        **_EXPLICIT_PRIORS[cov_type],
+    ) if explicit_priors else {}
+    model = WeightedBayesianGaussianMixture(
+        n_components=3, cov_type=cov_type, counts_init=nk, means_init=xk,
+        covariance_init=sk, max_iter=25, tol=0.0, reg_covar=1e-6, **priors,
+    )
+    return model.fit(X, point_weights=point_weights, latent_prior=prior)
+
+
+def _assert_same_fit(a, b, rtol):
+    for attr in ("means_", "covariances_", "weights_", "weight_concentration_",
+                 "mean_precision_", "degrees_of_freedom_", "lower_bounds_"):
+        np.testing.assert_allclose(getattr(a, attr), getattr(b, attr), rtol=rtol, atol=0,
+                                   err_msg=attr)
+
+
+class TestPointWeights:
+    @pytest.mark.parametrize("explicit_priors", [True, False])
+    @pytest.mark.parametrize("cov_type", ["full", "diagonal", "spherical"])
+    def test_integer_weights_equal_replicated_data(self, weighted_blobs, cov_type, explicit_priors):
+        # Replication identity: fit, ELBO and (without explicit priors) the
+        # data-derived default priors all match the repeated dataset.
+        X, w, prior, resp0 = weighted_blobs
+        rep = np.repeat(np.arange(X.shape[0]), w.astype(int))
+        weighted = _fit_bgmm(X, prior, resp0, cov_type, point_weights=w,
+                             explicit_priors=explicit_priors)
+        replicated = _fit_bgmm(X[rep], prior[rep], resp0[rep], cov_type,
+                               explicit_priors=explicit_priors)
+        _assert_same_fit(weighted, replicated, rtol=1e-9)
+
+    def test_zero_weight_drops_the_point(self, weighted_blobs):
+        X, w, prior, resp0 = weighted_blobs
+        w = w.copy()
+        w[::7] = 0.0
+        keep = w > 0
+        with_zeros = _fit_bgmm(X, prior, resp0, "full", point_weights=w, explicit_priors=False)
+        dropped = _fit_bgmm(X[keep], prior[keep], resp0[keep], "full",
+                            point_weights=w[keep], explicit_priors=False)
+        _assert_same_fit(with_zeros, dropped, rtol=1e-9)
+
+    @pytest.mark.parametrize("cov_type", ["full", "diagonal", "spherical"])
+    def test_unit_weights_are_bitwise_unweighted(self, weighted_blobs, cov_type):
+        X, _, prior, resp0 = weighted_blobs
+        unweighted = _fit_bgmm(X, prior, resp0, cov_type)
+        ones = _fit_bgmm(X, prior, resp0, cov_type, point_weights=np.ones(X.shape[0]))
+        _assert_same_fit(unweighted, ones, rtol=0)
+
+    @pytest.mark.parametrize("cov_type", ["full", "diagonal"])
+    def test_lower_bound_non_decreasing_with_weights(self, masked_latent_prior_data, cov_type):
+        X, prior = masked_latent_prior_data
+        w = np.random.default_rng(5).lognormal(0.0, 1.0, X.shape[0])
+        w /= w.mean()
+        bgmm = WeightedBayesianGaussianMixture(
+            n_components=3, cov_type=cov_type, random_state=0, max_iter=60, tol=0.0
+        )
+        bgmm.fit(X, point_weights=w, latent_prior=prior.copy())
+        lbs = np.asarray(bgmm.lower_bounds_[1:])
+        slack = 1e-8 * np.maximum(np.abs(lbs[:-1]), 1.0)
+        assert np.all(np.diff(lbs) >= -slack)
