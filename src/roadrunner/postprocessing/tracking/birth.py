@@ -1,11 +1,24 @@
 """Birth-tagging tracker for newly appearing star particles.
 
-Tracks which galaxy a particle first appears in and finalises the
-association once ``factor × timescale`` snapshots have elapsed.
+A particle is born in a galaxy it is bound to when it first appears. Its
+birth host is decided from evidence accumulated over ``factor ×
+timescale`` after that first appearance: each snapshot adds
+``weight × window((t − t0) / τ)`` to every host the particle is assigned
+to (the weight is its responsibility), and when the window closes the
+host with the most evidence becomes its birth host.
+
+With ``enforce_initial_hosts`` only the hosts the particle was bound to
+at its first appearance can collect evidence: a particle that was not
+bound to a galaxy when it was born very probably does not belong there.
+A particle that first appears with a single possible host (or unbound)
+then has nothing to compete over, and is decided at once.
+
+The state is kept as NumPy arrays: active particles sorted by ID, one
+evidence row per (active particle, host), and the finalised records.
+Arrays are replaced, never edited in place, so a ``_cheap_snapshot()``
+reference stays valid across later updates (C02).
 """
 
-import heapq
-from collections import defaultdict
 from typing import NamedTuple
 
 import numpy as np
@@ -69,12 +82,11 @@ _WINDOWS = {
 
 
 class ActiveParticleInfo:
-    """Per-particle accumulation record for unfinalised particles.
+    """Legacy per-particle accumulation record.
 
-    Holds the five primary fields; ``__slots__`` fixes the attribute set,
-    so instances store values in a compact array instead of a per-instance
-    dict. The birth leader (``leader_host``/``leader_score``) is derived
-    on demand as the argmax of ``counts`` rather than stored.
+    Checkpoints written before the array-based tracker pickle these
+    objects; the class stays so they still load, and ``_set_state``
+    converts them to arrays.
     """
 
     __slots__ = ("t0", "snap0", "tau", "counts", "initial_hosts")
@@ -86,23 +98,9 @@ class ActiveParticleInfo:
         self.counts = counts
         self.initial_hosts = initial_hosts
 
-    @property
-    def leader_host(self):
-        """Host with the highest accumulated window score."""
-        return GALAXY_ID(max(self.counts.items(), key=lambda kv: kv[1])[0])
-
-    @property
-    def leader_score(self):
-        """Highest accumulated window score (ambient math precision)."""
-        return math_dtype()(max(self.counts.values()))
-
 
 class FinalizedInfo(NamedTuple):
-    """Per-particle finalized record.
-
-    Tuple footprint (~100 B) instead of a per-particle dict (~350 B).
-    The particle index is the ``_finalized`` dict key, not stored here.
-    """
+    """Legacy per-particle finalised record (see :class:`ActiveParticleInfo`)."""
 
     birth_id: GALAXY_ID
     birth_time: np.float32
@@ -110,21 +108,40 @@ class FinalizedInfo(NamedTuple):
     timescale: np.float32
 
 
+def _member(sorted_ids, ids):
+    """Boolean mask of which ``ids`` occur in the sorted array ``sorted_ids``."""
+    if sorted_ids.size == 0:
+        return np.zeros(ids.shape, dtype=bool)
+    pos = np.searchsorted(sorted_ids, ids)
+    pos[pos == sorted_ids.size] = 0
+    return sorted_ids[pos] == ids
+
+
+def _group_starts(sorted_keys):
+    """Index of the first element of each run of equal values."""
+    if sorted_keys.size == 0:
+        return np.empty(0, dtype=np.intp)
+    return np.flatnonzero(np.r_[True, sorted_keys[1:] != sorted_keys[:-1]])
+
+
+def _empty_evidence():
+    return {"pid": np.empty(0, SIM_ID), "host": np.empty(0, GALAXY_ID),
+            "score": np.empty(0, np.float64), "initial": np.empty(0, bool),
+            "rank": np.empty(0, np.int64)}
+
+
 class BirthTracker:
     """Tracks the birth host of each star particle across snapshots.
-
-    A particle is considered "born" in the galaxy where it first appears.
-    The tracker uses a window function to accumulate evidence over
-    ``factor × timescale`` snapshots before finalising the assignment.
 
     Parameters
     ----------
     factor : float, default=5
-        Multiplier on the particle's dynamical timescale to decide
-        when to finalise.
+        The accumulation window lasts ``factor × timescale`` after the
+        particle's first appearance.
     enforce_initial_hosts : bool, default=False
-        If ``True``, only the hosts seen at the particle's first
-        appearance are considered during the accumulation window.
+        If ``True``, only the hosts the particle was bound to at its first
+        appearance collect evidence, and a particle with a single such
+        host (or unbound) is decided immediately.
     window : str, default='gaussian'
         Window function: ``"gaussian"``, ``"cauchy"``, or ``"exp"``.
     """
@@ -133,155 +150,212 @@ class BirthTracker:
         if window not in _WINDOWS:
             raise ValueError(f"Unknown window: {window}. Choose from {list(_WINDOWS)}")
         self._window_fn = _WINDOWS[window]
-        self._heap = []
-        self._active = {}
-        self._finalized = {}
-        self._birth_map = defaultdict(set)
         self.factor = factor - 0.001
         self._last_snapshot = -1
         self.enforce_initial_hosts = enforce_initial_hosts
+        md = math_dtype()
+        # Active particles, sorted by ID.
+        self._act = {"pid": np.empty(0, SIM_ID), "t0": np.empty(0, md),
+                     "snap0": np.empty(0, SNAP_ID), "tau": np.empty(0, md),
+                     "deadline": np.empty(0, md)}
+        # Evidence: one row per (active particle, host), sorted by (pid, host).
+        # ``initial`` marks hosts seen at the first appearance; ``rank`` is the
+        # insertion order, which breaks score ties (earliest host wins).
+        self._ev = _empty_evidence()
+        self._next_rank = 0
+        # Finalised particles: record chunks in finalisation order, all IDs
+        # sorted (for membership), and galaxy -> set of finalised IDs.
+        self._fin_chunks = []
+        self._fin_sorted = np.empty(0, SIM_ID)
+        self._birth_map = {}
 
-    def _add_update_particles(self, t_snap, snapshot_id, particle_ids, host_ids, timescales, weights):
-        """Update running host counts for active particles and register new ones.
+    # ── update ─────────────────────────────────────────────────────────
+    def update(self, t_snap, snapshot_id, particle_ids, host_ids, timescales, weights=None):
+        """Add one snapshot's evidence, then finalise expired windows.
 
         Parameters
         ----------
         t_snap : float
         snapshot_id : int
-        particle_ids : ndarray
-        host_ids : ndarray
+        particle_ids, host_ids : ndarray
+            One entry per (particle, host) pair; a particle may appear with
+            several hosts.
         timescales : ndarray
-        weights : ndarray
+            Per pair (the particle's timescale; the maximum over its pairs
+            is used when it first appears).
+        weights : ndarray or None, optional
+            Per pair evidence weight (e.g. the responsibility). Defaults to 1.
         """
-        finalized_keys = self._finalized.keys()
-        mask_not_finalized = ~np.isin(particle_ids, list(finalized_keys))
-        if not np.any(mask_not_finalized):
+        if snapshot_id <= self._last_snapshot:
             return
+        md = math_dtype()
+        pids = np.asarray(particle_ids).astype(SIM_ID, copy=False)
+        hosts = np.asarray(host_ids).astype(GALAXY_ID, copy=False)
+        taus = np.asarray(timescales, dtype=md)
+        ws = (np.full(pids.shape, 1.0, dtype=md) if weights is None
+              else np.asarray(weights, dtype=md))
 
-        pids = particle_ids[mask_not_finalized]
-        hosts = host_ids[mask_not_finalized]
-        taus = timescales[mask_not_finalized]
-        ws = weights[mask_not_finalized]
+        keep = ~_member(self._fin_sorted, pids)              # finalised particles are settled
+        pids, hosts, taus, ws = pids[keep], hosts[keep], taus[keep], ws[keep]
+        pids, hosts, taus, ws = self._merge_pairs(pids, hosts, taus, ws)
 
-        is_active = np.isin(pids, list(self._active.keys()))
-        if np.any(is_active):
-            p_active = pids[is_active]
-            host_active = hosts[is_active]
-            w_active = ws[is_active]
+        active = _member(self._act["pid"], pids)
+        self._accumulate(t_snap, pids[active], hosts[active], ws[active])
+        new = ~active
+        self._register(t_snap, snapshot_id, pids[new], hosts[new], taus[new], ws[new])
+        self._finalize_particles(t_snap)
+        self._last_snapshot = snapshot_id
 
-            md = math_dtype()
-            t0 = np.array([self._active[p].t0 for p in p_active], dtype=md)
-            tau0 = np.array([self._active[p].tau for p in p_active], dtype=md)
-            tau0 = np.maximum(tau0, md(1e-10))
+    @staticmethod
+    def _merge_pairs(pids, hosts, taus, ws):
+        """Sort pairs by (particle, host) and merge duplicates (weights summed)."""
+        order = np.lexsort((hosts, pids))
+        pids, hosts, taus, ws = pids[order], hosts[order], taus[order], ws[order]
+        if pids.size < 2:
+            return pids, hosts, taus, ws
+        dup = (pids[1:] == pids[:-1]) & (hosts[1:] == hosts[:-1])
+        if not dup.any():
+            return pids, hosts, taus, ws
+        start = np.flatnonzero(np.r_[True, ~dup])
+        return (pids[start], hosts[start], np.maximum.reduceat(taus, start),
+                np.add.reduceat(ws, start).astype(ws.dtype, copy=False))
 
-            deltas = (w_active * self._window_fn((t_snap - t0) / tau0)).astype(md, copy=False)
-            for p, host, delta in zip(p_active, host_active, deltas):
-                info = self._active[p]
-                if self.enforce_initial_hosts and host not in info.initial_hosts:
-                    continue
-                # Replace (not mutate) `info.counts` (C02): a checkpoint
-                # capture taken before this call may hold a reference to
-                # this same ActiveParticleInfo object, so it must never be
-                # edited in place. Cost is proportional to this particle's
-                # own (small, bounded) host count, not to len(self._active).
-                new_counts = defaultdict(float, info.counts)
-                new_counts[host] += delta
-                self._active[p] = ActiveParticleInfo(
-                    info.t0, info.snap0, info.tau, new_counts, info.initial_hosts,
-                )
+    def _evidence_rows(self, pids, hosts):
+        """Row of each (particle, host) pair in the evidence table, or -1."""
+        ev_pid, ev_host = self._ev["pid"], self._ev["host"]
+        lo = np.searchsorted(ev_pid, pids, "left")
+        width = np.searchsorted(ev_pid, pids, "right") - lo
+        rows = np.full(pids.size, -1, dtype=np.int64)
+        for k in range(int(width.max()) if width.size else 0):   # hosts per particle: a handful
+            cand = lo + k
+            ok = k < width
+            match = ok & (ev_host[np.where(ok, cand, 0)] == hosts)
+            rows[match] = cand[match]
+        return rows
 
-        not_active = ~is_active
-        if np.any(not_active):
-            p_new = pids[not_active]
-            host_new = hosts[not_active]
-            tau_new = taus[not_active]
-            w_new = ws[not_active]
+    def _accumulate(self, t_snap, pids, hosts, ws):
+        """Add ``w · window((t − t0) / τ)`` to active particles' hosts."""
+        if pids.size == 0:
+            return
+        md = math_dtype()
+        a = np.searchsorted(self._act["pid"], pids)
+        t0 = self._act["t0"][a].astype(md, copy=False)
+        tau0 = np.maximum(self._act["tau"][a].astype(md, copy=False), md(1e-10))
+        deltas = (ws * self._window_fn((t_snap - t0) / tau0)).astype(md, copy=False)
 
-            order = np.argsort(p_new)
-            p_sorted = p_new[order]
-            host_sorted = host_new[order]
-            tau_sorted = tau_new[order]
-            w_sorted = w_new[order]
+        rows = self._evidence_rows(pids, hosts)
+        hit = rows >= 0
+        ev = dict(self._ev)
+        if hit.any():
+            r, d = rows[hit], deltas[hit]
+            score = ev["score"].copy()
+            # Initial hosts accumulate in the math precision, hosts added later
+            # in float64: the precision each score always had.
+            score[r] = np.where(ev["initial"][r],
+                                (score[r].astype(md) + d).astype(np.float64),
+                                score[r] + d.astype(np.float64))
+            ev["score"] = score
+        miss = ~hit
+        if miss.any() and not self.enforce_initial_hosts:
+            n = int(miss.sum())
+            new = {"pid": pids[miss], "host": hosts[miss],
+                   "score": deltas[miss].astype(np.float64), "initial": np.zeros(n, bool),
+                   "rank": self._next_rank + np.arange(n, dtype=np.int64)}
+            self._next_rank += n
+            ev = self._merge_evidence(ev, new)
+        self._ev = ev
 
-            unique_particles, start_idx = np.unique(p_sorted, return_index=True)
-            end_idx = np.append(start_idx[1:], len(p_sorted))
-            for p, start, end in zip(unique_particles, start_idx, end_idx):
-                particle_hosts = host_sorted[start:end]
-                particle_weights = w_sorted[start:end]
-                particle_tau = tau_sorted[start:end].max()
+    @staticmethod
+    def _merge_evidence(ev, new):
+        """Evidence table with ``new`` rows added, sorted by (pid, host)."""
+        merged = {k: np.concatenate([ev[k], new[k]]) for k in ev}
+        order = np.lexsort((merged["host"], merged["pid"]))
+        return {k: v[order] for k, v in merged.items()}
 
-                hosts_u, inverse_u = np.unique(particle_hosts, return_inverse=True)
-                sums = np.zeros(len(hosts_u), dtype=math_dtype())
-                np.add.at(sums, inverse_u, particle_weights)
+    def _register(self, t_snap, snapshot_id, pids, hosts, taus, ws):
+        """First appearance: open a window, or decide at once if there is no competition."""
+        if pids.size == 0:
+            return
+        md = math_dtype()
+        start = _group_starts(pids)
+        pid_u = pids[start]
+        n_hosts = np.diff(np.r_[start, pids.size])
+        tau = np.maximum.reduceat(taus, start)
+        t0 = np.full(pid_u.size, t_snap, dtype=md)
+        snap0 = np.full(pid_u.size, snapshot_id, dtype=SNAP_ID)
 
-                counts = defaultdict(float, zip(hosts_u, sums))
-                initial_hosts = set(hosts_u)
+        decided = (n_hosts == 1) if self.enforce_initial_hosts else np.zeros(pid_u.size, bool)
+        if decided.any():
+            self._add_finalized(pid_u[decided], hosts[start[decided]],
+                                t0[decided], snap0[decided], tau[decided])
+        open_ = ~decided
+        if not open_.any():
+            return
+        deadline = (t_snap + self.factor * tau[open_].astype(np.float64)).astype(md)
+        act = {"pid": pid_u[open_], "t0": t0[open_], "snap0": snap0[open_],
+               "tau": tau[open_], "deadline": deadline}
+        merged = {k: np.concatenate([self._act[k], act[k]]) for k in act}
+        order = np.argsort(merged["pid"], kind="stable")
+        self._act = {k: v[order] for k, v in merged.items()}
 
-                md = math_dtype()
-                self._active[p] = ActiveParticleInfo(
-                    t0=md(t_snap),
-                    snap0=SNAP_ID(snapshot_id),
-                    tau=md(particle_tau),
-                    counts=counts,
-                    initial_hosts=initial_hosts,
-                )
-                heapq.heappush(self._heap, (md(t_snap + self.factor * particle_tau), SIM_ID(p)))
+        pair = np.repeat(open_, n_hosts)
+        n = int(pair.sum())
+        new = {"pid": pids[pair], "host": hosts[pair], "score": ws[pair].astype(np.float64),
+               "initial": np.ones(n, bool),
+               "rank": self._next_rank + np.arange(n, dtype=np.int64)}
+        self._next_rank += n
+        self._ev = self._merge_evidence(self._ev, new)
+
+    def _leaders(self, pids):
+        """Birth host of each (sorted, active) particle: most evidence, earliest host on ties."""
+        m = _member(pids, self._ev["pid"])
+        pid, host = self._ev["pid"][m], self._ev["host"][m]
+        order = np.lexsort((self._ev["rank"][m], -self._ev["score"][m], pid))
+        pid, host = pid[order], host[order]
+        return host[_group_starts(pid)]
 
     def _finalize_particles(self, t_snap):
-        """Finalise particles whose accumulation window has expired.
+        """Finalise particles whose accumulation window has expired."""
+        if self._act["pid"].size == 0:
+            return
+        due = self._act["deadline"].astype(np.float64) <= t_snap
+        if not due.any():
+            return
+        pid_due = self._act["pid"][due]
+        self._add_finalized(pid_due, self._leaders(pid_due), self._act["t0"][due],
+                            self._act["snap0"][due], self._act["tau"][due])
+        self._act = {k: v[~due] for k, v in self._act.items()}
+        gone = _member(pid_due, self._ev["pid"])
+        self._ev = {k: v[~gone] for k, v in self._ev.items()}
 
-        Pops particles from the heap where ``t0 + factor × tau ≤ t_snap``
-        and moves them from active to finalised state.
+    def _add_finalized(self, pids, births, t0, snap0, tau):
+        """Record finalised particles and add them to their galaxies' birth sets."""
+        births = births.astype(GALAXY_ID, copy=False)
+        self._fin_chunks.append({"pid": pids, "birth_id": births, "t0": t0,
+                                 "snap0": snap0, "tau": tau})
+        self._fin_sorted = np.sort(np.concatenate([self._fin_sorted, pids]), kind="stable")
+        self._add_to_birth_sets(self._birth_map, pids, births)
 
-        Parameters
-        ----------
-        t_snap : float
-        """
-        # Batch newly-finalized ids per galaxy in a local, call-scoped dict
-        # (cheap: never shared, safe to mutate freely), then merge into
-        # `self._birth_map` once per touched galaxy at the end (C02) --
-        # replaces, rather than `.add()`s into, the existing set, so a
-        # checkpoint capture from before this call stays untouched.
-        newly = defaultdict(set)
-        while self._heap and self._heap[0][0] <= t_snap:
-            _, p_to_finalize = heapq.heappop(self._heap)
-            if p_to_finalize not in self._active:
-                continue
+    @staticmethod
+    def _add_to_birth_sets(birth_map, pids, births):
+        """``birth_map[g] |= pids born in g``, replacing (never editing) each set."""
+        order = np.argsort(births, kind="stable")
+        b_sorted, p_sorted = births[order], pids[order]
+        starts = _group_starts(b_sorted)
+        for b, grp in zip(b_sorted[starts].tolist(), np.split(p_sorted, starts[1:])):
+            add = set(grp.tolist())
+            old = birth_map.get(b)
+            birth_map[b] = add if old is None else old | add
 
-            info = self._active.pop(p_to_finalize)
-            birth_id = info.leader_host
-
-            self._finalized[p_to_finalize] = FinalizedInfo(
-                birth_id=birth_id,
-                birth_time=info.t0,
-                birth_snap=info.snap0,
-                timescale=info.tau,
-            )
-
-            newly[birth_id].add(p_to_finalize)
-
-        for birth_id, new_ids in newly.items():
-            self._birth_map[birth_id] = self._birth_map.get(birth_id, set()) | new_ids
-
-    def update(self, t_snap, snapshot_id, particle_ids, host_ids, timescales, weights=None):
-        """Update the tracker with particles from a new snapshot.
-
-        Parameters
-        ----------
-        t_snap : float
-        snapshot_id : int
-        particle_ids : ndarray
-        host_ids : ndarray
-        timescales : ndarray
-        weights : ndarray or None, optional
-            Defaults to uniform weights.
-        """
-        if snapshot_id > self._last_snapshot:
-            if weights is None:
-                weights = np.full(particle_ids.shape, 1.0, dtype=math_dtype())
-            self._add_update_particles(t_snap, snapshot_id, particle_ids, host_ids, timescales, weights)
-            self._finalize_particles(t_snap)
-            self._last_snapshot = snapshot_id
+    # ── outputs ────────────────────────────────────────────────────────
+    @staticmethod
+    def _concat_finalized(chunks):
+        """Finalised records as one dict of arrays."""
+        md = math_dtype()
+        if not chunks:
+            return {"pid": np.empty(0, SIM_ID), "birth_id": np.empty(0, GALAXY_ID),
+                    "t0": np.empty(0, md), "snap0": np.empty(0, SNAP_ID), "tau": np.empty(0, md)}
+        return {k: np.concatenate([c[k] for c in chunks]) for k in chunks[0]}
 
     def finalize(self):
         """Force-finalise all active particles and return the birth table.
@@ -292,51 +366,43 @@ class BirthTracker:
             Columns: ``particle_index``, ``birth_id``.
         """
         self._finalize_particles(np.inf)
-        records = [
-            {"particle_index": p, "birth_id": self._finalized[p].birth_id}
-            for particles in self._birth_map.values()
-            for p in particles
-        ]
-        birth_df = pd.DataFrame.from_records(
-            records, columns=["particle_index", "birth_id"],
-        )
-        return birth_df
+        fin = self._concat_finalized(self._fin_chunks)
+        return pd.DataFrame({"particle_index": fin["pid"].astype(SIM_ID, copy=False),
+                             "birth_id": fin["birth_id"].astype(GALAXY_ID, copy=False)})
 
     def current_birth_map(self):
         """Return the current (incomplete) birth map.
 
-        Includes both finalised and active particles.
+        Finalised particles plus each active particle under its current
+        leader. The finalised sets are shared, not copied: the tracker
+        replaces them rather than editing them, and consumers only read.
 
         Returns
         -------
         birth_map : dict of {int: set of int}
         """
-        birth_map = {k: set(v) for k, v in self._birth_map.items()}
-        for p, info in self._active.items():
-            birth_map.setdefault(info.leader_host, set()).add(p)
+        birth_map = dict(self._birth_map)
+        if self._act["pid"].size:
+            self._add_to_birth_sets(birth_map, self._act["pid"], self._leaders(self._act["pid"]))
         return birth_map
 
+    # ── checkpointing ──────────────────────────────────────────────────
     def _cheap_snapshot(self):
         """Cheap, checkpoint-safe reference capture (C02).
 
-        O(n_active + n_finalized_so_far's container size), not a
-        recursive deep copy: safe to call every snapshot because
-        ``_add_update_particles``/``_finalize_particles`` never mutate an
-        existing ``ActiveParticleInfo``/``_birth_map[g]`` in place, only
-        ever replace them wholesale.
+        Every array and birth set is replaced rather than edited by later
+        updates, so references are enough; nothing is copied element-wise.
 
         Returns
         -------
         ref : dict
-            Pass to :meth:`_serialize` to get a checkpoint-write-safe,
-            fully independent form (only worth doing at actual
-            checkpoint-write time, not every snapshot).
+            Pass to :meth:`_serialize` for a plain, fully independent form.
         """
         return {
-            "active": dict(self._active),
-            "finalized": dict(self._finalized),
-            "heap": list(self._heap),
-            "birth_map": dict(self._birth_map),
+            "act": dict(self._act),
+            "ev": dict(self._ev),
+            "next_rank": self._next_rank,
+            "fin_chunks": list(self._fin_chunks),
             "factor": self.factor,
             "last_snapshot": self._last_snapshot,
             "enforce_initial_hosts": self.enforce_initial_hosts,
@@ -353,12 +419,7 @@ class BirthTracker:
 
     @staticmethod
     def _serialize(ref):
-        """Convert a :meth:`_cheap_snapshot` reference into a fully
-        independent, plain-container form safe for pickling/disk
-        checkpointing.
-
-        This is the O(total elements) conversion -- call only at actual
-        checkpoint-write time (i.e. on failure), not every snapshot.
+        """Convert a :meth:`_cheap_snapshot` reference into its checkpoint form.
 
         Parameters
         ----------
@@ -370,50 +431,74 @@ class BirthTracker:
         state : dict
         """
         return {
-            "active": ref["active"],
-            "finalized": ref["finalized"],
-            "heap": ref["heap"],
-            "birth_map": {k: list(v) for k, v in ref["birth_map"].items()},
+            "format": 2,
+            "active": dict(ref["act"]),
+            "evidence": dict(ref["ev"]),
+            "next_rank": ref["next_rank"],
+            "finalized": BirthTracker._concat_finalized(ref["fin_chunks"]),
             "factor": ref["factor"],
             "last_snapshot": ref["last_snapshot"],
             "enforce_initial_hosts": ref["enforce_initial_hosts"],
         }
 
     def _set_state(self, state):
-        """Restore tracker state from a checkpoint.
+        """Restore tracker state from a checkpoint (array or legacy format).
 
         Parameters
         ----------
         state : dict
         """
-        # Normalise pre-B2 checkpoints whose active records are plain dicts.
-        # Stored leader_host/leader_score (old format) are dropped: the
-        # leader is now derived from counts.
-        active = {}
-        for p, info in state["active"].items():
-            if isinstance(info, dict):
-                info = ActiveParticleInfo(
-                    info["t0"], info["snap0"], info["tau"],
-                    defaultdict(float, info["counts"]),
-                    info["initial_hosts"],
-                )
-            active[p] = info
-        self._active = active
-        # Normalise pre-B3 checkpoints whose finalized records are plain dicts.
-        finalized = {}
-        for p, rec in state["finalized"].items():
-            if isinstance(rec, dict):
-                rec = FinalizedInfo(
-                    rec["birth_id"], rec["birth_time"],
-                    rec["birth_snap"], rec["timescale"],
-                )
-            finalized[p] = rec
-        self._finalized = finalized
-        self._heap = state["heap"]
-        heapq.heapify(self._heap)
-        self._birth_map = defaultdict(
-            set, {k: set(v) for k, v in state["birth_map"].items()}
-        )
+        if state.get("format") == 2:
+            self._act = dict(state["active"])
+            self._ev = dict(state["evidence"])
+            self._next_rank = state["next_rank"]
+            fin = state["finalized"]
+        else:
+            fin = self._load_legacy(state)
+        self._fin_chunks = [fin] if fin["pid"].size else []
+        self._fin_sorted = np.sort(fin["pid"], kind="stable")
+        self._birth_map = {}
+        self._add_to_birth_sets(self._birth_map, fin["pid"], fin["birth_id"])
         self.factor = state["factor"]
         self._last_snapshot = state["last_snapshot"]
         self.enforce_initial_hosts = state["enforce_initial_hosts"]
+
+    def _load_legacy(self, state):
+        """Convert a dict-based checkpoint (active/finalized/heap) to arrays."""
+        md = math_dtype()
+        deadlines = {int(p): d for d, p in state.get("heap", [])}
+        act = {k: [] for k in ("pid", "t0", "snap0", "tau", "deadline")}
+        ev = {k: [] for k in ("pid", "host", "score", "initial", "rank")}
+        rank = 0
+        for p in sorted(state["active"], key=int):
+            info = state["active"][p]
+            if isinstance(info, dict):
+                info = ActiveParticleInfo(info["t0"], info["snap0"], info["tau"],
+                                          info["counts"], info["initial_hosts"])
+            act["pid"].append(int(p)); act["t0"].append(info.t0)
+            act["snap0"].append(info.snap0); act["tau"].append(info.tau)
+            act["deadline"].append(deadlines.get(int(p), info.t0 + self.factor * info.tau))
+            for host, score in info.counts.items():            # insertion order = rank order
+                ev["pid"].append(int(p)); ev["host"].append(int(host))
+                ev["score"].append(float(score)); ev["initial"].append(host in info.initial_hosts)
+                ev["rank"].append(rank)
+                rank += 1
+        self._act = {"pid": np.asarray(act["pid"], SIM_ID), "t0": np.asarray(act["t0"], md),
+                     "snap0": np.asarray(act["snap0"], SNAP_ID), "tau": np.asarray(act["tau"], md),
+                     "deadline": np.asarray(act["deadline"], md)}
+        ev = {"pid": np.asarray(ev["pid"], SIM_ID), "host": np.asarray(ev["host"], GALAXY_ID),
+              "score": np.asarray(ev["score"], np.float64), "initial": np.asarray(ev["initial"], bool),
+              "rank": np.asarray(ev["rank"], np.int64)}
+        order = np.lexsort((ev["host"], ev["pid"]))
+        self._ev = {k: v[order] for k, v in ev.items()}
+        self._next_rank = rank
+
+        recs = []
+        for p, rec in state["finalized"].items():
+            if isinstance(rec, dict):
+                rec = FinalizedInfo(rec["birth_id"], rec["birth_time"], rec["birth_snap"], rec["timescale"])
+            recs.append((int(p), rec.birth_id, rec.birth_time, rec.birth_snap, rec.timescale))
+        cols = list(zip(*recs)) if recs else [[]] * 5
+        return {"pid": np.asarray(cols[0], SIM_ID), "birth_id": np.asarray(cols[1], GALAXY_ID),
+                "t0": np.asarray(cols[2], md), "snap0": np.asarray(cols[3], SNAP_ID),
+                "tau": np.asarray(cols[4], md)}

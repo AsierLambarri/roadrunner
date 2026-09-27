@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
-from roadrunner._defaults import LOCAL_IDX, SIM_ID, math_dtype
+from roadrunner._defaults import GALAXY_ID, LOCAL_IDX, SIM_ID, UNBOUND, math_dtype
 
 
 def responsibilities_to_sim(csc, snap_data: SnapshotData):
@@ -65,15 +65,19 @@ def detect_newborns(previous_resp, n_particles: int) -> np.ndarray:
     """
     if previous_resp is None:
         return np.arange(n_particles, dtype=LOCAL_IDX)
-    existing = set(previous_resp.row_id.tolist())
-    return np.array(
-        [i for i in range(n_particles) if i not in existing],
-        dtype=LOCAL_IDX,
-    )
+    rows = np.asarray(previous_resp.row_id, dtype=np.int64)
+    seen = np.zeros(n_particles, dtype=bool)
+    seen[rows[(rows >= 0) & (rows < n_particles)]] = True
+    return np.flatnonzero(~seen).astype(LOCAL_IDX)
 
 
 def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult) -> None:
     """Update the birth tracker with the current snapshot assignment.
+
+    The evidence is soft: one (particle, host) pair per non-zero
+    responsibility, weighted by it. Particles without responsibilities
+    (unbound) count fully for ``UNBOUND``. Without a responsibility matrix
+    the hard assignment is used, one pair per particle with weight 1.
 
     Parameters
     ----------
@@ -81,21 +85,40 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     snap_id : int
     snap_data : SnapshotData
     result : AssignmentResult
-        Assigner result containing particle assignment and timescales.
+        Assigner result containing particle assignment, responsibilities
+        and timescales.
     """
     df = result.particle_df
     arr_idx = df["array_index"].values
-    sim_ids = snap_data.index[arr_idx]
     if "timescale" in df.columns:
         timescales = df["timescale"].values
     else:
         timescales = np.full(len(df), 0.1, dtype=math_dtype())
+
+    resp = result.responsibilities
+    if resp is None or len(resp) == 0:
+        rows, hosts, weights = arr_idx, df["Sub_tree_id"].values, None
+    else:
+        sizes = [len(c) for c in resp.column_indices]
+        rows = np.concatenate(resp.column_indices).astype(np.int64)
+        hosts = np.repeat(np.asarray(resp.column_id, dtype=GALAXY_ID), sizes)
+        weights = np.concatenate(resp.column_values).astype(math_dtype(), copy=False)
+        positive = weights > 0
+        rows, hosts, weights = rows[positive], hosts[positive], weights[positive]
+        unbound = arr_idx[~np.isin(arr_idx, rows)]
+        rows = np.concatenate([rows, unbound])
+        hosts = np.concatenate([hosts, np.full(unbound.size, UNBOUND, dtype=GALAXY_ID)])
+        weights = np.concatenate([weights, np.ones(unbound.size, dtype=weights.dtype)])
+
+    tau_by_row = np.empty(snap_data.index.size, dtype=np.asarray(timescales).dtype)
+    tau_by_row[arr_idx] = timescales
     birth_tracker.update(
         t_snap=snap_data.time,
         snapshot_id=snap_id,
-        particle_ids=sim_ids,
-        host_ids=df["Sub_tree_id"].values,
-        timescales=timescales,
+        particle_ids=snap_data.index[rows],
+        host_ids=hosts,
+        timescales=tau_by_row[rows],
+        weights=weights,
     )
 
 

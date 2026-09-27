@@ -165,8 +165,7 @@ class TestUpdateBirthTracker:
         bt = BirthTracker(factor=5, enforce_initial_hosts=False)
         update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result)
         assert bt._last_snapshot == 0
-        active_keys = list(bt._active.keys())
-        assert set(active_keys) == {100, 103, 105}
+        assert set(bt._act["pid"].tolist()) == {100, 103, 105}
 
     def test_without_timescale_column(self):
         snap = _make_snap_data(n=10, start_id=200)
@@ -177,7 +176,29 @@ class TestUpdateBirthTracker:
         result = _make_result_with_df(df)
         bt = BirthTracker(factor=5, enforce_initial_hosts=False)
         update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result)
-        assert len(bt._active) == 2
+        assert bt._act["pid"].size == 2
+
+    def test_soft_evidence_from_responsibilities(self):
+        # Particle 400 is split 0.7/0.3 between galaxies 500 and 501, 401 is
+        # fully in 501, and 402 has no responsibility (unbound).
+        snap = _make_snap_data(n=3, start_id=400)
+        df = pd.DataFrame({"array_index": [0, 1, 2], "Sub_tree_id": [500, 501, -1],
+                           "timescale": [0.2, 0.2, 0.2]})
+        result = AssignmentResult(
+            particle_df=df,
+            responsibilities=SparseCSC([np.array([0]), np.array([0, 1])],
+                                       [np.array([0.7], np.float32), np.array([0.3, 1.0], np.float32)],
+                                       column_id=np.array([500, 501])),
+            fitted_parameters={}, statistics={},
+        )
+        bt = BirthTracker(factor=5, enforce_initial_hosts=True)
+        update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result)
+        # 401 and 402 have a single possible host and are decided at once;
+        # 400 opens a window over its two initial hosts.
+        assert bt._act["pid"].tolist() == [400]
+        m = bt._ev["pid"] == 400
+        assert dict(zip(bt._ev["host"][m].tolist(), np.round(bt._ev["score"][m], 6).tolist())) == {500: 0.7, 501: 0.3}
+        assert bt.current_birth_map() == {500: {400}, 501: {401}, -1: {402}}
 
 
 class TestUpdateAssemblyTracker:

@@ -275,7 +275,9 @@ class AssemblyTracker:
         for g in birth_map.keys() | previous.keys():
             curr_birth = birth_map.get(g, _EMPTY)
             prev_birth = previous.get(g, _EMPTY)
-            if curr_birth == prev_birth:
+            # The birth tracker hands back its unchanged sets as the same
+            # objects, so identity settles most galaxies without a compare.
+            if curr_birth is prev_birth or curr_birth == prev_birth:
                 continue
             current = self._infall_lists.get(g, _EMPTY)
             self._infall_lists[g] = (current | (curr_birth - prev_birth)) - (prev_birth - curr_birth)

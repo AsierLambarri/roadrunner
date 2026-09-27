@@ -1,194 +1,157 @@
 import numpy as np
-import pandas as pd
 
-from roadrunner.postprocessing.tracking.birth import BirthTracker
+from roadrunner.postprocessing.tracking.birth import ActiveParticleInfo, BirthTracker, FinalizedInfo
+
+
+def _update(tracker, t, snap, pids, hosts, taus, weights=None):
+    tracker.update(t_snap=t, snapshot_id=snap, particle_ids=np.array(pids),
+                   host_ids=np.array(hosts), timescales=np.array(taus, dtype=float),
+                   weights=None if weights is None else np.array(weights))
+
+
+def _active(tracker):
+    return set(tracker._act["pid"].tolist())
+
+
+def _finalized(tracker):
+    fin = tracker._concat_finalized(tracker._fin_chunks)
+    return dict(zip(fin["pid"].tolist(), fin["birth_id"].tolist()))
+
+
+def _scores(tracker, pid):
+    m = tracker._ev["pid"] == pid
+    return dict(zip(tracker._ev["host"][m].tolist(), tracker._ev["score"][m].tolist()))
 
 
 class TestBirthTracker:
-    def test_single_particle_across_snapshots(self):
+    def test_window_then_finalize(self):
         tracker = BirthTracker(factor=5)
-        # snapshot 0: particle 1 appears in galaxy 10 with timescale 2.0
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([2.0]))
-        # not yet finalized: t=0, deadline = 0 + 5*2 = 10
-        assert len(tracker._active) == 1
-        assert len(tracker._finalized) == 0
-
-        # snapshot at t=5: still within window
-        tracker.update(t_snap=5.0, snapshot_id=1,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([2.0]))
-        assert len(tracker._active) == 1
-        assert len(tracker._finalized) == 0
-
-        # snapshot at t=12: past deadline -> finalized
-        tracker.update(t_snap=12.0, snapshot_id=2,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([2.0]))
-        assert len(tracker._active) == 0
-        assert len(tracker._finalized) == 1
-        assert tracker._finalized[1].birth_id == 10
+        _update(tracker, 0.0, 0, [1], [10], [2.0])     # deadline = 0 + 4.999*2 ≈ 10
+        assert _active(tracker) == {1} and _finalized(tracker) == {}
+        _update(tracker, 5.0, 1, [1], [10], [2.0])
+        assert _active(tracker) == {1} and _finalized(tracker) == {}
+        _update(tracker, 12.0, 2, [1], [10], [2.0])
+        assert _active(tracker) == set() and _finalized(tracker) == {1: 10}
 
     def test_competition_between_hosts(self):
         tracker = BirthTracker(factor=5, window="gaussian")
-        # particle 1 first seen in galaxy 10
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([2.0]))
-        # next snapshot: galaxy 20 competes
-        tracker.update(t_snap=1.0, snapshot_id=1,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([20]),
-                       timescales=np.array([2.0]))
-        # deadline = 0 + (5-0.001)*2 ≈ 10, particle should still be active
-        assert len(tracker._active) == 1
-        # galaxy 20 has a more recent score, but galaxy 10 has the head start
-        info = tracker._active[1]
-        # With gaussian window at dt=1, tau=2: exp(-0.3*(1/2)^2) = exp(-0.075) ≈ 0.928
-        # So both scores should be > 0
-        assert 10 in info.counts
-        assert 20 in info.counts
+        _update(tracker, 0.0, 0, [1], [10], [2.0])
+        _update(tracker, 1.0, 1, [1], [20], [2.0])
+        scores = _scores(tracker, 1)
+        assert set(scores) == {10, 20}
+        assert scores[10] == 1.0 and 0 < scores[20] < 1.0      # 10 has the head start
+        assert tracker.current_birth_map()[10] == {1}
 
-    def test_enforce_initial_hosts(self):
-        tracker = BirthTracker(factor=5, enforce_initial_hosts=True, window="gaussian")
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([2.0]))
-        # galaxy 20 is NOT in the initial hosts -> score should NOT increase
-        tracker.update(t_snap=1.0, snapshot_id=1,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([20]),
-                       timescales=np.array([2.0]))
-        info = tracker._active[1]
-        # Only galaxy 10 should have a score > 0
-        assert 10 in info.counts
-        assert info.counts.get(20, 0) == 0.0
+    def test_enforce_initial_hosts_restricts_the_competition(self):
+        # Born with responsibilities 0.6 / 0.4 in galaxies 10 and 20: only they compete.
+        tracker = BirthTracker(factor=5, enforce_initial_hosts=True)
+        _update(tracker, 0.0, 0, [1, 1], [10, 20], [2.0, 2.0], [0.6, 0.4])
+        for s, t in enumerate((1.0, 2.0, 3.0), start=1):
+            _update(tracker, t, s, [1, 1], [20, 30], [2.0, 2.0], [0.9, 0.1])
+        assert set(_scores(tracker, 1)) == {10, 20}             # 30 was not there at birth
+        tracker.finalize()
+        assert _finalized(tracker) == {1: 20}                   # more evidence for 20
+
+    def test_single_initial_host_is_decided_at_once(self):
+        # With enforce_initial_hosts, nothing can compete with a lone initial
+        # host (or with being born unbound): no window is opened.
+        tracker = BirthTracker(factor=5, enforce_initial_hosts=True)
+        _update(tracker, 0.0, 0, [1, 2], [10, -1], [2.0, 2.0])
+        assert _active(tracker) == set()
+        assert _finalized(tracker) == {1: 10, 2: -1}
+        _update(tracker, 1.0, 1, [1], [30], [2.0])              # settled: later hosts ignored
+        assert _finalized(tracker) == {1: 10, 2: -1}
 
     def test_current_birth_map(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1, 2]),
-                       host_ids=np.array([10, 20]),
-                       timescales=np.array([2.0, 2.0]))
-        # Finalize particle 1 by advancing past its deadline
-        tracker.update(t_snap=12.0, snapshot_id=1,
-                       particle_ids=np.array([1, 2]),
-                       host_ids=np.array([10, 20]),
-                       timescales=np.array([2.0, 2.0]))
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, [1, 2], [10, 20], [2.0, 20.0])
+        _update(tracker, 12.0, 1, [1, 2], [10, 20], [2.0, 20.0])
         bmap = tracker.current_birth_map()
-        assert 10 in bmap
-        assert 20 in bmap
-        # particle 1 should be in galaxy 10's birth map
-        assert 1 in bmap[10]
-        # particle 2 should still be active (or finalized in 20)
-        assert (20 in bmap and 2 in bmap[20]) or (2 in bmap.get(20, set()))
+        assert bmap[10] == {1}        # finalised
+        assert bmap[20] == {2}        # still active, under its leader
 
     def test_finalize_all_particles(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1, 2, 3]),
-                       host_ids=np.array([10, 20, 10]),
-                       timescales=np.array([2.0, 3.0, 4.0]))
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, [1, 2, 3], [10, 20, 10], [2.0, 3.0, 4.0])
         df = tracker.finalize()
         assert len(df) == 3
-        assert set(df["particle_index"]) == {1, 2, 3}
-        assert all(df["birth_id"].isin([10, 20]))
+        assert dict(zip(df["particle_index"], df["birth_id"])) == {1: 10, 2: 20, 3: 10}
+        assert df["particle_index"].dtype == np.uint64 and df["birth_id"].dtype == np.int64
 
     def test_empty_update(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([], dtype=int),
-                       host_ids=np.array([], dtype=int),
-                       timescales=np.array([], dtype=float))
-        assert len(tracker._active) == 0
-        assert len(tracker._finalized) == 0
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, np.array([], int), np.array([], int), np.array([]))
+        assert _active(tracker) == set() and _finalized(tracker) == {}
+        assert tracker.finalize().empty
 
-    def test_all_particles_finalized_immediately(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        # tau = 0 -> deadline = t + 0 = instantly finalized
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1, 2]),
-                       host_ids=np.array([10, 20]),
-                       timescales=np.array([0.0, 0.0]))
-        df = tracker.finalize()
-        assert len(df) == 2
+    def test_zero_timescale_finalized_immediately(self):
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, [1, 2], [10, 20], [0.0, 0.0])
+        assert _finalized(tracker) == {1: 10, 2: 20}
 
-    def test_multiple_particles_different_timescales(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1, 2]),
-                       host_ids=np.array([10, 20]),
-                       timescales=np.array([1.0, 10.0]))
-        # deadline for 1: 0 + 5*1 = 5 (factor=5, but stored as 4.999)
-        # deadline for 2: 0 + 5*10 = 50
-        # At t=6, only particle 1 should be finalized
-        tracker.update(t_snap=6.0, snapshot_id=1,
-                       particle_ids=np.array([1, 2]),
-                       host_ids=np.array([10, 20]),
-                       timescales=np.array([1.0, 10.0]))
-        assert 1 in tracker._finalized
-        assert 2 in tracker._active
+    def test_different_timescales(self):
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, [1, 2], [10, 20], [1.0, 10.0])
+        _update(tracker, 6.0, 1, [1, 2], [10, 20], [1.0, 10.0])  # deadlines ≈ 5 and 50
+        assert _finalized(tracker) == {1: 10} and _active(tracker) == {2}
+
+    def test_duplicate_pairs_are_merged(self):
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, [1, 1, 1], [10, 10, 20], [2.0, 2.0, 2.0], [0.25, 0.25, 0.4])
+        assert _scores(tracker, 1) == {10: 0.5, 20: 0.4000000059604645}
 
     def test_serialization_round_trip(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1, 2]),
-                       host_ids=np.array([10, 20]),
-                       timescales=np.array([2.0, 3.0]))
-        state = tracker._get_state()
-        tracker2 = BirthTracker(factor=5, window="gaussian")
-        tracker2._set_state(state)
-        assert len(tracker2._active) == len(tracker._active)
-        assert tracker2._last_snapshot == tracker._last_snapshot
-        assert tracker2.factor == tracker.factor
-        # Finalize both
-        df1 = tracker.finalize()
-        df2 = tracker2.finalize()
-        assert len(df1) == len(df2)
+        def run(tracker, snaps):
+            for s in snaps:
+                _update(tracker, 0.5 * s, s, [1, 2, 3, 3], [10, 20, 10, 20], [2.0, 3.0, 1.0, 1.0],
+                        [1.0, 1.0, 0.3 + 0.1 * s, 0.7 - 0.1 * s])
+        ref = BirthTracker(factor=5)
+        run(ref, range(6))
+        tracker = BirthTracker(factor=5)
+        run(tracker, range(3))
+        restored = BirthTracker(factor=5)
+        restored._set_state(tracker._get_state())
+        assert restored._last_snapshot == 2 and restored.factor == tracker.factor
+        run(restored, range(3, 6))
+        assert restored.current_birth_map() == ref.current_birth_map()
+        assert restored.finalize().equals(ref.finalize())
+
+    def test_legacy_checkpoint_loads(self):
+        # A dict-based checkpoint from before the array rewrite.
+        state = {
+            "active": {np.uint64(1): ActiveParticleInfo(np.float32(0.0), np.int32(0), np.float32(2.0),
+                                                        {10: np.float32(1.0), 20: 0.5}, {10})},
+            "finalized": {np.uint64(2): FinalizedInfo(30, np.float32(0.0), np.int32(0), np.float32(1.0))},
+            "heap": [(np.float32(9.998), np.uint64(1))],
+            "birth_map": {30: [2]},
+            "factor": 4.999, "last_snapshot": 0, "enforce_initial_hosts": False,
+        }
+        tracker = BirthTracker(factor=5)
+        tracker._set_state(state)
+        assert tracker.current_birth_map() == {10: {1}, 30: {2}}
+        assert _scores(tracker, 1) == {10: 1.0, 20: 0.5}
+        assert dict(zip(*tracker.finalize().values.T.tolist())) == {1: 10, 2: 30}
 
 
 class TestBirthTrackerRecovery:
     """C02: a `_cheap_snapshot()` reference must survive later updates
-    untouched, and the batched `_birth_map` merge must exactly match
-    today's per-particle `.add()` semantics."""
+    untouched, and finalised birth sets must accumulate across snapshots."""
 
-    def test_cheap_snapshot_active_counts_unaffected_by_later_update(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([2.0]))
+    def test_cheap_snapshot_unaffected_by_later_update(self):
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, [1], [10], [2.0])
         ref = tracker._cheap_snapshot()
-        captured_counts = dict(ref["active"][1].counts)
+        before = {k: v.copy() for k, v in ref["ev"].items()}
+        _update(tracker, 1.0, 1, [1], [20], [2.0])            # adds evidence for 20
+        for k, v in before.items():
+            np.testing.assert_array_equal(ref["ev"][k], v)
+        assert 20 not in ref["ev"]["host"].tolist()
 
-        # galaxy 20 competes on the next snapshot -- must not retroactively
-        # appear in the earlier captured reference's counts.
-        tracker.update(t_snap=1.0, snapshot_id=1,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([20]),
-                       timescales=np.array([2.0]))
-        assert dict(ref["active"][1].counts) == captured_counts
-        assert 20 not in ref["active"][1].counts
-
-    def test_birth_map_batched_merge_matches_per_particle_add(self):
-        tracker = BirthTracker(factor=5, window="gaussian")
-        # particle 1: tau=0 -> finalizes immediately in galaxy 10 at snap 0.
-        tracker.update(t_snap=0.0, snapshot_id=0,
-                       particle_ids=np.array([1]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([0.0]))
-        assert tracker._birth_map[10] == {1}
-        # particle 2: also galaxy 10, finalizes at snap 1 -- the batched
-        # merge must preserve particle 1 from the prior call's result,
-        # not overwrite it.
-        tracker.update(t_snap=1.0, snapshot_id=1,
-                       particle_ids=np.array([2]),
-                       host_ids=np.array([10]),
-                       timescales=np.array([0.0]))
+    def test_birth_sets_accumulate(self):
+        tracker = BirthTracker(factor=5)
+        _update(tracker, 0.0, 0, [1], [10], [0.0])
+        first = tracker._birth_map[10]
+        assert first == {1}
+        _update(tracker, 1.0, 1, [2], [10], [0.0])
         assert tracker._birth_map[10] == {1, 2}
+        assert first == {1}                                     # replaced, not edited

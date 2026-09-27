@@ -599,7 +599,7 @@ class TestAccretionPipeline:
         assert ckpt["last_snapshot"] is None
         assert ckpt["birth_tracker"]["last_snapshot"] == -1
         assert ckpt["assembly_tracker"]["last_snapshot"] == -1
-        assert len(ckpt["birth_tracker"]["active"]) == 0
+        assert ckpt["birth_tracker"]["active"]["pid"].size == 0
         assert len(ckpt["assembly_tracker"]["infall_lists"]) == 0
 
         resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
