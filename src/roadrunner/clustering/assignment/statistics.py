@@ -23,6 +23,8 @@ import numpy as np
 
 from roadrunner._defaults import FRAGMENT_THRESHOLD, UNBOUND
 
+BAD_CONDITION = 1e6   # covariance condition number flagged as degenerate
+
 
 class GMMAssignerStatistics:
     """Tracks per-snapshot assignment statistics (fragments, confusion, entropy, condition).
@@ -38,13 +40,19 @@ class GMMAssignerStatistics:
     fragments : int
         Number of components with fewer than ``FRAGMENT_THRESHOLD`` particles.
     avg_conf : float
-        Average maximum responsibility across all assigned particles.
+        Mean maximum responsibility over contested particles (those with
+        responsibility for more than one component); NaN if none.
     avg_entropy : float
-        Average normalised entropy of responsibilities.
+        Mean entropy, normalised by ``log K``, over contested particles.
     avg_cond : float
-        Average condition number of fitted covariance matrices.
+        Median over components of ``log10`` of the covariance condition
+        number.
+    bad_cond : int
+        Components with condition number above ``BAD_CONDITION`` or a
+        non-finite one.
     avg_retention : float
-        Average ratio of observed to expected particle retention (bound vs tagged).
+        Median over galaxies of the fraction of their bound candidates
+        that the fit assigns to them.
     """
 
     def __init__(self):
@@ -53,6 +61,7 @@ class GMMAssignerStatistics:
         self.avg_conf = float("nan")
         self.avg_entropy = float("nan")
         self.avg_cond = float("nan")
+        self.bad_cond = 0
         self.avg_retention = float("nan")
 
     def compute(self, particle_df, resp_map, fitted_parameters, boundness_csc=None):
@@ -94,11 +103,13 @@ class GMMAssignerStatistics:
 
         per_particle_max = np.full(N, -np.inf)
         np.maximum.at(per_particle_max, all_pids, all_vals)
-        touched = per_particle_max > -np.inf
-        self.avg_conf = float(np.mean(per_particle_max[touched]))
 
         counts = np.zeros(N, dtype=np.int64)
         np.add.at(counts, all_pids, 1)
+        # Only contested particles (responsibility for more than one
+        # component) tell how decisively the fit separates halos.
+        touched = counts > 1
+        self.avg_conf = float(np.mean(per_particle_max[touched])) if touched.any() else float("nan")
         sums = np.zeros(N, dtype=np.float64)
         np.add.at(sums, all_pids, all_vals)
         log_vals = np.log(np.maximum(all_vals, 1e-30))
@@ -110,16 +121,14 @@ class GMMAssignerStatistics:
         T = weighted_log_sums[touched]
         with np.errstate(divide="ignore", invalid="ignore"):
             H = -(T / S - np.log(S)) / np.log(K)
-        H = np.where(K <= 1, 0.0, H)
-        self.avg_entropy = float(np.mean(H))
+        self.avg_entropy = float(np.mean(H)) if H.size else float("nan")
 
         # ── Condition number (from scaled covariances) ────────────
-        conds = []
-        for _, params in fitted_parameters.items():
-            cond = params.get("covariance_condition")
-            if cond is not None and np.isfinite(cond):
-                conds.append(float(cond))
-        self.avg_cond = float(np.mean(conds)) if conds else float("nan")
+        conds = np.array([float(p["covariance_condition"]) for p in fitted_parameters.values()
+                          if p.get("covariance_condition") is not None])
+        finite = conds[np.isfinite(conds)]
+        self.avg_cond = float(np.median(np.log10(np.maximum(finite, 1.0)))) if finite.size else float("nan")
+        self.bad_cond = int((~np.isfinite(conds)).sum() + (finite > BAD_CONDITION).sum())
 
         # ── Avg retention (normalised bound-to-tagged overlap) ────
         if boundness_csc is not None:
@@ -144,12 +153,9 @@ class GMMAssignerStatistics:
                     continue
 
                 overlap = np.intersect1d(bound_idx, tagged)
-                n_overlap = len(overlap)
-                retention_obs = n_overlap / n_bound
-                expected_frac = n_tagged / max(N, 1)
-                retentions.append(retention_obs / max(expected_frac, 1e-30))
+                retentions.append(len(overlap) / n_bound)
 
-            self.avg_retention = float(np.mean(retentions)) if retentions else float("nan")
+            self.avg_retention = float(np.median(retentions)) if retentions else float("nan")
 
         return self
 
@@ -161,7 +167,7 @@ class GMMAssignerStatistics:
         -------
         stats : dict of str → float
             Keys: ``unassigned``, ``fragments``, ``avg_conf``,
-            ``avg_entropy``, ``avg_cond``, ``avg_retention``.
+            ``avg_entropy``, ``avg_cond``, ``bad_cond``, ``avg_retention``.
         """
         return {
             "unassigned": self.unassigned,
@@ -169,5 +175,6 @@ class GMMAssignerStatistics:
             "avg_conf": self.avg_conf,
             "avg_entropy": self.avg_entropy,
             "avg_cond": self.avg_cond,
+            "bad_cond": self.bad_cond,
             "avg_retention": self.avg_retention,
         }

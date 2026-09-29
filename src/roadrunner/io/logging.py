@@ -125,8 +125,9 @@ class RunLogger:
             ("unassigned", "UNASSIGNED", "d"),
             ("avg_conf",   "AVG_CONF",   ".3f"),
             ("avg_entropy","AVG_ENTROPY",".3f"),
-            ("avg_cond",   "AVG_COND",   ".3f"),
-            ("avg_retention","AVG_RET",  ".3f"),
+            ("avg_cond",   "LOG_COND",   ".3f"),
+            ("bad_cond",   "BAD_COND",   "d"),
+            ("avg_retention","MED_RET",  ".3f"),
         ]
 
         # Build columns with widths computed from label + format
@@ -148,8 +149,6 @@ class RunLogger:
             if raw is None or (isinstance(raw, float) and np.isnan(raw)):
                 cell_parts.append(f"{'--':>{w}}")
             else:
-                if isinstance(raw, float) and fmt_spec != "s":
-                    raw = min(raw, 99999.999)
                 fstr = f">{w}{fmt_spec}" if fmt_spec != "s" else f">{w}s"
                 cell_parts.append(f"{raw:{fstr}}")
         row = sep.join(cell_parts)
