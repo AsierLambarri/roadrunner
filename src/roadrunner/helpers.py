@@ -95,6 +95,38 @@ def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None):
     return np.float64
 
 
+def select_float_dtype_relative(values, rel_tol=1e-4, msg=None):
+    """Return the smallest floating-point dtype preserving *values* to a relative tolerance.
+
+    Every non-zero value must lie within the dtype's normal range, and
+    the dtype's relative resolution (``eps / 2``) must not exceed
+    ``rel_tol``. The relative counterpart of :func:`select_float_dtype`,
+    for quantities such as covariances whose entries span many decades.
+
+    Parameters
+    ----------
+    values : array-like
+    rel_tol : float, default=1e-4
+    msg : str, optional
+        Extra context appended to the warning when no dtype suffices.
+
+    Returns
+    -------
+    dtype : np.dtype
+        One of ``float16``, ``float32``, ``float64``.
+    """
+    mag = np.abs(np.asarray(values, dtype=np.float64))
+    mag = mag[np.isfinite(mag) & (mag > 0)]
+    lo, hi = (mag.min(), mag.max()) if mag.size else (1.0, 1.0)
+    for dtype in (np.float16, np.float32, np.float64):
+        info = np.finfo(dtype)
+        if info.eps / 2 <= rel_tol and info.tiny <= lo and hi <= info.max:
+            return dtype
+    detail = f" {msg}" if msg else ""
+    warnings.warn(f"float64 insufficient for requested relative precision{detail}")
+    return np.float64
+
+
 def check_particle_uniqueness(data):
     """Check that all particle IDs across all groups are unique.
 

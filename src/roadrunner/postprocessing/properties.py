@@ -5,7 +5,6 @@ and projected (Rhp, sigma_los) galaxy properties, as well as the
 top-level :func:`compute_galaxy_properties` driver.
 """
 
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -68,23 +67,11 @@ def rotation_matrix_from_los(los):
         raise ValueError("los must be a 3-element vector")
     ez = los / np.linalg.norm(los)
 
-    for i in range(10):
-        randvecs = random_lines_of_sight(100, half_sphere=False, seed=42 + i)[0]
-        dots = np.abs(randvecs @ ez)
-        mask = dots < 0.5
-        if np.any(mask):
-            idx = np.argmin(dots[mask])
-            randvec = randvecs[mask][idx]
-            break
-    else:
-        warnings.warn("Failed to draw a suitable random vector")
-        if abs(np.dot([0, 0, 2], ez)) < 0.9:
-            randvec = np.array([0, 0, 1]) - ez
-        else:
-            randvec = np.array([0, 1, 0]) - ez
-
-    a = ez + randvec
-    ex = a - np.dot(a, ez) * ez
+    # Complete the frame from the coordinate axis least aligned with ez;
+    # projected quantities depend only on ez, not on the in-plane axes.
+    axis = np.zeros(3, dtype=ez.dtype)
+    axis[np.argmin(np.abs(ez))] = 1.0
+    ex = axis - np.dot(axis, ez) * ez
     ex /= np.linalg.norm(ex)
     ey = np.cross(ez, ex)
     return np.vstack((ex, ey, ez))

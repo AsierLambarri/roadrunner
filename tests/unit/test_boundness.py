@@ -14,6 +14,19 @@ def _make_halo(xcen, model="kepler", mass=1e12, rvir=RVR, redshift=0.0, vel=VCEN
 
 
 class TestFunction:
+    def test_unbound_particles_raise_no_overflow(self):
+        # I03: the Kepler period is evaluated for bound particles only.
+        import warnings
+        rng = np.random.default_rng(1)
+        vel = np.r_[rng.uniform(-50, 50, (100, 3)), rng.uniform(-5e3, 5e3, (100, 3))]
+        coords = np.column_stack([rng.uniform(-50, 50, (200, 3)), vel]).astype(np.float32)
+        halo = _make_halo(VCENTER)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            compute_halo_bound_particles([halo], coords)
+        idx, _, tdyn = halo.get_boundness()
+        assert idx.size and np.all(np.isfinite(tdyn)) and np.all(tdyn > 0)
+
     def test_v_vir_sq_respects_comoving_flag(self):
         # C08: comoving halo (virial_radius comoving, needs converting)
         # and an equivalent already-physical halo (same physical radius,

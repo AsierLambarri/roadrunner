@@ -5,6 +5,7 @@ from roadrunner.helpers import (
     check_particle_uniqueness,
     remove_duplicates,
     select_float_dtype,
+    select_float_dtype_relative,
     select_uint_dtype,
 )
 
@@ -25,6 +26,14 @@ class TestSelectUintDtype:
 
     def test_zero(self):
         assert select_uint_dtype(0) is not None
+
+
+class TestSelectFloatDtypeRelative:
+    def test_picks_smallest_dtype_by_relative_precision_and_range(self):
+        # I05: covariances span decades; float16 lacks 1e-4 relative resolution.
+        assert select_float_dtype_relative([1e-6, 3.0, 1e4], 1e-4) == np.float32
+        assert select_float_dtype_relative([0.5, 2.0], 1e-2) == np.float16
+        assert select_float_dtype_relative([1e-6, 1e40], 1e-4) == np.float64
 
 
 class TestSelectFloatDtype:

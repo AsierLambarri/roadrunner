@@ -22,7 +22,7 @@ import os
 import h5py
 import numpy as np
 
-from roadrunner.helpers import select_float_dtype, select_uint_dtype
+from roadrunner.helpers import select_float_dtype, select_float_dtype_relative, select_uint_dtype
 
 
 def _aligned_boundness(resp_rows, bound_rows, bound_values, dtype):
@@ -227,7 +227,10 @@ class HDF5AssignmentWriter:
                 cov = params.get("covariance")
                 if cov is not None:
                     cov_arr = np.asarray(cov)
-                    cov_dtype = self._pick_float_dtype(cov_arr)
+                    # Relative rule: entries span many decades, and an
+                    # absolute tolerance would drop small eigenvalues.
+                    cov_dtype = select_float_dtype_relative(
+                        cov_arr, self._float_atol, msg="(covariances)")
                     kw = {} if cov_arr.ndim == 0 else {"compression": "gzip"}
                     grp.create_dataset(
                         "covariance",

@@ -168,6 +168,30 @@ class TestSmallHaloOwnership:
         )
 
 
+    def test_halo_emptied_by_ownership_leaves_its_group(self):
+        # I02: two small halos share every particle; the more bound one (larger
+        # virial radius, so higher normalised boundness) takes them all. The
+        # emptied halo must not reach the assigner as an empty group.
+        rng = np.random.default_rng(0)
+        positions = rng.normal(scale=0.05, size=(3, 3))
+        snap_data = SnapshotData(index=np.arange(3, dtype=np.uint64), mass=np.ones(3),
+                                 position=positions, velocity=np.zeros_like(positions),
+                                 redshift=0.0, time=13.8)
+        snap_df = pd.DataFrame({
+            "Sub_tree_id": [1, 2], "Redshift": [0.0, 0.0],
+            "position_x": [0.0, 0.0], "position_y": [0.0, 0.0], "position_z": [0.0, 0.0],
+            "velocity_x": [0.0, 0.0], "velocity_y": [0.0, 0.0], "velocity_z": [0.0, 0.0],
+            "mass": [1e9, 1e9], "virial_radius": [5.0, 30.0], "scale_radius": [1.0, 1.0],
+        })
+        assigner = XGMMAssigner(method="gmm", min_particles=5, verbose=0)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _, result = process_snapshot(snap_data, snap_df, np.arange(3, dtype=np.uint64),
+                                         None, assigner, ProcessingConfig(min_particles=5))
+        assert not any("empty of particles" in str(w.message) for w in caught)
+        assert set(result.fitted_parameters) == {2}
+
+
 class TestExactIntegerSubTreeId:
     """C09: halo identities above 2**53 must survive process_snapshot exactly."""
 

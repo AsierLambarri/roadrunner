@@ -104,13 +104,15 @@ def process_snapshot(
         keep = ~np.isin(idx, rows)
         halo.set_boundness(idx[keep], ener[keep], tdyn[keep])
 
-    groups = (
-        sorted(
-            [pop_idx[g] for g in seg.pruned_groups],
-            key=len, reverse=True,
-        )
-        if seg.pruned_groups
-        else []
+    # A halo can lose every candidate to the ownership resolution above;
+    # it is no longer populated, so it leaves its group (and a group left
+    # without halos is dropped) instead of reaching the assigner empty.
+    emptied = {int(pop_idx[h]) for h in removals
+               if ensemble[pop_idx[h]].get_boundness()[0].size == 0}
+    groups = sorted(
+        (g for g in ([i for i in pop_idx[grp] if int(i) not in emptied]
+                     for grp in seg.pruned_groups) if g),
+        key=len, reverse=True,
     )
 
     result = assigner.assign(
