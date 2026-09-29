@@ -269,6 +269,10 @@ class XGMMAssigner:
             if not isinstance(halos, HaloEnsemble)
             else halos
         )
+        # Tree mass by Sub_tree_id: stored with the fitted parameters, it is
+        # the next snapshot's reference for the covariance prior's growth.
+        self._tree_mass = dict(zip(self.ensemble.sub_tree_ids.tolist(),
+                                   self.ensemble.masses.tolist()))
         self.particle_coords = particle_coords
         self.newborn_indices = newborn_indices
         self.previous_resp = kwargs.get("previous_resp", {})
@@ -430,6 +434,7 @@ class XGMMAssigner:
                 "weight": 1.0,
                 "covariance": covs[0],
                 "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
+                "tree_mass": self._tree_mass.get(sid, 0.0),
             }
         }
         return params, post_prob, nonz
@@ -480,6 +485,7 @@ class XGMMAssigner:
                 "weight": float(nk[i]) / total_count if total_count > 0 else 0.0,
                 "covariance": covs[i],
                 "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
+                "tree_mass": self._tree_mass.get(sid, 0.0),
             }
         return params, post_prob, nonz
 
@@ -594,6 +600,7 @@ class XGMMAssigner:
                     "weight": natural["weights"][sid],
                     "covariance": natural["covariances"][sid],
                     "covariance_condition": cond,
+                    "tree_mass": self._tree_mass.get(sid, 0.0),
                 }
 
         return params, post_prob, nonz
@@ -606,9 +613,10 @@ class XGMMAssigner:
         covariance: its previous snapshot's fitted parameters when
         available (and ``use_bgmm_priors``), otherwise its own pre-fit
         estimate (first snapshot, newborn halos). The covariance prior
-        scales the reference by the halo's growth, measured with its
-        pre-fit expected count, and by ``priors.covariance_scale(n)``.
-        Returns an empty dict when the method is not BGMM.
+        scales the reference by the halo's tree-mass growth since the
+        reference snapshot (virial scaling, ``mass_ratio ** (2/3)``), and
+        by ``priors.covariance_scale(n)``. Returns an empty dict when the
+        method is not BGMM.
 
         Parameters
         ----------
@@ -663,6 +671,7 @@ class XGMMAssigner:
 
         tid_to_idx = dict(zip(self.ensemble.sub_tree_ids,
                               range(len(self.ensemble.sub_tree_ids))))
+        tree_masses = self.ensemble.masses
 
         for i, sid in enumerate(group_subtrees):
             sid_int = int(sid)
@@ -681,15 +690,20 @@ class XGMMAssigner:
             if p is not None:
                 nk_n1 = max(p.get("count", 1.0), 1.0)
                 ref_vars = prior.degrade_covariance(p["covariance"], n_f)
+                # Old checkpoints carry no tree mass: no growth.
+                m_ref = p.get("tree_mass", 0.0)
+                m_now = tree_masses[idx] if idx is not None else 0.0
+                mass_ratio = m_now / m_ref if m_ref > 0 and m_now > 0 else 1.0
             else:
                 # No history: the halo's own pre-fit estimate is the
                 # reference (its scaled variances back in natural units).
                 nk_n1 = n_now
                 ref_vars = prior.degrade_covariance(np.asarray(covs_init[i]), n_f) / s**2
+                mass_ratio = 1.0
 
             wp[i] = prior.weight_concentration_prior(nk_n1, n_b, n_comp)
             pp[i] = prior.mean_precision_prior(nk_n1, n_b)
-            cp[i] = prior.covariance_prior(ref_vars, nk_n1, n_now, s, dof, self.cov_type)
+            cp[i] = prior.covariance_prior(ref_vars, mass_ratio, n_now, s, dof, self.cov_type)
 
         return dict(
             mean_prior=np.asarray(mp, dtype=md),
@@ -790,6 +804,20 @@ class XGMMAssigner:
 
             means[sid] = mean_s * inv_s + scaler.mean_
             weights[sid] = float(w)
-            covariances[sid] = cov_s * scaling_matrix
+            cov = cov_s * scaling_matrix
+            if np.isinf(cov).any():
+                # Overflow in the conversion (I01): clamp so the next
+                # snapshot's prior stays finite. sqrt keeps products of
+                # two entries finite. NaN is left to surface.
+                big = np.sqrt(0.1 * np.finfo(cov.dtype).max)
+                warnings.warn(
+                    f"Covariance of halo {sid} overflowed converting to "
+                    f"natural units; clamping inf to {big:.3g}", RuntimeWarning)
+                cov = np.nan_to_num(cov, nan=np.nan, posinf=big, neginf=-big)
+                if cov.ndim == 2:
+                    # Clamped off-diagonals can break positive
+                    # definiteness: keep the (positive) variances only.
+                    cov = np.diag(np.diag(cov))
+            covariances[sid] = cov
 
         return {"means": means, "weights": weights, "covariances": covariances}

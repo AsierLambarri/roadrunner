@@ -110,19 +110,26 @@ class HDF5AssignmentWriter:
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, "timescales.txt")
 
-    def _pick_float_dtype(self, arr):
+    def _pick_float_dtype(self, arr, what):
         """Smallest float dtype that preserves the data within ``float_atol``.
+
+        Only finite values set the range; non-finite ones stay visible in
+        the stored data.
 
         Parameters
         ----------
         arr : ndarray
+        what : str
+            Field label for the precision warning.
 
         Returns
         -------
         dtype : numpy.dtype
         """
+        arr = np.asarray(arr)
+        arr = arr[np.isfinite(arr)]
         max_abs = float(np.abs(arr).max()) if arr.size > 0 else 1.0
-        return select_float_dtype(max_abs, self._float_atol, msg="(assignment values)")
+        return select_float_dtype(max_abs, self._float_atol, msg=what, stacklevel=3)
 
     def write_snapshot(self, snapshot_id, time,
                        assignment_result, boundness_csc):
@@ -147,9 +154,17 @@ class HDF5AssignmentWriter:
 
             resp_csc = assignment_result.responsibilities
             all_gids = list(resp_csc.column_id)
+            # Stored as log-responsibilities: an absolute tolerance on
+            # log r is a relative one on r, so small responsibilities keep
+            # their digits. Exact zeros (underflowed entries kept by the
+            # latent-prior mask) become -inf. Values below float32's tiny
+            # are already 0 in resp_csc; recovering them would need the
+            # fit's log-probabilities.
+            with np.errstate(divide="ignore"):
+                log_resp = [np.log(v.astype(np.float64)) for v in resp_csc.column_values]
             if all_gids:
-                all_vals = np.concatenate(resp_csc.column_values)
-                float_dtype = self._pick_float_dtype(all_vals)
+                float_dtype = self._pick_float_dtype(
+                    np.concatenate(log_resp), "(log responsibilities)")
             else:
                 float_dtype = np.float32
 
@@ -161,7 +176,7 @@ class HDF5AssignmentWriter:
                 if len(boundness_csc.column_values) else np.array([])
             )
             finite_bound_vals = all_bound_vals[np.isfinite(all_bound_vals)]
-            bound_dtype = self._pick_float_dtype(finite_bound_vals)
+            bound_dtype = self._pick_float_dtype(finite_bound_vals, "(boundness)")
 
             bound_col_by_gid = {
                 gid: j for j, gid in enumerate(boundness_csc.column_id)
@@ -169,7 +184,6 @@ class HDF5AssignmentWriter:
 
             for j, gid in enumerate(all_gids):
                 resp_idx = resp_csc.column_indices[j]
-                resp_vals = resp_csc.column_values[j]
 
                 col = bound_col_by_gid.get(gid)
                 bound_rows = boundness_csc.column_indices[col] if col is not None else np.array([], dtype=resp_idx.dtype)
@@ -182,7 +196,7 @@ class HDF5AssignmentWriter:
 
                 pid_dtype = select_uint_dtype(
                     int(resp_idx.max()) if resp_idx.size > 0 else 1,
-                    "(particle indices)",
+                    f"(particle indices of galaxy {gid})",
                 )
                 grp.create_dataset(
                     "indices",
@@ -191,7 +205,7 @@ class HDF5AssignmentWriter:
                 )
                 grp.create_dataset(
                     "log_resp",
-                    data=resp_vals.astype(float_dtype, copy=False),
+                    data=log_resp[j].astype(float_dtype, copy=False),
                     compression="gzip",
                 )
                 grp.create_dataset(
@@ -208,7 +222,7 @@ class HDF5AssignmentWriter:
                 params = assignment_result.fitted_parameters.get(int(gid), {})
                 mean = params.get("mean")
                 if mean is not None:
-                    mean_dtype = self._pick_float_dtype(mean)
+                    mean_dtype = self._pick_float_dtype(mean, f"(mean of galaxy {gid})")
                     grp.create_dataset(
                         "mean",
                         data=np.asarray(mean).astype(mean_dtype, copy=False),
@@ -218,7 +232,7 @@ class HDF5AssignmentWriter:
                 if weight is not None:
                     w = float(weight)
                     w_dtype = select_float_dtype(
-                        w, self._float_atol, msg="(component weights)")
+                        w, self._float_atol, msg=f"(weight of galaxy {gid})")
                     grp.create_dataset(
                         "weight",
                         data=np.array([w], dtype=w_dtype),
@@ -230,7 +244,7 @@ class HDF5AssignmentWriter:
                     # Relative rule: entries span many decades, and an
                     # absolute tolerance would drop small eigenvalues.
                     cov_dtype = select_float_dtype_relative(
-                        cov_arr, self._float_atol, msg="(covariances)")
+                        cov_arr, self._float_atol, msg=f"(covariance of galaxy {gid})")
                     kw = {} if cov_arr.ndim == 0 else {"compression": "gzip"}
                     grp.create_dataset(
                         "covariance",

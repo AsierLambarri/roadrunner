@@ -23,8 +23,8 @@ class TestCovarianceScale:
     def test_covariance_prior_formula(self):
         diag_vars, s = np.array([1.0, 4.0]), np.array([2.0, 0.5])
         dof = 6.0
-        got = P.covariance_prior(diag_vars, 100.0, 150.0, s, dof, "diag")
-        np.testing.assert_allclose(got, dof * 1.5 * P.covariance_scale(150.0) * diag_vars * s ** 2)
+        got = P.covariance_prior(diag_vars, 1.5, 150.0, s, dof, "diag")
+        np.testing.assert_allclose(got, dof * 1.5 ** (2.0 / 3.0) * P.covariance_scale(150.0) * diag_vars * s ** 2)
 
 
 def _halo(sid, center):
@@ -53,11 +53,13 @@ class TestPriorReferences:
     DOF = 6 + PRIOR_DOF_OFFSET
 
     def test_history_and_newborn(self):
-        kw, scaler = _prior_kwargs({1: {"count": 250.0, "covariance": 2.0 * np.eye(6)}})
+        # halo 1's tree mass is 1e11 (see _halo); a 5e10 reference tree mass
+        # gives mass_ratio = 2.0.
+        kw, scaler = _prior_kwargs({1: {"count": 250.0, "covariance": 2.0 * np.eye(6), "tree_mass": 5e10}})
         s2 = scaler.scale_ ** 2
-        # halo 1 has history: previous covariance, growth from the expected count
+        # halo 1 has history: previous covariance, growth from the tree-mass ratio
         np.testing.assert_allclose(np.diag(kw["covariance_prior"][0]),
-                                   self.DOF * (280 / 250) * P.covariance_scale(280) * 2.0 * s2, rtol=1e-5)
+                                   self.DOF * 2.0 ** (2.0 / 3.0) * P.covariance_scale(280) * 2.0 * s2, rtol=1e-5)
         # halo 2 is new: its own pre-fit covariance and count are the reference
         np.testing.assert_allclose(np.diag(kw["covariance_prior"][1]),
                                    self.DOF * P.covariance_scale(120) * 0.2, rtol=1e-5)

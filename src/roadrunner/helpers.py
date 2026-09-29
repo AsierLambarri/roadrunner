@@ -18,7 +18,7 @@ import warnings
 import numpy as np
 
 
-def select_uint_dtype(max_val, msg=None):
+def select_uint_dtype(max_val, msg=None, stacklevel=2):
     """Return the smallest unsigned integer dtype that can hold ``max_val``.
 
     Parameters
@@ -27,6 +27,8 @@ def select_uint_dtype(max_val, msg=None):
         Maximum value to be stored.
     msg : str, optional
         Extra context appended to the warning when no dtype suffices.
+    stacklevel : int, default=2
+        Warning stack level (2 reports the caller).
 
     Returns
     -------
@@ -54,11 +56,11 @@ def select_uint_dtype(max_val, msg=None):
     elif bits <= 64:
         return np.uint64
     detail = f" {msg}" if msg else ""
-    warnings.warn(f"uint64 insufficient for requested precision{detail}")
+    warnings.warn(f"uint64 cannot hold {max_val}{detail}", stacklevel=stacklevel)
     return np.uint64
 
 
-def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None):
+def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None, stacklevel=2):
     """Return the smallest floating-point dtype with sufficient precision.
 
     Parameters
@@ -71,6 +73,8 @@ def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None):
         Include ``float128`` at the top of the precision ladder.
     msg : str, optional
         Extra context appended to the warning when no dtype suffices.
+    stacklevel : int, default=2
+        Warning stack level (2 reports the caller).
 
     Returns
     -------
@@ -79,6 +83,10 @@ def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None):
         when ``f128=True``).
     """
     max_value = abs(max_value)
+    detail = f" {msg}" if msg else ""
+    if not np.isfinite(max_value):
+        warnings.warn(f"non-finite value{detail}", stacklevel=stacklevel)
+        return np.float64
     ladder = [np.float16, np.float32, np.float64]
     if f128:
         float128 = getattr(np, "float128", None)
@@ -90,12 +98,13 @@ def select_float_dtype(max_value, abs_tol=1e-4, f128=False, msg=None):
             if np.spacing(x) / 2 <= abs_tol:
                 return dtype
     limit = "float128" if f128 else "float64"
-    detail = f" {msg}" if msg else ""
-    warnings.warn(f"{limit} insufficient for requested precision{detail}")
+    warnings.warn(
+        f"{limit} cannot hold {max_value:.3g} to absolute tolerance "
+        f"{abs_tol:g}{detail}", stacklevel=stacklevel)
     return np.float64
 
 
-def select_float_dtype_relative(values, rel_tol=1e-4, msg=None):
+def select_float_dtype_relative(values, rel_tol=1e-4, msg=None, stacklevel=2):
     """Return the smallest floating-point dtype preserving *values* to a relative tolerance.
 
     Every non-zero value must lie within the dtype's normal range, and
@@ -109,6 +118,8 @@ def select_float_dtype_relative(values, rel_tol=1e-4, msg=None):
     rel_tol : float, default=1e-4
     msg : str, optional
         Extra context appended to the warning when no dtype suffices.
+    stacklevel : int, default=2
+        Warning stack level (2 reports the caller).
 
     Returns
     -------
@@ -123,7 +134,9 @@ def select_float_dtype_relative(values, rel_tol=1e-4, msg=None):
         if info.eps / 2 <= rel_tol and info.tiny <= lo and hi <= info.max:
             return dtype
     detail = f" {msg}" if msg else ""
-    warnings.warn(f"float64 insufficient for requested relative precision{detail}")
+    warnings.warn(
+        f"float64 cannot hold the range [{lo:.3g}, {hi:.3g}] to relative "
+        f"tolerance {rel_tol:g}{detail}", stacklevel=stacklevel)
     return np.float64
 
 

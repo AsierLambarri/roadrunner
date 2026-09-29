@@ -45,6 +45,8 @@ PRIOR_COVARIANCE_SCALE_SMALL = 1.0 # covariance_prior scale f(n) at n <= PRIOR_S
 PRIOR_COVARIANCE_SCALE_LARGE = 0.7 # f(n) at n >= PRIOR_SCALE_N_LARGE, flat beyond
 PRIOR_SCALE_N_SMALL = 10.0         # f(n) is linear in n between these two counts
 PRIOR_SCALE_N_LARGE = 300.0
+PRIOR_GROWTH_MIN = 0.05           # bounds on the covariance growth factor (M_t/M_t-1)^(2/3):
+PRIOR_GROWTH_MAX = 2.0            # the stellar cloud is detached from the dark mass
 PRIOR_WEIGHT_DIVISOR = 5.0         # nk / divisor → weight_concentration_prior
 PRIOR_MEAN_DIVISOR = 10.0          # nk / divisor → mean_precision_prior
 

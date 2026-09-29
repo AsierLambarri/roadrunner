@@ -94,6 +94,11 @@ class HaloEnsemble:
         return np.array([h.virial_radius for h in self._halos], dtype=np.float64)
 
     @property
+    def masses(self) -> np.ndarray:
+        """Tree mass of each halo, shape ``(n_halos,)``."""
+        return np.array([h._inner.M for h in self._halos], dtype=np.float64)
+
+    @property
     def sub_tree_ids(self) -> np.ndarray:
         """``Sub_tree_id`` of each halo, shape ``(n_halos,)``."""
         return np.array([h.sub_tree_id for h in self._halos], dtype=GALAXY_ID)

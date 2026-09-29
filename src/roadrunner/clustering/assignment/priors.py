@@ -22,6 +22,8 @@ import numpy as np
 from roadrunner._defaults import (
     PRIOR_COVARIANCE_SCALE_LARGE,
     PRIOR_COVARIANCE_SCALE_SMALL,
+    PRIOR_GROWTH_MAX,
+    PRIOR_GROWTH_MIN,
     PRIOR_SCALE_N_LARGE,
     PRIOR_SCALE_N_SMALL,
     PRIOR_WEIGHT_DIVISOR,
@@ -78,8 +80,10 @@ def covariance_scale(n):
             + (PRIOR_COVARIANCE_SCALE_LARGE - PRIOR_COVARIANCE_SCALE_SMALL) * t)
 
 
-def covariance_prior(diag_vars, nk_n1, n_current, s, dof, cov_type):
-    """Scale per-dimension variances to the BGMM-expected covariance shape.
+def covariance_prior_count_ratio(diag_vars, nk_n1, n_current, s, dof, cov_type):
+    """Former count-ratio covariance prior, kept for reference, unused.
+
+    Scale per-dimension variances to the BGMM-expected covariance shape.
 
     The scaling factor is ``dof * n_current / nk_n1 * covariance_scale(n_current)``:
     the halo's growth since the reference times ``f(n)``. The result is
@@ -108,6 +112,72 @@ def covariance_prior(diag_vars, nk_n1, n_current, s, dof, cov_type):
         Covariance prior in the shape expected by the BGMM constructor.
     """
     scale = dof * n_current / max(nk_n1, 1.0) * covariance_scale(n_current)
+    scaled = diag_vars * s**2 * scale
+
+    if cov_type == "spherical":
+        return float(scaled.mean())
+    if "diag" in cov_type:
+        return scaled
+    return np.diag(scaled)
+
+
+def covariance_growth(mass_ratio):
+    """Covariance growth factor from the tree-mass ratio.
+
+    ``mass_ratio ** (2/3)`` (virial scaling at fixed mean density), clipped
+    to ``[PRIOR_GROWTH_MIN, PRIOR_GROWTH_MAX]``: the stellar cloud is
+    detached from the dark mass, so it cannot grow or shrink as fast. A
+    clipped step moves the covariance less than the real one would, so
+    the telescoping bound is kept.
+
+    Parameters
+    ----------
+    mass_ratio : float
+        Current tree mass over the tree mass at the reference snapshot.
+
+    Returns
+    -------
+    growth : float
+    """
+    return float(np.clip(mass_ratio ** (2.0 / 3.0), PRIOR_GROWTH_MIN, PRIOR_GROWTH_MAX))
+
+
+def covariance_prior(diag_vars, mass_ratio, n_current, s, dof, cov_type):
+    """Scale per-dimension variances to the BGMM-expected covariance shape.
+
+    The scaling factor is ``dof * covariance_growth(mass_ratio) * covariance_scale(n_current)``.
+    ``mass_ratio`` is the halo's current tree mass over the tree mass at the
+    reference snapshot; the ``2/3`` exponent is virial scaling at fixed mean
+    density (``R**2`` and ``sigma**2`` both scale as ``M**(2/3)``). Because
+    the ratio is of the same quantity (tree mass) at two snapshots, it
+    telescopes: a prior-only halo (never refit) can only see its covariance
+    change as much as its tree mass did, unlike the count ratio it replaces,
+    which compounded for starved halos. The result is reshaped according to
+    ``cov_type``.
+
+    Parameters
+    ----------
+    diag_vars : ndarray of shape (n_features,)
+        Reference per-dimension variances in natural coordinates.
+    mass_ratio : float
+        Current tree mass over the tree mass at the reference snapshot.
+    n_current : float
+        The halo's expected count this snapshot: its pre-fit
+        responsibilities summed, so particles shared with a neighbour
+        count only fractionally.
+    s : ndarray of shape (n_features,)
+        StandardScaler ``scale_`` values.
+    dof : float
+        Degrees of freedom (``n_features + PRIOR_DOF_OFFSET``).
+    cov_type : str
+        Covariance type.
+
+    Returns
+    -------
+    cov_prior : float or ndarray
+        Covariance prior in the shape expected by the BGMM constructor.
+    """
+    scale = dof * covariance_growth(mass_ratio) * covariance_scale(n_current)
     scaled = diag_vars * s**2 * scale
 
     if cov_type == "spherical":

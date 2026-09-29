@@ -22,7 +22,7 @@ def _make_assignment_result(n_particles=100, n_galaxies=5):
     for gid in range(1, n_galaxies + 1):
         mask = subtree_ids == gid
         pid = indices[mask]
-        vals = rng.uniform(-1, 0, len(pid)).astype(np.float32)
+        vals = rng.uniform(1e-6, 1, len(pid)).astype(np.float32)
         col_idx_list.append(pid)
         col_val_list.append(vals)
         gid_list.append(gid)
