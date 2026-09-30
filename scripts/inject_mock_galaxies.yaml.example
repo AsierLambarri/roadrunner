@@ -1,0 +1,69 @@
+# Example scenario for scripts/inject_mock_galaxies.py, written for
+# test_data/mock_simulation_tight (40 halos of 1e10 Msun, 11 snapshots,
+# generated with --v-sys 1000 1000 1000):
+#
+#   python scripts/inject_mock_galaxies.py \
+#       --input-dir  test_data/mock_simulation_tight \
+#       --output-dir test_data/mock_simulation_events \
+#       --scenario   scripts/inject_mock_galaxies.yaml.example \
+#       --v-sys 1000 1000 1000 --seed 1
+#
+# Positions and offsets are physical kpc, velocities km/s. Offsets in
+# "offset_rvir" are in units of the anchor's (physical) virial radius.
+
+defaults:
+  phi0: 0.01
+  g: 2.0            # the value the existing mocks were built with (Rvir 14.39 kpc for 1e10 Msun)
+  mass: 1.0e10      # limepy M = tree mass (Msun)
+  rh_pc: 3000       # limepy half-mass radius (pc)
+  star_mass: 1.0e4  # Msun per star particle
+
+galaxies:
+  # 1) A galaxy born beside an existing one, and forming stars afterwards.
+  - id: 101
+    birth_snapshot: 3
+    mass: 5.0e9
+    rh_pc: 2000
+    n_stars: 1500
+    n_new_per_snapshot: 50
+    anchor: 5
+    offset_rvir: [1.5, 0, 0]
+
+  # 2) A dark subhalo inside a host (tree rows only), drifting through it.
+  - id: 102
+    birth_snapshot: 2
+    mass: 1.0e9
+    rh_pc: 1500
+    n_stars: 0
+    anchor: 1
+    offset_rvir: [0.3, 0, 0]
+    v_rel: [-5, 0, 0]
+
+  # 3) Two galaxies born interacting at the same snapshot, 4 kpc apart.
+  - id: 103
+    birth_snapshot: 5
+    mass: 3.0e9
+    rh_pc: 1500
+    n_stars: 800
+    anchor: 8
+    offset_kpc: [20, 0, 0]
+  - id: 104
+    birth_snapshot: 5
+    mass: 3.0e9
+    rh_pc: 1500
+    n_stars: 800
+    anchor: 8
+    offset_kpc: [24, 0, 0]
+
+  # 4) A near-equal-mass infall and merger: born 3 Rvir from halo 3,
+  #    reaches it by snapshot 7 (43.2 kpc in 1.0 Gyr), then merges into it.
+  - id: 105
+    birth_snapshot: 1
+    mass: 1.0e10
+    rh_pc: 3000
+    n_stars: 2000
+    anchor: 3
+    offset_rvir: [3.0, 0, 0]
+    v_rel: [-43.1, 0, 0]
+    end_snapshot: 7
+    merge_into: 3
