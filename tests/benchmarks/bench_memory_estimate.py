@@ -13,12 +13,7 @@ from roadrunner.mixture._math import row_l1_normalize, row_squared_norms
 from roadrunner.mixture.weighted_gmm import (
     _estimate_gaussian_parameters,
 )
-from roadrunner.clustering.sparse import stitch_zero_rows
-
-try:
-    from roadrunner.clustering.assignment._merge_resp import _merge_resp_kernel
-except ImportError:
-    from roadrunner.clustering.assignment.gmm import _merge_resp_kernel
+from roadrunner.clustering.assignment.gmm import _drop_unbound_kernel, _rows_to_pad_kernel
 
 
 def rss_mb():
@@ -60,7 +55,6 @@ def measure(label, N, K):
     # Build data
     csc_b = make_csc(N, K, fill=0.3)
     csc_prev = make_csc(N, K, fill=0.2)
-    newborn = np.random.choice(N, max(1, N // 10), replace=False)
 
     gc.collect()
 
@@ -100,20 +94,16 @@ def measure(label, N, K):
         del csc_prev
 
         # 5. kernel (in-place on prev_dense)
-        newborn_1d = np.isin(csc_b.row_id, newborn)
-        r5a = rss_mb()
-        print(f"    after newborn mask:      {r5a - base:>8.1f} MB")
-
-        _merge_resp_kernel(prev_dense, prior, K, newborn_1d)
-        del newborn_1d
+        pad = _rows_to_pad_kernel(prev_dense, prior)
+        del pad
         r5 = rss_mb()
-        print(f"    after kernel (in-place): {r5 - base:>8.1f} MB")
+        print(f"    after pad mask:          {r5 - base:>8.1f} MB")
 
-        # 6. stitch_zero_rows (in-place on prev_dense)
-        resp = stitch_zero_rows(prior, prev_dense)
+        # 6. drop unbound entries (in-place on prev_dense)
+        _drop_unbound_kernel(prev_dense, prior)
+        resp = prev_dense
         r6 = rss_mb()
-        print(f"    after stitch (in-place): {r6 - base:>8.1f} MB")
-        assert resp is prev_dense, "stitch did not return alias"
+        print(f"    after drop (in-place):   {r6 - base:>8.1f} MB")
 
         # 7. row_l1_normalize (in-place on resp/prev_dense)
         resp = row_l1_normalize(resp)

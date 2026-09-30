@@ -59,9 +59,8 @@ class TestProcessSnapshot:
             cov_type="full", max_iter=5, tol=1e-2,
             min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
         )
-        newborn = np.arange(coords.shape[0], dtype=np.uint64)
         ensemble, result = process_snapshot(
-            snap_data, tree, newborn, None, assigner, _DEFAULT_CONFIG,
+            snap_data, tree, None, assigner, _DEFAULT_CONFIG,
         )
         assert isinstance(ensemble, HaloEnsemble)
         assert result.particle_df is not None
@@ -74,14 +73,13 @@ class TestProcessSnapshot:
             cov_type="full", max_iter=3, tol=1e-2,
             min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
         )
-        newborn = np.arange(coords.shape[0], dtype=np.uint64)
         _, r1 = process_snapshot(
-            snap_data, tree, newborn, None, assigner, _DEFAULT_CONFIG,
+            snap_data, tree, None, assigner, _DEFAULT_CONFIG,
         )
         prev_csc = r1.responsibilities
 
         _, r2 = process_snapshot(
-            snap_data, tree, newborn, prev_csc, assigner, _DEFAULT_CONFIG,
+            snap_data, tree, prev_csc, assigner, _DEFAULT_CONFIG,
         )
         assert len(r2.particle_df) == len(r1.particle_df)
 
@@ -91,16 +89,15 @@ class TestProcessSnapshot:
             cov_type="full", max_iter=5, tol=1e-2,
             min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
         )
-        newborn = np.arange(coords.shape[0], dtype=np.uint64)
 
         cfg_small = ProcessingConfig(search_factor=0.5)
         cfg_large = ProcessingConfig(search_factor=4.0)
 
         ens_small, _ = process_snapshot(
-            snap_data, tree, newborn, None, assigner, cfg_small,
+            snap_data, tree, None, assigner, cfg_small,
         )
         ens_large, _ = process_snapshot(
-            snap_data, tree, newborn, None, assigner, cfg_large,
+            snap_data, tree, None, assigner, cfg_large,
         )
         assert ens_large.nstars >= ens_small.nstars
 
@@ -143,10 +140,9 @@ class TestSmallHaloOwnership:
             min_particles=5, reg_covar=1e-6, prior_type="", verbose=0,
         )
         config = ProcessingConfig(min_particles=5)
-        newborn = np.arange(n, dtype=np.uint64)
 
         ensemble, result = process_snapshot(
-            snap_data, snap_df, newborn, None, assigner, config,
+            snap_data, snap_df, None, assigner, config,
         )
 
         # The 3 small-halo particles must be exclusively the small halo's:
@@ -186,7 +182,7 @@ class TestSmallHaloOwnership:
         assigner = XGMMAssigner(method="gmm", min_particles=5, verbose=0)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            _, result = process_snapshot(snap_data, snap_df, np.arange(3, dtype=np.uint64),
+            _, result = process_snapshot(snap_data, snap_df,
                                          None, assigner, ProcessingConfig(min_particles=5))
         assert not any("empty of particles" in str(w.message) for w in caught)
         assert set(result.fitted_parameters) == {2}
@@ -240,10 +236,9 @@ class TestExactIntegerSubTreeId:
             method="gmm", cov_type="full", max_iter=10, tol=1e-2,
             min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
         )
-        newborn = np.arange(n, dtype=np.uint64)
 
         ensemble, result = process_snapshot(
-            snap_data, snap_df, newborn, None, assigner, ProcessingConfig(),
+            snap_data, snap_df, None, assigner, ProcessingConfig(),
         )
 
         assert ensemble.sub_tree_ids.dtype == np.int64

@@ -24,6 +24,7 @@ import numpy as np
 from roadrunner._defaults import FRAGMENT_THRESHOLD, UNBOUND
 
 BAD_CONDITION = 1e6   # covariance condition number flagged as degenerate
+EMPTY_COUNT = 1.0     # fitted count below which a component is empty (prior-only)
 
 
 class GMMAssignerStatistics:
@@ -50,6 +51,9 @@ class GMMAssignerStatistics:
     bad_cond : int
         Components with condition number above ``BAD_CONDITION`` or a
         non-finite one.
+    empty : int
+        Components with fitted count below ``EMPTY_COUNT``: no data
+        backs their parameters, which are the prior's.
     avg_retention : float
         Median over galaxies of the fraction of their bound candidates
         that the fit assigns to them.
@@ -62,6 +66,7 @@ class GMMAssignerStatistics:
         self.avg_entropy = float("nan")
         self.avg_cond = float("nan")
         self.bad_cond = 0
+        self.empty = 0
         self.avg_retention = float("nan")
 
     def compute(self, particle_df, resp_map, fitted_parameters, boundness_csc=None):
@@ -130,6 +135,10 @@ class GMMAssignerStatistics:
         self.avg_cond = float(np.median(np.log10(np.maximum(finite, 1.0)))) if finite.size else float("nan")
         self.bad_cond = int((~np.isfinite(conds)).sum() + (finite > BAD_CONDITION).sum())
 
+        # ── Empty components (prior-only parameters) ──────────────
+        self.empty = int(sum(p["count"] < EMPTY_COUNT for p in fitted_parameters.values()
+                             if p.get("count") is not None))
+
         # ── Avg retention (normalised bound-to-tagged overlap) ────
         if boundness_csc is not None:
             retentions = []
@@ -167,7 +176,8 @@ class GMMAssignerStatistics:
         -------
         stats : dict of str → float
             Keys: ``unassigned``, ``fragments``, ``avg_conf``,
-            ``avg_entropy``, ``avg_cond``, ``bad_cond``, ``avg_retention``.
+            ``avg_entropy``, ``avg_cond``, ``bad_cond``, ``empty``,
+            ``avg_retention``.
         """
         return {
             "unassigned": self.unassigned,
@@ -176,5 +186,6 @@ class GMMAssignerStatistics:
             "avg_entropy": self.avg_entropy,
             "avg_cond": self.avg_cond,
             "bad_cond": self.bad_cond,
+            "empty": self.empty,
             "avg_retention": self.avg_retention,
         }

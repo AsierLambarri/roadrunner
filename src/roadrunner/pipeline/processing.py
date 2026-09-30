@@ -41,7 +41,6 @@ class ProcessingConfig:
 def process_snapshot(
     snap_data: SnapshotData,
     snap_df: pd.DataFrame,
-    newborn: np.ndarray,
     previous_resp,
     assigner: ParticleAssigner,
     config: ProcessingConfig,
@@ -54,8 +53,6 @@ def process_snapshot(
         Particle data for this snapshot.
     snap_df : DataFrame
         Merger-tree data for this snapshot.
-    newborn : ndarray
-        Indices of newborn particles.
     previous_resp : SparseCSC or None
         Responsibilities from the previous snapshot.
     assigner : ParticleAssigner
@@ -116,7 +113,7 @@ def process_snapshot(
     )
 
     result = assigner.assign(
-        ensemble, particle_coords, newborn, groups,
+        ensemble, particle_coords, groups,
         previous_resp=previous_resp, seed=current_seed("fit"),
         particle_masses=snap_data.mass,
     )

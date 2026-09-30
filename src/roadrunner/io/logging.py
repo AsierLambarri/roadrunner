@@ -127,6 +127,7 @@ class RunLogger:
             ("avg_entropy","AVG_ENTROPY",".3f"),
             ("avg_cond",   "LOG_COND",   ".3f"),
             ("bad_cond",   "BAD_COND",   "d"),
+            ("empty",      "EMPTY",      "d"),
             ("avg_retention","MED_RET",  ".3f"),
         ]
 

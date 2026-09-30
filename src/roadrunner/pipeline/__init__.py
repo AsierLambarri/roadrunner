@@ -5,7 +5,6 @@ from .reduction import ReductionConfig, reduce_snapshot
 from .translation import (
     responsibilities_to_sim,
     responsibilities_from_sim,
-    detect_newborns,
     update_birth_tracker,
     update_assembly_tracker,
     build_reduction_input,
@@ -22,7 +21,6 @@ __all__ = [
     "reduce_snapshot",
     "responsibilities_to_sim",
     "responsibilities_from_sim",
-    "detect_newborns",
     "update_birth_tracker",
     "update_assembly_tracker",
     "build_reduction_input",

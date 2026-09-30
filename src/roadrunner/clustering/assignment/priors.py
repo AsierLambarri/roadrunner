@@ -132,28 +132,32 @@ def covariance_growth(mass_ratio):
 
     Parameters
     ----------
-    mass_ratio : float
+    mass_ratio : float or ndarray
         Current tree mass over the tree mass at the reference snapshot.
 
     Returns
     -------
-    growth : float
+    growth : float or ndarray
     """
-    return float(np.clip(mass_ratio ** (2.0 / 3.0), PRIOR_GROWTH_MIN, PRIOR_GROWTH_MAX))
+    return np.clip(np.asarray(mass_ratio, dtype=np.float64) ** (2.0 / 3.0),
+                   PRIOR_GROWTH_MIN, PRIOR_GROWTH_MAX)
 
 
-def covariance_prior(diag_vars, mass_ratio, n_current, s, dof, cov_type):
+def covariance_prior(diag_vars, mass_ratio, nk_n1, s, dof, cov_type):
     """Scale per-dimension variances to the BGMM-expected covariance shape.
 
-    The scaling factor is ``dof * covariance_growth(mass_ratio) * covariance_scale(n_current)``.
+    The scaling factor is ``dof * covariance_growth(mass_ratio) * covariance_scale(nk_n1)``.
     ``mass_ratio`` is the halo's current tree mass over the tree mass at the
     reference snapshot; the ``2/3`` exponent is virial scaling at fixed mean
     density (``R**2`` and ``sigma**2`` both scale as ``M**(2/3)``). Because
     the ratio is of the same quantity (tree mass) at two snapshots, it
     telescopes: a prior-only halo (never refit) can only see its covariance
     change as much as its tree mass did, unlike the count ratio it replaces,
-    which compounded for starved halos. The result is reshaped according to
-    ``cov_type``.
+    which compounded for starved halos. ``f(n)`` is taken at the reference
+    count, as the weight and mean priors are: an empty component
+    (``nk_n1`` clipped to 1) gets ``f = 1``, so its covariance stays
+    constant but for the tree-mass growth. The result is reshaped
+    according to ``cov_type``.
 
     Parameters
     ----------
@@ -161,10 +165,9 @@ def covariance_prior(diag_vars, mass_ratio, n_current, s, dof, cov_type):
         Reference per-dimension variances in natural coordinates.
     mass_ratio : float
         Current tree mass over the tree mass at the reference snapshot.
-    n_current : float
-        The halo's expected count this snapshot: its pre-fit
-        responsibilities summed, so particles shared with a neighbour
-        count only fractionally.
+    nk_n1 : float
+        Reference effective count (previous snapshot's fitted count, or
+        the pre-fit expected count for a halo without history).
     s : ndarray of shape (n_features,)
         StandardScaler ``scale_`` values.
     dof : float
@@ -177,7 +180,7 @@ def covariance_prior(diag_vars, mass_ratio, n_current, s, dof, cov_type):
     cov_prior : float or ndarray
         Covariance prior in the shape expected by the BGMM constructor.
     """
-    scale = dof * covariance_growth(mass_ratio) * covariance_scale(n_current)
+    scale = dof * float(covariance_growth(mass_ratio)) * covariance_scale(nk_n1)
     scaled = diag_vars * s**2 * scale
 
     if cov_type == "spherical":

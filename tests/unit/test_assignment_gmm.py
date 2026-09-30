@@ -4,14 +4,16 @@ import pytest
 from roadrunner._mcf_types import ParticleAssigner
 from roadrunner.clustering.assignment.gmm import (
     XGMMAssigner,
-    _merge_resp_kernel,
+    _drop_unbound_kernel,
     _no_transform,
     _rank_transform,
+    _rows_to_pad_kernel,
 )
 from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.physics.potentials import KeplerPotential
+from roadrunner.physics.scaler import StandardScaler
 
 VCENTER = np.array([0.0, 0.0, 0.0])
 RVR = 100.0
@@ -65,28 +67,29 @@ class TestTransformFunctions:
         assert result.size == 0
 
 
-class TestMergeRespKernel:
+class TestPaddingKernels:
     def setup_method(self):
         self.n, self.k = 100, 5
         rng = np.random.default_rng(42)
         self.prev = rng.uniform(0, 1, (self.n, self.k)).astype(np.float32)
         self.bound = (rng.uniform(0, 1, (self.n, self.k)) > 0.3).astype(np.float32)
-        self.newborn = rng.random(self.n) < 0.1
 
-    def test_carry_over_preserved(self):
-        prev_copy = self.prev.copy()
-        _merge_resp_kernel(prev_copy, self.bound, self.k, self.newborn)
-        both = (self.bound > 0) & (self.prev > 0)
-        assert np.allclose(prev_copy[both], self.prev[both])
-        assert np.all(prev_copy[self.bound == 0] == 0.0)
+    def test_rows_to_pad_and_drop_unbound(self):
+        prev = self.prev.copy()
+        prev[::7, 0] = 0.0                       # some newly bound entries
+        orig = prev.copy()
+        pad = _rows_to_pad_kernel(prev, self.bound)
+        np.testing.assert_array_equal(pad, ((self.bound > 0) & (orig <= 0)).any(axis=1))
+        _drop_unbound_kernel(prev, self.bound)
+        both = (self.bound > 0) & (orig > 0)
+        assert np.allclose(prev[both], orig[both])
+        assert np.all(prev[self.bound == 0] == 0.0)
 
     def test_single_component(self):
-        prev = np.array([[0.5], [0.0]], dtype=np.float32)
-        bound = np.array([[1.0], [1.0]], dtype=np.float32)
-        newborn = np.array([False, True])
-        _merge_resp_kernel(prev, bound, 1, newborn)
-        assert prev[0, 0] == 0.5   # carry over
-        assert prev[1, 0] == 0.0   # newborn + bound → 0
+        prev = np.array([[0.5], [0.0], [0.0]], dtype=np.float32)
+        bound = np.ones((3, 1), dtype=np.float32)
+        pad = _rows_to_pad_kernel(prev, bound)
+        np.testing.assert_array_equal(pad, [False, True, True])   # carried; no previous resp -> padded
 
 
 # ── XGMMAssigner integration tests ───────────────────────
@@ -99,7 +102,7 @@ class TestXGMMAssigner:
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]
         assigner = XGMMAssigner(verbose=0)
-        result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
+        result = assigner.assign(halos, coords, groups)
         df = result.particle_df
         assert len(df) == 100
         assert df["Sub_tree_id"].nunique() == 2
@@ -114,7 +117,7 @@ class TestXGMMAssigner:
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]
         assigner = XGMMAssigner(verbose=0)
-        result = assigner.assign(halos, coords, np.array([], dtype=np.uint64), groups)
+        result = assigner.assign(halos, coords, groups)
         for sid, params in result.fitted_parameters.items():
             assert "weight" in params
             assert 0.0 <= params["weight"] <= 1.0
@@ -123,24 +126,16 @@ class TestXGMMAssigner:
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         groups = [[0], [1]]
         result1 = XGMMAssigner(verbose=0).assign(
-            halos, coords, np.array([], dtype=np.uint64), groups, seed=1234,
+            halos, coords, groups, seed=1234,
         )
         result2 = XGMMAssigner(verbose=0).assign(
-            halos, coords, np.array([], dtype=np.uint64), groups, seed=1234,
+            halos, coords, groups, seed=1234,
         )
         for sid in result1.fitted_parameters:
             np.testing.assert_array_equal(
                 result1.fitted_parameters[sid]["mean"],
                 result2.fitted_parameters[sid]["mean"],
             )
-
-    def test_newborn_handled(self):
-        halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
-        groups = [[0], [1]]
-        newborn = np.array([0, 1], dtype=np.uint64)
-        assigner = XGMMAssigner(verbose=0)
-        result = assigner.assign(halos, coords, newborn, groups)
-        assert result.particle_df is not None
 
     def test_previous_resp_accepted(self):
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=50)
@@ -158,7 +153,7 @@ class TestXGMMAssigner:
 
         assigner = XGMMAssigner(verbose=0)
         result = assigner.assign(
-            halos, coords, np.array([], dtype=np.uint64), groups,
+            halos, coords, groups,
             previous_resp=prev_resp,
         )
         assert result.particle_df is not None
@@ -182,7 +177,7 @@ class TestXGMMAssigner:
         )
         groups = [[0, 1]]
         assigner = XGMMAssigner(verbose=0, max_iter=5)
-        result = assigner.assign([h1, h2], coords, np.array([], dtype=np.uint64), groups)
+        result = assigner.assign([h1, h2], coords, groups)
         assert result.particle_df is not None
 
     def test_empty_group(self):
@@ -198,7 +193,7 @@ class TestXGMMAssigner:
         # h2 has no boundness — stays empty
         groups = [[0, 1]]
         assigner = XGMMAssigner(verbose=0)
-        result = assigner.assign([h1, h2], coords, np.array([], dtype=np.uint64), groups)
+        result = assigner.assign([h1, h2], coords, groups)
         assert result.particle_df is not None
 
 
@@ -216,6 +211,30 @@ def _two_halo_group(n=200):
                         np.linspace(0.1, 0.9, rows.size, dtype=np.float32),
                         np.full(rows.size, 0.1, dtype=np.float32))
     return [h1, h2], coords
+
+
+class TestPredictivePadding:
+    def test_initial_responsibilities(self):
+        # Halo 1 (bound to rows 0-149, at -10) has a previous fit; halo 2
+        # (rows 50-199, at +10) is new, with 50 exclusive particles. Rows
+        # 0-9 have no previous responsibility (newborn).
+        halos, coords = _two_halo_group()
+        a = XGMMAssigner(verbose=0)
+        a.particle_coords, a.ensemble = coords, HaloEnsemble(halos)
+        a.previous_parameters = {
+            1: {"count": 100.0, "covariance": 9.0 * np.eye(6), "tree_mass": 1e12}}
+        a.previous_resp = SparseCSC([np.arange(10, 100)], [np.ones(90, np.float32)],
+                                    column_id=np.array([1], dtype=np.int64))
+        csc_b, _ = a.ensemble.get_particles()
+        scaler = StandardScaler()
+        X = scaler.fit_transform(coords.astype(np.float32))
+        _, resp = a._initial_responsibilities(X, csc_b, np.ones(len(X), np.float32), scaler)
+        np.testing.assert_allclose(resp.sum(axis=1), 1.0, rtol=1e-6)
+        assert np.allclose(resp[:10], [1.0, 0.0])      # newborn, bound to halo 1 only
+        assert np.allclose(resp[10:50], [1.0, 0.0])    # carried over
+        assert np.all(resp[50:100, 0] > 0.99)          # newly bound to new halo 2, near halo 1
+        assert np.all(resp[100:150, 1] > 0.99)         # bound to both, near halo 2
+        assert np.allclose(resp[150:], [0.0, 1.0])     # exclusive to new halo 2
 
 
 class TestMassWeighting:
@@ -237,7 +256,7 @@ class TestMassWeighting:
         halos, coords = _setup_mock_halos(n_halos=1, n_particles=60)
         masses = np.random.default_rng(2).uniform(1.0, 10.0, 60)
         result = XGMMAssigner(verbose=0, mass_weighting=True).assign(
-            halos, coords, np.array([], dtype=np.uint64), [[0]], particle_masses=masses,
+            halos, coords, [[0]], particle_masses=masses,
         )
         params = result.fitted_parameters[1]
         np.testing.assert_allclose(params["mean"], np.average(coords, axis=0, weights=masses),
@@ -250,7 +269,7 @@ class TestMassWeighting:
         masses = np.full(coords.shape[0], 1e4)
         results = [
             XGMMAssigner(verbose=0, method=method, mass_weighting=mw).assign(
-                halos, coords, np.array([], dtype=np.uint64), [[0, 1]],
+                halos, coords, [[0, 1]],
                 seed=3, particle_masses=masses,
             )
             for mw in (False, True)
@@ -268,7 +287,7 @@ class TestMassWeighting:
         halos, coords = _setup_mock_halos(n_halos=2, n_particles=100)
         with pytest.raises(ValueError, match="particle_masses"):
             XGMMAssigner(verbose=0, mass_weighting=True).assign(
-                halos, coords, np.array([], dtype=np.uint64), [[0], [1]],
+                halos, coords, [[0], [1]],
             )
 
     def test_rejected_with_svi(self):

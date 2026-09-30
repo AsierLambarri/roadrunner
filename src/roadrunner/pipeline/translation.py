@@ -48,29 +48,6 @@ def responsibilities_from_sim(csc, snap_data: SnapshotData):
     return csc.remap_rows(src, dst)
 
 
-def detect_newborns(previous_resp, n_particles: int) -> np.ndarray:
-    """Detect newborn particles not present in the previous snapshot.
-
-    Parameters
-    ----------
-    previous_resp : SparseCSC or None
-        Responsibility matrix from the previous snapshot.
-    n_particles : int
-        Total number of particles in the current snapshot.
-
-    Returns
-    -------
-    newborns : ndarray of LOCAL_IDX
-        Array indices of particles that are new.
-    """
-    if previous_resp is None:
-        return np.arange(n_particles, dtype=LOCAL_IDX)
-    rows = np.asarray(previous_resp.row_id, dtype=np.int64)
-    seen = np.zeros(n_particles, dtype=bool)
-    seen[rows[(rows >= 0) & (rows < n_particles)]] = True
-    return np.flatnonzero(~seen).astype(LOCAL_IDX)
-
-
 def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult) -> None:
     """Update the birth tracker with the current snapshot assignment.
 

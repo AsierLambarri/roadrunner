@@ -57,14 +57,14 @@ class TestPriorReferences:
         # gives mass_ratio = 2.0.
         kw, scaler = _prior_kwargs({1: {"count": 250.0, "covariance": 2.0 * np.eye(6), "tree_mass": 5e10}})
         s2 = scaler.scale_ ** 2
-        # halo 1 has history: previous covariance, growth from the tree-mass ratio
+        # halo 1 has history: previous covariance and count, growth from the tree-mass ratio
         np.testing.assert_allclose(np.diag(kw["covariance_prior"][0]),
-                                   self.DOF * 2.0 ** (2.0 / 3.0) * P.covariance_scale(280) * 2.0 * s2, rtol=1e-5)
+                                   self.DOF * 2.0 ** (2.0 / 3.0) * P.covariance_scale(250) * 2.0 * s2, rtol=1e-5)
         # halo 2 is new: its own pre-fit covariance and count are the reference
         np.testing.assert_allclose(np.diag(kw["covariance_prior"][1]),
                                    self.DOF * P.covariance_scale(120) * 0.2, rtol=1e-5)
         np.testing.assert_allclose(kw["weight_concentration_prior"], [250 / 5, 120 / 5], rtol=1e-6)
-        np.testing.assert_allclose(kw["mean_precision_prior"], [250 / 10, 120 / 10], rtol=1e-6)
+        np.testing.assert_allclose(kw["mean_precision_prior"], [250 / 20, 120 / 20], rtol=1e-6)
         assert kw["degrees_of_freedom_prior"] == self.DOF
 
     @pytest.mark.parametrize("history,use", [(None, True), ({1: {"count": 250.0, "covariance": np.eye(6)}}, False)])
@@ -109,7 +109,7 @@ class TestSmallHaloRegressions:
         # The BGMM's own default covariance prior (the whole group's) inflated B ~1.5x.
         X, lab = self._data()
         res = XGMMAssigner(verbose=0, method="bgmm").assign(
-            _halos_for(X, lab, self.MUS, self.SIGS, (0, 1)), X, np.array([], np.uint64), [[0, 1]], seed=1)
+            _halos_for(X, lab, self.MUS, self.SIGS, (0, 1)), X, [[0, 1]], seed=1)
         B = res.fitted_parameters[2]
         assert np.diag(B["covariance"]).mean() / 0.09 < 1.2
         assert B["count"] / self.NB > 0.85
@@ -120,9 +120,9 @@ class TestSmallHaloRegressions:
         X, lab = self._data()
         a = XGMMAssigner(verbose=0, method="bgmm")
         first = a.assign(_halos_for(X[:3000], lab[:3000], self.MUS, self.SIGS, (0,)), X[:3000],
-                         np.array([], np.uint64), [[0]], seed=1)
+                         [[0]], seed=1)
         res = a.assign(_halos_for(X, lab, self.MUS, self.SIGS, (0, 1)), X,
-                       np.arange(3000, 3000 + self.NB, dtype=np.uint64), [[0, 1]], seed=2,
+                       [[0, 1]], seed=2,
                        previous_resp=first.responsibilities)
         assert set(res.fitted_parameters) == {1, 2}
         for p in res.fitted_parameters.values():

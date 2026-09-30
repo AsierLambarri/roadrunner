@@ -284,7 +284,6 @@ class ParticleAssigner(Protocol):
         self,
         halos: list,
         particle_coords: np.ndarray,
-        newborn_indices: np.ndarray,
         groups: list[list[int]],
         **kwargs,
     ) -> AssignmentResult: ...

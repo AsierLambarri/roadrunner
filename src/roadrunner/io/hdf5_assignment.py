@@ -238,6 +238,19 @@ class HDF5AssignmentWriter:
                         data=np.array([w], dtype=w_dtype),
                         compression="gzip",
                     )
+                count = params.get("count")
+                if count is not None:
+                    # Effective particle count (summed responsibility, in
+                    # the fit's weight units): tells a data-backed fit from
+                    # a prior-only one. Relative rule: counts span 0-1e7.
+                    c = float(count)
+                    c_dtype = select_float_dtype_relative(
+                        [c], self._float_atol, msg=f"(count of galaxy {gid})")
+                    grp.create_dataset(
+                        "count",
+                        data=np.array([c], dtype=c_dtype),
+                        compression="gzip",
+                    )
                 cov = params.get("covariance")
                 if cov is not None:
                     cov_arr = np.asarray(cov)

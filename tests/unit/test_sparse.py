@@ -3,7 +3,6 @@ import numpy as np
 from roadrunner.clustering.sparse import (
     SparseCSC,
     build_dense_from_csc,
-    stitch_zero_rows,
 )
 
 
@@ -63,15 +62,6 @@ class TestSparseCSC:
         )
         result = csc.to_dense()
         assert result.shape == (0, 1)
-
-
-class TestStitchZeroRows:
-    def test_basic(self):
-        m1 = np.array([[1.0, 2.0], [3.0, 4.0]])
-        m2 = np.array([[0.0, 0.0], [5.0, 6.0]])
-        result = stitch_zero_rows(m1, m2)
-        expected = np.array([[1.0, 2.0], [5.0, 6.0]])
-        assert np.array_equal(result, expected)
 
 
 class TestSparseCSCAlignBoth:

@@ -88,38 +88,6 @@ def _csc_to_dense_kernel(
     return np.asarray(dense, dtype=flat_values.dtype)
 
 
-@njit(parallel=True, cache=True)
-def stitch_zero_rows(matrix1, matrix2):
-    """Fill rows of ``matrix2`` that sum to zero with the corresponding row from ``matrix1``.
-
-    Operates in-place on ``matrix2``.  Both matrices must have identical shape.
-
-    Parameters
-    ----------
-    matrix1 : ndarray of shape (N, K)
-        Source matrix.
-    matrix2 : ndarray of shape (N, K)
-        Target matrix, modified in place.
-
-    Returns
-    -------
-    matrix2 : ndarray of shape (N, K)
-        Modified target matrix.
-    """
-    assert matrix1.shape == matrix2.shape, (
-        f"Matrices cannot be stitched together: shape {matrix1.shape} "
-        f"is incompatible with {matrix2.shape}."
-    )
-    nrows, ncols = matrix1.shape
-
-    for i in prange(nrows):
-        if matrix2[i, :].sum() > 0:
-            continue
-        matrix2[i, :] = matrix1[i, :]
-
-    return matrix2
-
-
 def _build_row_id(indices_list):
     """Compute the sorted unique row IDs across all columns.
 

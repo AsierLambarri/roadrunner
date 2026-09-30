@@ -13,7 +13,6 @@ from roadrunner.pipeline.processing import ProcessingConfig, process_snapshot
 from roadrunner.pipeline.reduction import ReductionConfig, reduce_snapshot
 from roadrunner.pipeline.translation import (
     build_reduction_input,
-    detect_newborns,
     responsibilities_from_sim,
     responsibilities_to_sim,
     update_assembly_tracker,
@@ -106,10 +105,9 @@ class SnapshotOrchestrator:
             and dynamical state.
         """
         previous_resp = responsibilities_from_sim(previous_resp_sim, snap_data)
-        newborn = detect_newborns(previous_resp, snap_data.position.shape[0])
 
         ensemble, result = process_snapshot(
-            snap_data, snap_df, newborn, previous_resp,
+            snap_data, snap_df, previous_resp,
             self.assigner, self.processing_config,
         )
 

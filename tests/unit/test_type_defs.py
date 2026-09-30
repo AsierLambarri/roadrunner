@@ -53,7 +53,7 @@ class TestAssignmentResult:
 
 
 class MockAssigner:
-    def assign(self, halos, particle_coords, newborn_indices, groups, **kwargs):
+    def assign(self, halos, particle_coords, groups, **kwargs):
         import pandas as pd
 
         return AssignmentResult(

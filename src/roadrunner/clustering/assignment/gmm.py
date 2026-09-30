@@ -7,8 +7,11 @@
 # Provides the XGMMAssigner, which dispatches to a concrete mixture
 # class based on a ``method`` string ("gmm", "bgmm", "svi-bgmm").
 # The assigner handles per-snapshot fitting, temporal smoothing via
-# previous responsibilities, and building BGMM prior kwargs from
-# the previous snapshot's fitted parameters.
+# previous responsibilities (particles bound to a halo they had no
+# previous responsibility for are padded by a predictive E-step under
+# the previous snapshot's model),
+# and building BGMM prior kwargs from the previous snapshot's fitted
+# parameters.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez
@@ -34,12 +37,13 @@ from scipy.stats import rankdata
 
 from roadrunner._mcf_types import AssignmentResult
 from roadrunner.clustering.assignment.statistics import GMMAssignerStatistics
-from roadrunner.clustering.sparse import SparseCSC, stitch_zero_rows
-from roadrunner.mixture._math import row_l1_normalize
+from roadrunner.clustering.sparse import SparseCSC
+from roadrunner.mixture._math import logsumexp, row_l1_normalize
 from roadrunner.mixture.base import BaseMixture
 from roadrunner.mixture.weighted_gmm import (
     WeightedGaussianMixture,
     _estimate_gaussian_parameters,
+    _estimate_log_gaussian_prob,
 )
 from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture
 from roadrunner.mixture.svi_bayesian_gmm import SVIBayesianGaussianMixture
@@ -128,41 +132,116 @@ def _rank_transform(values, func_rank=np.log1p):
 
 
 @njit(parallel=True, cache=True)
-def _merge_resp_kernel(raw, bound, n_components, newborn_1d):
-    """Merge previous responsibilities with boundness (in-place, parallel).
+def _rows_to_pad_kernel(prev, latent):
+    """Mark the rows whose starting responsibilities the E-step recomputes (parallel).
 
-    For each particle, the kernel decides the new responsibility value:
-    if the particle was previously assigned to a component (``p > 0``)
-    and is still bound (``b > 0``), the previous responsibility is kept.
-    Newborn particles get ``0`` for components they are not bound to.
+    A row is marked when its particle is bound now (``latent > 0``) to a
+    component it had no previous responsibility for: newborn (every row
+    of a group is bound to one of its halos), unbound or in another
+    group at the previous snapshot, newly bound, or underflowed to 0.
 
     Parameters
     ----------
-    raw : ndarray of float32, shape (n_particles, n_components)
-        Previous responsibilities (dense).  Modified in place.
-    bound : ndarray of float32, shape (n_particles, n_components)
-        Current boundness matrix.
-    n_components : int
-        Number of components.
-    newborn_1d : ndarray of bool, shape (n_particles,)
-        ``True`` for particles that are new this snapshot.
+    prev : ndarray of shape (n_particles, n_components)
+        Previous responsibilities, aligned to the group.
+    latent : ndarray of shape (n_particles, n_components)
+        Current latent prior (normalised boundness).
+
+    Returns
+    -------
+    pad : ndarray of bool, shape (n_particles,)
+        Rows to recompute.
     """
-    n = raw.shape[0]
-    inv_ncomp = 1.0 / n_components
-    for n_idx in prange(n):
-        is_newb = newborn_1d[n_idx]
-        for k_idx in range(n_components):
-            b = bound[n_idx, k_idx]
-            p = raw[n_idx, k_idx]
-            if b > 0:
-                if p > 0:
-                    raw[n_idx, k_idx] = p
-                elif not is_newb:
-                    raw[n_idx, k_idx] = inv_ncomp
-                else:
-                    raw[n_idx, k_idx] = 0.0
-            else:
-                raw[n_idx, k_idx] = 0.0
+    n, k = prev.shape
+    pad = np.zeros(n, dtype=np.bool_)
+    for i in prange(n):
+        flag = False
+        j = 0
+        while not flag and j < k:
+            flag = latent[i, j] > 0 and prev[i, j] <= 0
+            j += 1
+        pad[i] = flag
+    return pad
+
+
+@njit(parallel=True, cache=True)
+def _join_resp_kernel(resp, rows, log_resp_new):
+    """Overwrite ``resp[rows]`` with ``exp(log_resp_new)`` (in place, parallel).
+
+    Parameters
+    ----------
+    resp : ndarray of shape (n_particles, n_components)
+        Starting responsibilities. Modified in place.
+    rows : ndarray of int, shape (m,)
+        Rows of ``resp`` to overwrite.
+    log_resp_new : ndarray of shape (m, n_components)
+        Normalised log-responsibilities of those rows.
+    """
+    m, k = log_resp_new.shape
+    for i in prange(m):
+        r = rows[i]
+        for j in range(k):
+            resp[r, j] = np.exp(log_resp_new[i, j])
+
+
+@njit(parallel=True, cache=True)
+def _drop_unbound_kernel(resp, latent):
+    """Zero ``resp[n, k]`` wherever particle ``n`` is no longer bound to ``k`` (in place, parallel).
+
+    13-16x faster than ``resp[latent <= 0] = 0`` (benchmarked at
+    200k x 8 and 3M x 20).
+
+    Parameters
+    ----------
+    resp : ndarray of shape (n_particles, n_components)
+        Starting responsibilities. Modified in place.
+    latent : ndarray of shape (n_particles, n_components)
+        Current latent prior (normalised boundness).
+    """
+    n, k = resp.shape
+    for i in prange(n):
+        for j in range(k):
+            if latent[i, j] <= 0:
+                resp[i, j] = 0.0
+
+
+def _e_step(X, log_alpha, nk, means, covariances, cov_type):
+    """E-step of a Gaussian mixture from given parameters.
+
+    The computation of ``WeightedGaussianMixture._e_step``, with the
+    component weights from the counts ``nk``:
+    ``log_resp[i, k] = log N(x_i | mu_k, Sigma_k) + log(nk_k / sum(nk))
+    + log_alpha[i, k] - log_norm[i]``.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples, n_features)
+        Data.
+    log_alpha : ndarray of shape (n_samples, n_components)
+        Log latent prior (-inf where a component is excluded).
+    nk : ndarray of shape (n_components,)
+        Component counts (> 0).
+    means : ndarray of shape (n_components, n_features)
+        Component means.
+    covariances : ndarray
+        Component covariances (``cov_type`` shape).
+    cov_type : str
+        Covariance type.
+
+    Returns
+    -------
+    log_resp : ndarray of shape (n_samples, n_components)
+        Log posterior responsibilities.
+    log_norm : ndarray of shape (n_samples, 1)
+        Log normalisation constants.
+    """
+    with np.errstate(divide="ignore"):
+        log_gauss = _estimate_log_gaussian_prob(X, means, covariances, cov_type)
+        log_weights = np.log(nk / nk.sum()).astype(X.dtype, copy=False)
+        w_log_gauss = log_gauss + log_weights + log_alpha
+        log_norm = logsumexp(w_log_gauss)
+        log_resp = w_log_gauss - log_norm
+    return log_resp, log_norm
 
 
 class XGMMAssigner:
@@ -233,8 +312,7 @@ class XGMMAssigner:
         self.mass_weighting = mass_weighting
         self.mixture_kwargs = mixture_kwargs
 
-    def assign(self, halos, particle_coords, newborn_indices, groups,
-               **kwargs) -> AssignmentResult:
+    def assign(self, halos, particle_coords, groups, **kwargs) -> AssignmentResult:
         """Run the assigner on one snapshot's data.
 
         Parameters
@@ -243,8 +321,6 @@ class XGMMAssigner:
             Halos with boundness already computed.
         particle_coords : ndarray of shape (n_particles, 6)
             6-D phase-space coordinates.
-        newborn_indices : ndarray
-            Indices of newborn particles (empty if none).
         groups : list of list of int
             Indices of halos belonging to each overlapping group.
         **kwargs
@@ -274,7 +350,6 @@ class XGMMAssigner:
         self._tree_mass = dict(zip(self.ensemble.sub_tree_ids.tolist(),
                                    self.ensemble.masses.tolist()))
         self.particle_coords = particle_coords
-        self.newborn_indices = newborn_indices
         self.previous_resp = kwargs.get("previous_resp", {})
         self.particle_masses = kwargs.get("particle_masses")
         if self.mass_weighting and self.particle_masses is None:
@@ -545,7 +620,7 @@ class XGMMAssigner:
                         self.particle_coords[gp_idx].astype(md, copy=False))
                     w = self._group_weights(gp_idx)
                     prior, nk, means, covs, cov_t = self._estimate_initial_params(
-                        coords, csc_b, w)
+                        coords, csc_b, w, scaler)
                     init_kwargs = dict(
                         n_components=n_comp,
                         counts_init=np.asarray(nk, dtype=md),
@@ -615,8 +690,9 @@ class XGMMAssigner:
         estimate (first snapshot, newborn halos). The covariance prior
         scales the reference by the halo's tree-mass growth since the
         reference snapshot (virial scaling, ``mass_ratio ** (2/3)``), and
-        by ``priors.covariance_scale(n)``. Returns an empty dict when the
-        method is not BGMM.
+        by ``priors.covariance_scale(n)``. All three priors take the same
+        reference count. Returns an empty dict when the method is not
+        BGMM.
 
         Parameters
         ----------
@@ -636,7 +712,8 @@ class XGMMAssigner:
             same units as the fitted ``count``.
         nk_init : ndarray of shape (n_comp,)
             Pre-fit expected counts (the initial responsibilities,
-            carrying the previous snapshot's, summed with weights ``w``).
+            carrying the previous snapshot's, summed with weights ``w``):
+            the reference count of halos without history.
         covs_init : ndarray
             Pre-fit covariances in scaled coordinates (``cov_type`` shape).
 
@@ -669,41 +746,27 @@ class XGMMAssigner:
              for c in csc_b.column_indices],
             dtype=md)
 
-        tid_to_idx = dict(zip(self.ensemble.sub_tree_ids,
-                              range(len(self.ensemble.sub_tree_ids))))
-        tree_masses = self.ensemble.masses
+        pos6, ratios = self._group_tree_state(group_subtrees)
+        mp[:] = (pos6 - scaler.mean_) * s
 
         for i, sid in enumerate(group_subtrees):
             sid_int = int(sid)
-
-            idx = tid_to_idx.get(sid_int)
-            if idx is not None:
-                pos6 = np.concatenate([
-                    self.ensemble.positions[idx],
-                    self.ensemble.velocities[idx],
-                ]).astype(md, copy=False)
-                mp[i] = (pos6 - scaler.mean_) * s
-
             n_b = max(bound_counts[i], 1.0)
-            n_now = max(float(nk_init[i]), 1.0)
             p = history.get(sid_int) if history else None
             if p is not None:
                 nk_n1 = max(p.get("count", 1.0), 1.0)
                 ref_vars = prior.degrade_covariance(p["covariance"], n_f)
-                # Old checkpoints carry no tree mass: no growth.
-                m_ref = p.get("tree_mass", 0.0)
-                m_now = tree_masses[idx] if idx is not None else 0.0
-                mass_ratio = m_now / m_ref if m_ref > 0 and m_now > 0 else 1.0
+                mass_ratio = ratios[i]
             else:
                 # No history: the halo's own pre-fit estimate is the
                 # reference (its scaled variances back in natural units).
-                nk_n1 = n_now
+                nk_n1 = max(float(nk_init[i]), 1.0)
                 ref_vars = prior.degrade_covariance(np.asarray(covs_init[i]), n_f) / s**2
                 mass_ratio = 1.0
 
             wp[i] = prior.weight_concentration_prior(nk_n1, n_b, n_comp)
             pp[i] = prior.mean_precision_prior(nk_n1, n_b)
-            cp[i] = prior.covariance_prior(ref_vars, mass_ratio, n_now, s, dof, self.cov_type)
+            cp[i] = prior.covariance_prior(ref_vars, mass_ratio, nk_n1, s, dof, self.cov_type)
 
         return dict(
             mean_prior=np.asarray(mp, dtype=md),
@@ -713,12 +776,166 @@ class XGMMAssigner:
             degrees_of_freedom_prior=dof,
         )
 
-    def _estimate_initial_params(self, coords, csc_b, w):
+    def _group_tree_state(self, group_subtrees):
+        """Current tree phase-space position and tree-mass ratio of a group's halos.
+
+        Every halo of a group is in the ensemble (groups are
+        sub-ensembles).
+
+        Parameters
+        ----------
+        group_subtrees : ndarray of int64
+            ``Sub_tree_id`` of each component.
+
+        Returns
+        -------
+        pos6 : ndarray of shape (n_comp, 6)
+            Tree position and velocity (natural units).
+        mass_ratio : ndarray of shape (n_comp,)
+            Current tree mass over the tree mass stored with the previous
+            snapshot's fit; 1 without a previous fit or stored tree mass
+            (old checkpoints carry none).
+        """
+        ids = self.ensemble.sub_tree_ids
+        order = np.argsort(ids)
+        idx = order[np.searchsorted(ids, group_subtrees, sorter=order)]
+        pos6 = np.hstack([self.ensemble.positions[idx], self.ensemble.velocities[idx]])
+        history = self.previous_parameters or {}
+        m_ref = np.array([history.get(int(sid), {}).get("tree_mass", 0.0)
+                          for sid in group_subtrees], dtype=np.float64)
+        m_now = self.ensemble.masses[idx]
+        ok = (m_ref > 0) & (m_now > 0)
+        return pos6, np.where(ok, m_now / np.where(ok, m_ref, 1.0), 1.0)
+
+    def _predictive_params(self, coords, latent, csc_b, scaler, w):
+        """Counts, means and covariances of the predictive E-step for a group.
+
+        Means: each halo's current tree position and velocity. Halos with
+        a previous fit: the previous covariance grown by
+        ``priors.covariance_growth`` of the tree-mass ratio, and the
+        previous count (clipped at 1). New halos: from the particles bound
+        only to them within the group, count ``max(sum w, D + 1)`` and
+        their covariance, or that of their ``D + 1`` most bound particles
+        when fewer are exclusive.
+
+        Parameters
+        ----------
+        coords : ndarray of shape (n_particles, D)
+            Scaled coordinates of the group.
+        latent : ndarray of shape (n_particles, n_components)
+            Latent prior (normalised boundness).
+        csc_b : SparseCSC
+            Boundness matrix of the group.
+        scaler : StandardScaler
+            The group's scaler.
+        w : ndarray of shape (n_particles,)
+            Fit weights.
+
+        Returns
+        -------
+        nk : ndarray of shape (n_components,)
+            Component counts.
+        means : ndarray of shape (n_components, D)
+            Component means (scaled units).
+        covs : ndarray
+            Component covariances (``cov_type`` shape, scaled units).
+        """
+        md, d = coords.dtype, coords.shape[1]
+        s = scaler.scale_.astype(np.float64)
+        sids = csc_b.column_id
+        history = self.previous_parameters or {}
+        prev = [history.get(int(sid)) for sid in sids]
+        old = np.array([p is not None for p in prev], dtype=bool)
+        pos6, mass_ratio = self._group_tree_state(sids)
+
+        full, diag = self.cov_type == "full", "diag" in self.cov_type
+        covs = np.empty((len(sids),) + ((d, d) if full else (d,) if diag else ()), dtype=md)
+        nk = np.empty(len(sids), dtype=md)
+        means = ((pos6 - scaler.mean_) * s).astype(md)
+
+        if old.any():
+            # Previous fit, moved to the current tree.
+            C = np.stack([np.asarray(p["covariance"], dtype=np.float64)
+                          for p in prev if p is not None])
+            to_scaled = np.outer(s, s) if full else s**2 if diag else 1.0 / np.mean(1.0 / s**2)
+            growth = prior.covariance_growth(mass_ratio[old]).reshape((-1,) + (1,) * (C.ndim - 1))
+            covs[old] = C * to_scaled * growth
+            nk[old] = np.maximum([p["count"] for p in prev if p is not None], 1.0)
+
+        new = np.flatnonzero(~old)
+        if new.size:
+            # New halos: their exclusive particles, or their D + 1 most bound.
+            exclusive = (latent[:, new] > 0) & (np.count_nonzero(latent, axis=1) == 1)[:, None]
+            own = exclusive.copy()
+            for j in np.flatnonzero(exclusive.sum(axis=0) <= d):
+                k = new[j]
+                rows_k = np.searchsorted(csc_b.row_id, csc_b.column_indices[k])
+                if rows_k.size > d + 1:
+                    rows_k = rows_k[np.argpartition(csc_b.column_values[k], -(d + 1))[-(d + 1):]]
+                own[:, j] = False
+                own[rows_k, j] = True
+            sel = np.flatnonzero(own.any(axis=1))
+            _, _, cv = _estimate_gaussian_parameters(
+                coords[sel], own[sel].astype(md), w[sel], self.cov_type, reg_covar=self.reg_covar)
+            covs[new] = cv
+            nk[new] = np.maximum(w @ exclusive, d + 1.0)
+        return nk, means, covs
+
+    def _initial_responsibilities(self, coords, csc_b, w, scaler):
+        """Latent prior and starting responsibilities of a resolved group.
+
+        Without previous responsibilities (first snapshot) the start is
+        the latent prior. Otherwise each particle keeps its previous
+        responsibilities for the components it is still bound to, except
+        those bound to a component they had no previous responsibility
+        for (newborn, previously unbound or in another group, newly
+        bound), whose rows come from the predictive E-step ``log a_nk(t) + log pi_k(t-1) + log N(x_n |
+        m_k(t), Sigma_k(t-1))`` (see ``_predictive_params``).
+
+        Parameters
+        ----------
+        coords : ndarray of shape (n_particles, n_features)
+            Scaled coordinates of the group.
+        csc_b : SparseCSC
+            Boundness matrix of the group.
+        w : ndarray of shape (n_particles,)
+            Fit weights.
+        scaler : StandardScaler
+            The group's scaler.
+
+        Returns
+        -------
+        latent : ndarray of shape (n_particles, n_components)
+            Latent prior (the starting responsibilities themselves under
+            ``prior_type="temporal-log-lik"``).
+        resp : ndarray of shape (n_particles, n_components)
+            Starting responsibilities (rows sum to 1).
+        """
+        latent = row_l1_normalize(
+            csc_b.to_dense(col_func=_rank_transform)
+        ).astype(math_dtype(), copy=False)
+        if not self.previous_resp:
+            return latent, latent
+
+        resp = csc_b.align(self.previous_resp, how="left")[1].to_dense()
+        rows = np.flatnonzero(_rows_to_pad_kernel(resp, latent))
+        if rows.size:
+            with np.errstate(divide="ignore"):
+                log_alpha = np.log(latent[rows])
+            log_resp_new, _ = _e_step(
+                coords[rows], log_alpha,
+                *self._predictive_params(coords, latent, csc_b, scaler, w), self.cov_type)
+            _join_resp_kernel(resp, rows, log_resp_new)
+        _drop_unbound_kernel(resp, latent)
+        resp = row_l1_normalize(resp)
+        return (resp if self.prior_type.lower() == "temporal-log-lik" else latent), resp
+
+    def _estimate_initial_params(self, coords, csc_b, w, scaler):
         """Estimate initial mixture parameters from boundness and previous responsibilities.
 
-        Merges the boundness matrix with previous responsibilities
-        (when available) and computes Gaussian sufficient statistics
-        from the merged responsibility matrix.
+        The starting responsibilities come from
+        ``_initial_responsibilities``; the initial parameters are their
+        Gaussian sufficient statistics.
 
         Parameters
         ----------
@@ -728,11 +945,13 @@ class XGMMAssigner:
             Boundness matrix.
         w : ndarray of shape (n_particles,)
             Fit weights of the particles.
+        scaler : StandardScaler
+            The group's scaler.
 
         Returns
         -------
         prior : ndarray of shape (n_particles, n_components)
-            Normalised boundness (latent prior).
+            Latent prior.
         nk : ndarray of shape (n_components,)
             Effective counts.
         means : ndarray of shape (n_components, n_features)
@@ -742,30 +961,10 @@ class XGMMAssigner:
         cov_t : str
             Covariance type.
         """
-        n_components = len(csc_b.column_indices)
-
-        prior = row_l1_normalize(
-            csc_b.to_dense(col_func=_rank_transform)
-        ).astype(math_dtype(), copy=False)
-
-        if self.previous_resp:
-            _, aligned_p = csc_b.align(self.previous_resp, how="left")
-            prev_dense = aligned_p.to_dense()
-
-            newborn_1d = np.isin(csc_b.row_id, self.newborn_indices)
-            _merge_resp_kernel(prev_dense, prior, n_components, newborn_1d)
-
-            resp = stitch_zero_rows(prior, prev_dense)
-            resp = row_l1_normalize(resp)
-            if self.prior_type.lower() == "temporal-log-lik":
-                prior = resp
-        else:
-            resp = prior
-
+        prior, resp = self._initial_responsibilities(coords, csc_b, w, scaler)
         nk, means_init, covs_init = _estimate_gaussian_parameters(
             coords, resp, w, self.cov_type, reg_covar=self.reg_covar,
         )
-
         return prior, nk, means_init, covs_init, self.cov_type
 
     @staticmethod
@@ -785,6 +984,11 @@ class XGMMAssigner:
         natural : dict
             Parameters in natural coordinates with the same structure
             as ``stored``.
+
+        Raises
+        ------
+        FloatingPointError
+            If a covariance overflows to inf in the conversion.
         """
         inv_s = 1.0 / scaler.scale_
         means, weights, covariances = {}, {}, {}
@@ -806,18 +1010,12 @@ class XGMMAssigner:
             weights[sid] = float(w)
             cov = cov_s * scaling_matrix
             if np.isinf(cov).any():
-                # Overflow in the conversion (I01): clamp so the next
-                # snapshot's prior stays finite. sqrt keeps products of
-                # two entries finite. NaN is left to surface.
-                big = np.sqrt(0.1 * np.finfo(cov.dtype).max)
-                warnings.warn(
+                # An overflow here means the fitted covariance has run
+                # away (I01): fail where it arises, not one snapshot later
+                # when it becomes the next prior's reference.
+                raise FloatingPointError(
                     f"Covariance of halo {sid} overflowed converting to "
-                    f"natural units; clamping inf to {big:.3g}", RuntimeWarning)
-                cov = np.nan_to_num(cov, nan=np.nan, posinf=big, neginf=-big)
-                if cov.ndim == 2:
-                    # Clamped off-diagonals can break positive
-                    # definiteness: keep the (positive) variances only.
-                    cov = np.diag(np.diag(cov))
+                    f"natural units (largest scaled entry {np.abs(cov_s).max():.3g})")
             covariances[sid] = cov
 
         return {"means": means, "weights": weights, "covariances": covariances}

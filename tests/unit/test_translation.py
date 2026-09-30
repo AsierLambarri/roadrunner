@@ -12,7 +12,6 @@ from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
 from roadrunner.postprocessing.tracking.birth import BirthTracker
 from roadrunner.pipeline.translation import (
     build_reduction_input,
-    detect_newborns,
     responsibilities_from_sim,
     responsibilities_to_sim,
     update_assembly_tracker,
@@ -90,40 +89,6 @@ class TestRoundTrip:
 
         np.testing.assert_allclose(csc_back.column_values[0], [0.9, 0.1], atol=1e-6)
         np.testing.assert_allclose(csc_back.column_values[1], [0.6, 0.4], atol=1e-6)
-
-
-class TestDetectNewborns:
-    def test_none_previous_resp(self):
-        newborn = detect_newborns(None, 5)
-        np.testing.assert_array_equal(newborn, [0, 1, 2, 3, 4])
-        assert newborn.dtype == LOCAL_IDX
-
-    def test_with_previous_resp(self):
-        csc = _make_csc(
-            row_ids=[[0, 2, 4]],
-            col_ids=[1],
-            values=[[0.5, 0.3, 0.2]],
-        )
-        newborn = detect_newborns(csc, 6)
-        np.testing.assert_array_equal(sorted(newborn.tolist()), [1, 3, 5])
-
-    def test_all_existing(self):
-        csc = _make_csc(
-            row_ids=[[0, 1, 2]],
-            col_ids=[1],
-            values=[[0.3, 0.3, 0.4]],
-        )
-        newborn = detect_newborns(csc, 3)
-        assert len(newborn) == 0
-
-    def test_empty_previous_resp(self):
-        csc = SparseCSC(
-            [np.array([], dtype=np.int64)],
-            [np.array([], dtype=np.float32)],
-            column_id=np.array([1], dtype=np.int64),
-        )
-        newborn = detect_newborns(csc, 4)
-        np.testing.assert_array_equal(sorted(newborn.tolist()), [0, 1, 2, 3])
 
 
 def _halo(sid=1, n_bound=0, xcen=(0.0, 0.0, 0.0)):
