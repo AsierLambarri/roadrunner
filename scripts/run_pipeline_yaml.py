@@ -9,7 +9,10 @@ Usage:
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# This repository's code, unless PYTHONPATH already provides roadrunner.
+if not any(os.path.isfile(os.path.join(p, "roadrunner", "__init__.py"))
+           for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p):
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from roadrunner.pipeline import run_accretion_history, RunConfig
 

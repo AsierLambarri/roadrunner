@@ -45,7 +45,8 @@ class TestGMMAssignerStatistics:
             3: (np.array([2], dtype=np.uint64), np.array([1.0], dtype=np.float32)),
         }
         params = {1: {"covariance_condition": 10.0}, 2: {"covariance_condition": 1000.0},
-                  3: {"covariance_condition": 1e12}}
+                  3: {"covariance_condition": 1e12},
+                  4: {"covariance_condition": 1e12, "rank_deficient": True}}   # not counted
         s = GMMAssignerStatistics().compute(df, resp_map, params)
         assert np.isclose(s.avg_conf, 0.8)                  # mean(0.9, 0.7)
         assert 0.0 < s.avg_entropy < 1.0

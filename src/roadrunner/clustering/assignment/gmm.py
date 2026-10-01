@@ -689,8 +689,9 @@ class XGMMAssigner:
 
         Each component's prior is built from a reference count and
         covariance: its previous snapshot's fitted parameters when
-        available (and ``use_bgmm_priors``), otherwise its own pre-fit
-        estimate (first snapshot, newborn halos). The covariance prior
+        usable (``_history``, and ``use_bgmm_priors``), otherwise its own
+        pre-fit estimate (first snapshot, newborn halos, rank-deficient
+        previous fits). The covariance prior
         scales the reference by the halo's tree-mass growth since the
         reference snapshot (virial scaling, ``mass_ratio ** (2/3)``), and
         by ``priors.covariance_scale(n)``. All three priors take the same
@@ -728,7 +729,6 @@ class XGMMAssigner:
         """
         if self.method != "bgmm":
             return {}
-        history = self.previous_parameters if self.use_bgmm_priors else None
 
         md = math_dtype()
         n_f = self.particle_coords.shape[1]
@@ -755,7 +755,7 @@ class XGMMAssigner:
         for i, sid in enumerate(group_subtrees):
             sid_int = int(sid)
             n_b = max(bound_counts[i], 1.0)
-            p = history.get(sid_int) if history else None
+            p = self._history(sid_int) if self.use_bgmm_priors else None
             if p is not None:
                 nk_n1 = max(p.get("count", 1.0), 1.0)
                 ref_vars = prior.degrade_covariance(p["covariance"], n_f)

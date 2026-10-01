@@ -67,9 +67,14 @@ class TestPriorReferences:
         np.testing.assert_allclose(kw["mean_precision_prior"], [250 / 20, 120 / 20], rtol=1e-6)
         assert kw["degrees_of_freedom_prior"] == self.DOF
 
-    @pytest.mark.parametrize("history,use", [(None, True), ({1: {"count": 250.0, "covariance": np.eye(6)}}, False)])
+    @pytest.mark.parametrize("history,use", [
+        (None, True),
+        ({1: {"count": 250.0, "covariance": np.eye(6)}}, False),
+        ({1: {"count": 2.0, "covariance": np.eye(6), "rank_deficient": True}}, True),
+    ])
     def test_no_history_uses_own_estimate(self, history, use):
-        # First snapshot, or temporal priors switched off: every halo is its own reference.
+        # First snapshot, temporal priors switched off, or a rank-deficient
+        # previous fit: every halo is its own reference.
         kw, _ = _prior_kwargs(history, use_bgmm_priors=use)
         for i, (n, v) in enumerate(((280, 0.8), (120, 0.2))):
             np.testing.assert_allclose(np.diag(kw["covariance_prior"][i]),

@@ -47,10 +47,11 @@ class GMMAssignerStatistics:
         Mean entropy, normalised by ``log K``, over contested particles.
     avg_cond : float
         Median over components of ``log10`` of the covariance condition
-        number.
+        number. Rank-deficient fits (fewer than ``D + 1`` particles) are
+        not counted: their condition is huge by construction.
     bad_cond : int
-        Components with condition number above ``BAD_CONDITION`` or a
-        non-finite one.
+        Components, rank-deficient fits excepted, with condition number
+        above ``BAD_CONDITION`` or a non-finite one.
     empty : int
         Components with fitted count below ``EMPTY_COUNT``: no data
         backs their parameters, which are the prior's.
@@ -130,7 +131,8 @@ class GMMAssignerStatistics:
 
         # ── Condition number (from scaled covariances) ────────────
         conds = np.array([float(p["covariance_condition"]) for p in fitted_parameters.values()
-                          if p.get("covariance_condition") is not None])
+                          if p.get("covariance_condition") is not None
+                          and not p.get("rank_deficient", False)])
         finite = conds[np.isfinite(conds)]
         self.avg_cond = float(np.median(np.log10(np.maximum(finite, 1.0)))) if finite.size else float("nan")
         self.bad_cond = int((~np.isfinite(conds)).sum() + (finite > BAD_CONDITION).sum())

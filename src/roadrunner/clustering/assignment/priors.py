@@ -80,47 +80,6 @@ def covariance_scale(n):
             + (PRIOR_COVARIANCE_SCALE_LARGE - PRIOR_COVARIANCE_SCALE_SMALL) * t)
 
 
-def covariance_prior_count_ratio(diag_vars, nk_n1, n_current, s, dof, cov_type):
-    """Former count-ratio covariance prior, kept for reference, unused.
-
-    Scale per-dimension variances to the BGMM-expected covariance shape.
-
-    The scaling factor is ``dof * n_current / nk_n1 * covariance_scale(n_current)``:
-    the halo's growth since the reference times ``f(n)``. The result is
-    reshaped according to ``cov_type``.
-
-    Parameters
-    ----------
-    diag_vars : ndarray of shape (n_features,)
-        Reference per-dimension variances in natural coordinates.
-    nk_n1 : float
-        Reference effective count (previous snapshot's fitted count).
-    n_current : float
-        The halo's expected count this snapshot: its pre-fit
-        responsibilities summed, so particles shared with a neighbour
-        count only fractionally.
-    s : ndarray of shape (n_features,)
-        StandardScaler ``scale_`` values.
-    dof : float
-        Degrees of freedom (``n_features + PRIOR_DOF_OFFSET``).
-    cov_type : str
-        Covariance type.
-
-    Returns
-    -------
-    cov_prior : float or ndarray
-        Covariance prior in the shape expected by the BGMM constructor.
-    """
-    scale = dof * n_current / max(nk_n1, 1.0) * covariance_scale(n_current)
-    scaled = diag_vars * s**2 * scale
-
-    if cov_type == "spherical":
-        return float(scaled.mean())
-    if "diag" in cov_type:
-        return scaled
-    return np.diag(scaled)
-
-
 def covariance_growth(mass_ratio):
     """Covariance growth factor from the tree-mass ratio.
 
