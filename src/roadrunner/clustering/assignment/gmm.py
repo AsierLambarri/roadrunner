@@ -510,6 +510,7 @@ class XGMMAssigner:
                 "covariance": covs[0],
                 "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
                 "tree_mass": self._tree_mass.get(sid, 0.0),
+                "rank_deficient": gp_idx.size < self.particle_coords.shape[1] + 1,
             }
         }
         return params, post_prob, nonz
@@ -561,6 +562,7 @@ class XGMMAssigner:
                 "covariance": covs[i],
                 "covariance_condition": float(vals.max() / max(vals.min(), 1e-30)),
                 "tree_mass": self._tree_mass.get(sid, 0.0),
+                "rank_deficient": int(nonz[:, i].sum()) < self.particle_coords.shape[1] + 1,
             }
         return params, post_prob, nonz
 
@@ -676,6 +678,7 @@ class XGMMAssigner:
                     "covariance": natural["covariances"][sid],
                     "covariance_condition": cond,
                     "tree_mass": self._tree_mass.get(sid, 0.0),
+                    "rank_deficient": False,
                 }
 
         return params, post_prob, nonz
@@ -776,6 +779,28 @@ class XGMMAssigner:
             degrees_of_freedom_prior=dof,
         )
 
+    def _history(self, sid):
+        """The previous snapshot's fit of a halo, or None without a usable one.
+
+        A fit from fewer than ``D + 1`` particles (``rank_deficient``) has
+        a rank-deficient covariance: it is not a usable history.
+        Checkpoints written before the flag existed use the count.
+
+        Parameters
+        ----------
+        sid : int
+            ``Sub_tree_id`` of the halo.
+
+        Returns
+        -------
+        params : dict or None
+            Its previous fitted parameters, or None.
+        """
+        p = (self.previous_parameters or {}).get(int(sid))
+        if p is None or p.get("rank_deficient", p["count"] < self.particle_coords.shape[1] + 1):
+            return None
+        return p
+
     def _group_tree_state(self, group_subtrees):
         """Current tree phase-space position and tree-mass ratio of a group's halos.
 
@@ -811,10 +836,11 @@ class XGMMAssigner:
         """Counts, means and covariances of the predictive E-step for a group.
 
         Means: each halo's current tree position and velocity. Halos with
-        a previous fit: the previous covariance grown by
+        a usable previous fit (``_history``): the previous covariance grown by
         ``priors.covariance_growth`` of the tree-mass ratio, and the
-        previous count (clipped at 1). New halos: from the particles bound
-        only to them within the group, count ``max(sum w, D + 1)`` and
+        previous count (clipped at 1). New halos, and halos whose previous
+        fit is rank-deficient: from the particles bound only to them within
+        the group, count ``max(sum w, D + 1)`` and
         their covariance, or that of their ``D + 1`` most bound particles
         when fewer are exclusive.
 
@@ -843,8 +869,7 @@ class XGMMAssigner:
         md, d = coords.dtype, coords.shape[1]
         s = scaler.scale_.astype(np.float64)
         sids = csc_b.column_id
-        history = self.previous_parameters or {}
-        prev = [history.get(int(sid)) for sid in sids]
+        prev = [self._history(sid) for sid in sids]     # None: no fit, or a rank-deficient one
         old = np.array([p is not None for p in prev], dtype=bool)
         pos6, mass_ratio = self._group_tree_state(sids)
 

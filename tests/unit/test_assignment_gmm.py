@@ -213,16 +213,31 @@ def _two_halo_group(n=200):
     return [h1, h2], coords
 
 
+# A 2-particle fit: rank 1 plus reg_covar, rounded indefinite in float32
+# (smallest eigenvalue < 0), like halo 1228 in the halo685x12 v4 run.
+_RANK_DEFICIENT_COV = (np.outer(np.r_[1, 1, 1, 9, 6, 2], np.r_[1, 1, 1, 9, 6, 2]) * 1.2
+                       + 1e-6 * np.eye(6) - 4e-6 * np.diag([1, 0, 0, 0, 0, 0]))
+
+
 class TestPredictivePadding:
-    def test_initial_responsibilities(self):
+    @pytest.mark.parametrize("halo2", [
+        None,                                                                   # no previous fit
+        {"count": 2.0, "covariance": _RANK_DEFICIENT_COV, "rank_deficient": True},
+        {"count": 2.0, "covariance": _RANK_DEFICIENT_COV},                      # checkpoint before the flag
+    ])
+    def test_initial_responsibilities(self, halo2):
         # Halo 1 (bound to rows 0-149, at -10) has a previous fit; halo 2
-        # (rows 50-199, at +10) is new, with 50 exclusive particles. Rows
-        # 0-9 have no previous responsibility (newborn).
+        # (rows 50-199, at +10) is new, with 50 exclusive particles, or has
+        # only a rank-deficient previous fit, which must count as none.
+        # Rows 0-9 have no previous responsibility (newborn).
+        assert np.linalg.eigvalsh(_RANK_DEFICIENT_COV).min() < 0
         halos, coords = _two_halo_group()
         a = XGMMAssigner(verbose=0)
         a.particle_coords, a.ensemble = coords, HaloEnsemble(halos)
         a.previous_parameters = {
             1: {"count": 100.0, "covariance": 9.0 * np.eye(6), "tree_mass": 1e12}}
+        if halo2 is not None:
+            a.previous_parameters[2] = {**halo2, "tree_mass": 1e12}
         a.previous_resp = SparseCSC([np.arange(10, 100)], [np.ones(90, np.float32)],
                                     column_id=np.array([1], dtype=np.int64))
         csc_b, _ = a.ensemble.get_particles()
