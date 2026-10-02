@@ -197,7 +197,7 @@ def _check_parameter_shapes(weights, means, covariances,
 def _estimate_covariances_diagonal(resp, X, nk, means, reg_covar):
     """Estimates the diagonal covariance of a cloud of points.
 
-    Parameters(
+    Parameters
     ----------
     resp : array-like of shape (n_samples,  n_components)
         Responsibilities of each data point.
@@ -289,8 +289,8 @@ def _estimate_covariances_full(resp, X, nk, means, reg_covar):
     return covariances
 
 def _estimate_gaussian_parameters(X, resp, point_weights, cov_type, reg_covar):
-    """Estimate the Gaussian distribution parameters, changing covariance type
-    adaptativelly depending on each gaussian's effective number of points.
+    """Estimate the weighted Gaussian sufficient statistics (effective counts,
+    means, covariances) for all components from the responsibilities.
 
     Parameters
     ----------
@@ -298,21 +298,24 @@ def _estimate_gaussian_parameters(X, resp, point_weights, cov_type, reg_covar):
         Input data array.
     resp : array-like of shape (n_samples, n_components)
         Responsibilities for each data sample in X.
-    cov_type : str
-        Covariance type.
     point_weights : array-like of shape (n_samples,)
         Weights of individual points.
+    cov_type : str
+        Covariance type.
     reg_covar : float
         Regularization added to the diagonal of the covariance matrices.
 
     Returns
     -------
     nk : array-like of shape (n_components,)
-        Numbers of effectivge data samples in the current components.
+        Numbers of effective data samples in the current components.
     means : array-like of shape (n_components, n_features)
         Centers of the current components.
-    covariances : array-like of shape (n_components, n_features, n_features)
-        Covariance matrices of the current components.
+    covariances : array-like
+        Covariance matrices of the current components. Shape depends
+        on ``cov_type``: ``(n_components,)`` for ``"spherical"``,
+        ``(n_components, n_features)`` for ``"diagonal"``/``"diag"``,
+        or ``(n_components, n_features, n_features)`` for ``"full"``.
     """
     n_samples, _ = X.shape
     _, n_components = resp.shape

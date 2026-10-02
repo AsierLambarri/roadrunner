@@ -30,7 +30,9 @@ class ReductionConfig:
     min_particles_structural : int, default=30
         Minimum particles for structural property computation.
     ssc_nmin : int, default=30
-        Minimum particles for shrink-sphere centering.
+        Minimum particles for shrink-sphere centering. The value
+        actually passed to the property computation is clamped to be
+        at least ``min_particles_structural`` (see :func:`reduce_snapshot`).
     ssc_alpha : float, default=0.9
         Shrink-sphere contraction factor.
     dynstate_snapshots : int, list, str, or None

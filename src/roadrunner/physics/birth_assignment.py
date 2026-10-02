@@ -11,7 +11,7 @@
 #
 #############################################################################
 
-"""Assign particles to their birth halo by topological proximity."""
+"""Assign particles to their birth snapshot and group them by it."""
 
 import numpy as np
 

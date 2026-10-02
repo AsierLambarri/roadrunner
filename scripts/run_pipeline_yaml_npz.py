@@ -3,8 +3,8 @@
 (defaults to the particle-data config).
 
 Usage:
-  python scripts/run_pipeline_yaml_pdata.py
-  python scripts/run_pipeline_yaml_pdata.py --config path/to/config.yaml
+  python scripts/run_pipeline_yaml_npz.py
+  python scripts/run_pipeline_yaml_npz.py --config path/to/config.yaml
 """
 
 import os

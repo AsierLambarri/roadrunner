@@ -265,7 +265,12 @@ class XGMMAssigner:
     reg_covar : float, default=1e-6
         Covariance regularisation.
     prior_type : str, default=''
-        Prior type string (experimental).
+        When ``'temporal-log-lik'``, the group's starting responsibilities
+        (previous responsibilities plus the predictive E-step for padded
+        rows, see :meth:`_initial_responsibilities`) are fed to the mixture
+        fit as its ``latent_prior`` instead of the plain boundness-derived
+        latent prior. Any other value uses the boundness-derived latent
+        prior.
     verbose : int, default=1
         Verbosity level.
     method : str, default='gmm'
@@ -324,13 +329,18 @@ class XGMMAssigner:
         groups : list of list of int
             Indices of halos belonging to each overlapping group.
         **kwargs
-            Additional arguments (``snap_id``, ``previous_resp``, etc.).
+            Additional arguments (``snap_id``, etc.).
             ``seed`` (int or None): root seed for this snapshot's fit
             stage; each group gets an independent child seed spawned
             from it, in the order ``groups`` is given (already sorted
             largest-first by the caller). ``None`` uses OS entropy.
             ``particle_masses`` (ndarray of shape (n_particles,)):
             current particle masses, required with ``mass_weighting``.
+            ``previous_resp`` (SparseCSC, optional): the previous
+            snapshot's responsibility matrix, used to seed this
+            snapshot's starting responsibilities (see
+            :meth:`_initial_responsibilities`). Defaults to ``{}``
+            (falsy), treated as "no previous responsibilities".
 
         Returns
         -------
@@ -408,7 +418,7 @@ class XGMMAssigner:
 
         Returns
         -------
-        params : dict of ``{Sub_tree_id: {mean, count, covariance, condition}}``
+        params : dict of ``{Sub_tree_id: {mean, count, weight, covariance, covariance_condition, tree_mass, rank_deficient}}``
             Fitted parameters for each component in the group.
         """
         sub_ensemble = self.ensemble.select(group)
@@ -634,8 +644,8 @@ class XGMMAssigner:
                     prior_kwargs = self._build_prior_kwargs(
                         group_subtrees, csc_b, scaler, n_comp, gp_idx, w,
                         nk, covs)
-                    # Unweighted fits pass no weights: bitwise the
-                    # unweighted path.
+                    # Unweighted fits pass no weights: bitwise-identical
+                    # to the unweighted path.
                     fit_kwargs = {"point_weights": w} if self.mass_weighting else {}
                     gmm = self.mixture_class(
                         **init_kwargs, **prior_kwargs, **run_kwargs

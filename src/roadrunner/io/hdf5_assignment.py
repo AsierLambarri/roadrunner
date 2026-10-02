@@ -13,7 +13,7 @@
 
 """HDF5 writer for per-snapshot assignment data.
 
-Writes responsibilities, fitted mixture parameters, hard labels,
+Writes log-responsibilities, fitted mixture parameters, hard labels,
 boundness values, and particle timescales to per-snapshot HDF5 files.
 """
 
@@ -68,7 +68,7 @@ def _aligned_boundness(resp_rows, bound_rows, bound_values, dtype):
 
 
 class HDF5AssignmentWriter:
-    """Writes per-snapshot assignment data (responsibilities, parameters, hard labels) to HDF5.
+    """Writes per-snapshot assignment data (log-responsibilities, parameters, hard labels) to HDF5.
 
     Files are written to ``{output_dir}/assignment/snapshot{id:04d}.hdf5``.
 

@@ -20,11 +20,12 @@
 :class:`BaseMixture` provides the skeleton EM loop and the
 :meth:`_initialize_weights_and_prior` helper that normalises a
 ``latent_prior`` into ``log_alpha`` for the E-step.  Concrete
-subclasses implement :meth:`_check_parameters`,
+subclasses implement :meth:`_set_parameters`, :meth:`_check_parameters`,
 :meth:`_initialize_complete`, :meth:`_is_incomplete_init`,
 :meth:`_initialize_means`, :meth:`_m_step`,
-:meth:`_estimate_log_weights`, and
-:meth:`_estimate_log_gaussian_prob`.
+:meth:`_estimate_log_weights`, :meth:`_estimate_log_gaussian_prob`,
+and ``_compute_lower_bound`` (called from :meth:`fit` but not declared
+``abstract`` on this class).
 """
 
 import abc

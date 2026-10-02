@@ -13,9 +13,9 @@
 
 """HDF5 writer for per-snapshot particle data.
 
-Writes positions, velocities, masses, and indices to per-snapshot HDF5
-files.  Positions and velocities are stored in scaled coordinates using
-:class:`StandardScaler`.
+Writes positions, velocities, masses, indices, and any extra fields
+carried by the snapshot data to per-snapshot HDF5 files.  Positions and
+velocities are stored in scaled coordinates using :class:`StandardScaler`.
 """
 
 import os
@@ -62,14 +62,23 @@ class HDF5ParticleWriter:
     def write_snapshot(self, snapshot_id, time, redshift, snapshot_data):
         """Write one snapshot's particle data to an HDF5 file.
 
-        Positions and velocities are stored in scaled coordinates.
+        Positions and velocities are stored in scaled coordinates, along
+        with the :class:`StandardScaler` mean/scale used to recover the
+        unscaled values. Masses, indices, and any fields of
+        ``snapshot_data`` other than ``index``, ``mass``, ``position``,
+        and ``velocity`` are stored unscaled under their own names.
 
         Parameters
         ----------
         snapshot_id : int
+            Snapshot identifier.
         time : float
+            Cosmic time of the snapshot.
         redshift : float
+            Redshift of the snapshot.
         snapshot_data : SnapshotData
+            Particle data for this snapshot (positions, velocities,
+            masses, indices, and any extra fields).
         """
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:

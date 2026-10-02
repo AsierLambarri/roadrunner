@@ -109,8 +109,12 @@ class RunLogger:
         Parameters
         ----------
         stats : dict
-            Dictionary with keys ``runtime``, ``snap``, ``z``,
-            ``load``, ``process``, ``bound``, ``groups``, etc.
+            Dictionary with keys ``runtime``, ``snap``, ``z``, ``load``,
+            ``process``, ``reduction``, ``bound``, ``groups``,
+            ``fragments``, ``unassigned``, ``avg_conf``, ``avg_entropy``,
+            ``avg_cond``, ``bad_cond``, ``empty``, and ``avg_retention``.
+            A missing key, or a ``NaN`` float value, is rendered as
+            ``--``.
         """
         col_defs = [
             ("runtime",    "RUNTIME",    "s"),

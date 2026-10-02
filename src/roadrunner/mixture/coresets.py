@@ -196,29 +196,34 @@ def _exact_fudge(q, M, tol=5e-2, max_eta=1000):
 
 
 class GaussianCoreset:
-    """Handles coreset construction for Gaussian Mixture Models following M. Lucic et al. 2016, O. Bachem et al. 2017 and M. Lucic et al. 2018.The
-    CORESETs are sampled using importance sampling as in M. Lucic et al. 2018, but the EUCLIDEAN distance is changed for the MAHALANOBIS distance,
-    in order to accomodate dimensionally heterogeneous data and accomodate the significance to the specific GAUSSIAN model.
+    """Coreset construction for Gaussian mixture models.
+
+    Follows the importance-sampling scheme of M. Lucic et al. (2016,
+    2018) and O. Bachem et al. (2017), but replaces the Euclidean
+    distance with the Mahalanobis distance so that the sampling
+    weights account for each component's covariance, making the
+    method suitable for dimensionally heterogeneous data.
+
+    Parameters
+    ----------
+    n_components : int, default=2
+        Number of components or clusters.
+    centers : ndarray of shape (n_components, n_features), optional
+        Cluster centers. Estimated using k-means++ if not provided.
+    covariances : ndarray, optional
+        Gaussian covariance of each component; shape ``(n_components,)``,
+        ``(n_components, n_features)`` or
+        ``(n_components, n_features, n_features)`` for spherical,
+        diagonal or full covariance. Initialised to the identity if
+        not provided.
+    cov_type : {'full', 'diagonal', 'spherical'}, default='full'
+        Covariance type.
+    random_state : int or RandomState, optional
+        Random state used in sampling.
+    **kwargs
+        Unused; accepted for interface compatibility.
     """
     def __init__(self, n_components=2, centers=None, covariances=None, cov_type="full", random_state=None, **kwargs):
-        """Init importance sampling and coreset construction.
-
-        Parameters
-        ----------
-        n_components : int
-            Number of components or clusters. Default to 2.
-        centers : array of shape (n_components, n_features)
-            Cluster centers. Estimated using kmeans++ if not provided.
-        covariances : ndarray, optional
-            Gaussian covariance of each component; shape ``(n_components,)``,
-            ``(n_components, n_features)`` or
-            ``(n_components, n_features, n_features)`` for spherical,
-            diagonal or full covariance. Initialized to IDENTITY if not provided.
-        cov_type : {'full', 'diagonal', 'spherical'}, default='full'
-            Covariance type.
-        random_state : int or numpy.random
-            Random State used in sampling.
-        """
         self.n_components = n_components
         self.centers      = centers
         self.covariances  = covariances
@@ -328,7 +333,8 @@ class GaussianCoreset:
 
         Returns
         -------
-        self : class <GaussianCoreset>
+        self : GaussianCoreset
+            The fitted coreset sampler.
         """
         self.X = np.ascontiguousarray(X)
         n_samples, n_features = self.X.shape

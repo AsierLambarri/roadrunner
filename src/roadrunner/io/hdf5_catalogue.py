@@ -97,14 +97,22 @@ class HDF5CatalogueWriter:
                        properties_df, dynstate_df,
                        satellites_map):
         """Write one snapshot's galaxy properties and dynamical state.
-        
+
         Parameters
         ----------
         snapshot_id : int
+            Snapshot identifier.
         time : float
+            Cosmic time of the snapshot.
         properties_df : DataFrame
+            Per-galaxy properties for this snapshot. Not written if empty.
         dynstate_df : DataFrame
+            Riley dynamical-state criterion for this snapshot. Not written
+            if empty.
         satellites_map : dict
+            Maps each alive galaxy ID to an iterable of its satellite
+            galaxy IDs. Galaxies with no satellites are skipped; only
+            host galaxies get a dataset.
         """
         with h5py.File(self._path, "a") as hf:
             snap_grp = hf.require_group(f"/snapshots/{snapshot_id}")
@@ -157,7 +165,9 @@ class HDF5CatalogueWriter:
         Parameters
         ----------
         birth_df : DataFrame
+            Birth-tracking table. Not written if empty.
         assembly_df : DataFrame
+            Assembly-history table. Not written if empty.
         """
         with h5py.File(self._path, "a") as hf:
             final = hf.require_group("final")

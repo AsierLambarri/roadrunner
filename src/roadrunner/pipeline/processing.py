@@ -54,7 +54,8 @@ def process_snapshot(
     snap_df : DataFrame
         Merger-tree data for this snapshot.
     previous_resp : SparseCSC or None
-        Responsibilities from the previous snapshot.
+        Responsibilities from the previous snapshot, keyed by array
+        index (not simulation particle ID).
     assigner : ParticleAssigner
         The assigner to use for this snapshot.
     config : ProcessingConfig
