@@ -612,13 +612,19 @@ class TestAccretionPipeline:
         cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
         assert cat_reader.read_last_snapshot() == 1
 
-def test_energy_plausibility_checkpoint_resume(tmp_path):
-    """NFW + energy plausibility: the refit histogram survives a crash and resume."""
+@pytest.mark.parametrize("halo_model,plausibility", [("nfw", "energy"), ("kepler", "phase")])
+def test_plausibility_checkpoint_resume(tmp_path, halo_model, plausibility):
+    """The refit plausibility state survives a crash and resume."""
     import h5py
     from roadrunner.io.serialization import load_checkpoint
 
+    def same_state(a, b):
+        assert a.keys() == b.keys()
+        for k in a:
+            np.testing.assert_array_equal(a[k], b[k])
+
     pipeline, _, mock_reader, _ = _build_mock_pipeline(
-        tmp_path, n_duplicate=2, halo_model="nfw", plausibility="energy")
+        tmp_path, n_duplicate=2, halo_model=halo_model, plausibility=plausibility)
     original_load, calls = mock_reader.load, [0]
 
     def failing_load(path):
@@ -632,20 +638,22 @@ def test_energy_plausibility_checkpoint_resume(tmp_path):
         pipeline.run(str(tmp_path))
     state = load_checkpoint(os.path.join(str(tmp_path), "checkpoint.zst"))["plausibility"]
     assert state is not None
-    np.testing.assert_array_equal(state["edges"], pipeline.orchestrator.assigner.plausibility.state["edges"])
+    same_state(state, pipeline.orchestrator.assigner.plausibility.state)
 
     with h5py.File(os.path.join(str(tmp_path), "assignment", "snapshot0000.hdf5"), "r") as hf:
         for gid, grp in hf["galaxies"].items():
             b = grp["boundness"][:][grp["boundness_valid"][:]]
             assert grp.attrs["energy_scale"] > 0
-            assert np.all((b > 0) & (b < 1))          # NFW boundness is E / Phi_0
+            assert np.all(b > 0)
+            if halo_model == "nfw":
+                assert np.all(b < 1)                      # NFW boundness is E / Phi_0
 
     resumed, _, _, _ = _build_mock_pipeline(
-        tmp_path, n_duplicate=2, halo_model="nfw", plausibility="energy")
+        tmp_path, n_duplicate=2, halo_model=halo_model, plausibility=plausibility)
     restored = []
     plaus = resumed.orchestrator.assigner.plausibility
     original_set = plaus.set_state
     plaus.set_state = lambda s: (restored.append(s), original_set(s))
     resumed.run(str(tmp_path), resume=True)
-    np.testing.assert_array_equal(restored[0]["edges"], state["edges"])
+    same_state(restored[0], state)
     assert HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5")).read_last_snapshot() == 1

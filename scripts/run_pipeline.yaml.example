@@ -67,7 +67,7 @@ reg_covar: 1e-6                 # Regularization for covariance
 
 # ── Physics ──────────────────────────────────────────────────────────────────
 halo_model: kepler              # kepler, nfw
-plausibility: rank              # Latent prior: rank, energy (nfw only)
+plausibility: rank              # Latent prior: rank, energy (nfw only), phase
 n_los: 15                       # Number of lines of sight for properties
 search_factor: 1.0              # Search radius multiplier (Rvir)
 comoving: true                  # Merger tree positions in comoving kpc (true)

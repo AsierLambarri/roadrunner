@@ -132,6 +132,7 @@ The E-step is masked by a latent prior a_nk, the row-normalised plausibility of 
 
 - `rank`: log1p of the boundness rank within each halo.
 - `energy` (NFW only): a likelihood ratio on the particle's rank u in the halo's dark-matter energy distribution. It is a histogram of the previous snapshot's members in t = -ln u (refit between snapshots, outside EM), mixed with Errani et al. (2022)'s tagging ratio, with r½ = 0.015 R_vir, and floored.
+- `phase` (any potential: Kepler in closed form, NFW tabulated): a likelihood ratio on the fraction w of the halo's bound phase space more bound than the particle, with a log-normal member model in t = -ln w. The model is the previous snapshot's members' moments, mixed with circular orbits around r½ = 0.015 R_vir, and floored.
 
 ```
 log r_nk = log a_nk + log π_k + log N(x_n | μ_k, Σ_k) - log Z_n
@@ -215,7 +216,7 @@ All keys are fields of the frozen dataclass `RunConfig` (`src/roadrunner/pipelin
 | Key | Default | Meaning |
 |---|---|---|
 | `halo_model` | `kepler` | Potential: `kepler` or `nfw`. |
-| `plausibility` | `rank` | Latent prior: `rank` or `energy` (NFW only). |
+| `plausibility` | `rank` | Latent prior: `rank`, `energy` (NFW only) or `phase`. |
 | `search_factor` | `1.0` | Boundness search radius in units of the virial radius. |
 | `comoving` | `true` | Merger-tree and particle lengths are comoving kpc. |
 | `n_los` | `15` | Lines of sight for projected properties. |

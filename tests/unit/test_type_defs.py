@@ -98,6 +98,9 @@ class MockPotentialModel:
     def log_energy_density(self, eps):
         raise NotImplementedError
 
+    def log_phase_space_fraction(self, boundness):
+        return -1.5 * np.log(boundness)
+
 
 class TestPotentialModelProtocol:
     def test_mock_potential_passes_isinstance(self):

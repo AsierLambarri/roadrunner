@@ -212,6 +212,20 @@ class HaloModel:
         """
         return self._inner.log_energy_density(eps)
 
+    def log_phase_space_fraction(self, boundness: np.ndarray) -> np.ndarray:
+        """Log fraction of the virial sphere's bound phase space more bound than ``boundness``.
+
+        Parameters
+        ----------
+        boundness : ndarray
+            Normalised boundness as stored by :func:`compute_halo_bound_particles`.
+
+        Returns
+        -------
+        log_w : ndarray
+        """
+        return self._inner.log_phase_space_fraction(boundness)
+
     def compute_energy(self, xyz_or_r, vxyz_or_mag, relative=True):
         """Total specific orbital energy ``E = Φ + ½v²``.
 

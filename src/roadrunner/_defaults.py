@@ -55,6 +55,9 @@ PLAUSIBILITY_PRIOR_WEIGHT = 0.2    # A: Errani prior's weight relative to the me
 PLAUSIBILITY_FLOOR = 1e-8          # κ: share of members that look like random halo particles
 PLAUSIBILITY_MIN_BINS = 10         # adaptive histogram in t = -ln u: equal-weight bins,
 PLAUSIBILITY_MAX_BINS = 100        # 2 n_eff^(1/3) of them (Rice rule), clipped to these
+PLAUSIBILITY_MIN_MEMBERS = 100     # minimum effective member count for a refit (energy, phase)
+PLAUSIBILITY_LIT_SCATTER_DEX = 0.4 # "phase": member radii around r_1/2: exp. disk 0.35 dex ⊕ Kravtsov 0.2 dex
+PLAUSIBILITY_MIN_SCATTER_DEX = 0.2 # "phase": sigma* floor, Kravtsov's galaxy-size scatter (mapped per halo)
 
 # ── Coresets ───────────────────────────────────────────────────────
 CORESET_ALPHA_BASE = 16

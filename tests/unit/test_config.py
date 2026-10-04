@@ -103,3 +103,5 @@ class TestPlausibilityConfig:
             RunConfig(halo_model="kepler", plausibility="energy")
         with pytest.raises(ValueError, match="plausibility must be"):
             RunConfig(plausibility="nope")
+        assert RunConfig(halo_model="kepler", plausibility="phase").plausibility == "phase"
+        assert RunConfig(halo_model="nfw", plausibility="phase").plausibility == "phase"

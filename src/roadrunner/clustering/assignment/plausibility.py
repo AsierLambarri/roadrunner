@@ -34,6 +34,12 @@ Models:
   ``r_1/2 = 0.015 R_vir``, Kravtsov 2013) and floored:
   ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
   ``lam = A / (1 + A)``. Without a histogram yet (first snapshot) ``lam = 1``.
+- ``"phase"`` (any potential): the same ratio on the fraction ``w`` of the
+  halo's bound phase space more bound than the particle (uniform for a
+  smooth phase-space background, so ``t = -ln w`` is ``Exp(1)``), with a
+  log-normal member model ``t ~ Normal(mu*, sigma*)``: the pooled moments of
+  the previous snapshot's members mixed with each halo's literature model
+  (circular orbits around ``r_1/2 = 0.015 R_vir``), and floored.
 """
 
 import functools
@@ -43,8 +49,11 @@ from scipy.stats import rankdata
 
 from roadrunner._defaults import (
     PLAUSIBILITY_FLOOR,
+    PLAUSIBILITY_LIT_SCATTER_DEX,
     PLAUSIBILITY_MAX_BINS,
     PLAUSIBILITY_MIN_BINS,
+    PLAUSIBILITY_MIN_MEMBERS,
+    PLAUSIBILITY_MIN_SCATTER_DEX,
     PLAUSIBILITY_PRIOR_WEIGHT,
 )
 from roadrunner.physics.energy_distribution import (
@@ -193,6 +202,48 @@ class _Plausibility:
         """
         return None
 
+    def _member_depths(self, resp_map, weights=None):
+        """Depths ``t`` and weights ``r_nk (x weight)`` of this snapshot's bound member pairs.
+
+        Uses the per-halo ``(rows, t)`` that a refitting model's ``prepare``
+        caches in ``self._t``.
+
+        Parameters
+        ----------
+        resp_map : dict of {int: (ndarray, ndarray)}
+            ``Sub_tree_id -> (sorted particle rows, responsibilities)``.
+        weights : ndarray of shape (n_particles,), optional
+            Particle weights (masses under ``mass_weighting``).
+
+        Returns
+        -------
+        t, w : ndarray
+            Positive weights only. ``None, None`` when the effective member
+            count is below ``PLAUSIBILITY_MIN_MEMBERS`` (keep the previous fit).
+        """
+        ts, ws = [], []
+        for sid, (rows_r, r) in resp_map.items():
+            cached = self._t.get(int(sid))
+            if cached is None:
+                continue
+            rows_b, t = cached
+            pos = np.searchsorted(rows_b, rows_r)
+            ok = pos < rows_b.size
+            ok[ok] = rows_b[pos[ok]] == rows_r[ok]
+            w = np.asarray(r, dtype=np.float64)[ok]
+            if weights is not None:
+                w = w * weights[rows_r[ok]]
+            ts.append(t[pos[ok]])
+            ws.append(w)
+        if not ts:
+            return None, None
+        t, w = np.concatenate(ts), np.concatenate(ws)
+        keep = w > 0
+        t, w = t[keep], w[keep]
+        if w.size == 0 or w.sum() ** 2 / np.dot(w, w) < PLAUSIBILITY_MIN_MEMBERS:
+            return None, None
+        return t, w
+
     @property
     def state(self):
         """Checkpoint state (``None``: nothing to keep)."""
@@ -272,7 +323,7 @@ class EnergyPlausibility(_Plausibility):
         the particle weight); single-halo groups give ``r = 1``. Bins are
         equal-weight quantiles of ``t``, ``2 n_eff^(1/3)`` of them clipped
         to ``[PLAUSIBILITY_MIN_BINS, PLAUSIBILITY_MAX_BINS]``. With
-        ``n_eff < 10 PLAUSIBILITY_MIN_BINS`` the previous histogram is kept.
+        ``n_eff < PLAUSIBILITY_MIN_MEMBERS`` the previous histogram is kept.
 
         Parameters
         ----------
@@ -281,30 +332,10 @@ class EnergyPlausibility(_Plausibility):
         weights : ndarray of shape (n_particles,), optional
             Particle weights (masses under ``mass_weighting``).
         """
-        ts, ws = [], []
-        for sid, (rows_r, r) in resp_map.items():
-            cached = self._t.get(int(sid))
-            if cached is None:
-                continue
-            rows_b, t = cached
-            pos = np.searchsorted(rows_b, rows_r)
-            ok = pos < rows_b.size
-            ok[ok] = rows_b[pos[ok]] == rows_r[ok]
-            w = np.asarray(r, dtype=np.float64)[ok]
-            if weights is not None:
-                w = w * weights[rows_r[ok]]
-            ts.append(t[pos[ok]])
-            ws.append(w)
-        if not ts:
-            return
-        t, w = np.concatenate(ts), np.concatenate(ws)
-        keep = w > 0
-        t, w = t[keep], w[keep]
-        if w.size == 0:
+        t, w = self._member_depths(resp_map, weights)
+        if t is None:
             return
         n_eff = w.sum() ** 2 / np.dot(w, w)
-        if n_eff < 10 * PLAUSIBILITY_MIN_BINS:
-            return
         n_bins = int(np.clip(round(2.0 * n_eff ** (1.0 / 3.0)),
                              PLAUSIBILITY_MIN_BINS, PLAUSIBILITY_MAX_BINS))
         order = np.argsort(t)
@@ -340,7 +371,139 @@ class EnergyPlausibility(_Plausibility):
             self._log_density = np.asarray(state["log_density"], dtype=np.float64)
 
 
-_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility}
+_LOG_2PI = np.log(2.0 * np.pi)
+_FD_STEP = 1e-3                                   # central difference step in ln r
+
+
+def _normal_log_pdf(t, mu, sd):
+    """Log density of ``Normal(mu, sd)`` at ``t``."""
+    return -0.5 * ((t - mu) / sd) ** 2 - np.log(sd) - 0.5 * _LOG_2PI
+
+
+def literature_depth(halo):
+    """Literature member model of a halo in ``t = -ln w``, and its width floor.
+
+    Circular orbits at ``r_1/2 = KRAVTSOV_RHALF R_vir`` and at
+    ``r_1/2 * 10^(±s)`` for ``s`` = ``PLAUSIBILITY_LIT_SCATTER_DEX`` and
+    ``PLAUSIBILITY_MIN_SCATTER_DEX``: ``v_c^2 = dPhi / d ln r`` (central
+    difference in ``ln r``, so independent of the comoving/physical
+    scaling), ``E = Phi + v_c^2 / 2``. One potential call and one
+    phase-space call per halo.
+
+    Parameters
+    ----------
+    halo : HaloModel
+
+    Returns
+    -------
+    mu : float
+        Depth of the ``r_1/2`` circular orbit.
+    sd : float
+        Half the depth range over ``± PLAUSIBILITY_LIT_SCATTER_DEX`` dex.
+    sd_min : float
+        Half the depth range over ``± PLAUSIBILITY_MIN_SCATTER_DEX`` dex.
+    """
+    s1, s2 = PLAUSIBILITY_LIT_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX
+    r = KRAVTSOV_RHALF * halo.virial_radius * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
+    steps = np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
+    phi = halo.potential((r[:, None] * steps).ravel()).reshape(r.size, 3)
+    v2 = (phi[:, 2] - phi[:, 0]) / (2.0 * _FD_STEP)
+    b = -(phi[:, 1] + 0.5 * v2) / halo.binding_energy_scale()
+    t = -halo.log_phase_space_fraction(b)
+    return float(t[0]), 0.5 * abs(t[1] - t[2]), 0.5 * abs(t[3] - t[4])
+
+
+class PhaseSpacePlausibility(_Plausibility):
+    """Log-normal member model on the phase-space fraction ``w`` (any potential).
+
+    ``t = -ln w`` is ``Exp(1)`` for a uniform phase-space background, so
+    ``alpha = p*(t) e^t``. ``p*`` mixes the pooled empirical
+    ``Normal(mu*, sigma*)`` of the previous snapshot's members (weight
+    ``1 - lam``) with each halo's literature Normal (weight ``lam``), and is
+    floored like the energy model.
+    """
+
+    name = "phase"
+
+    def __init__(self):
+        super().__init__()
+        self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._mu: float | None = None
+        self._sd: float | None = None
+        self._sd_min = 0.0
+
+    def prepare(self, halos):
+        """Compute α for every bound pair of this snapshot.
+
+        Also records the snapshot's width floor: the median over halos of
+        the ``PLAUSIBILITY_MIN_SCATTER_DEX`` depth spread (so the floor
+        follows the potential family).
+
+        Parameters
+        ----------
+        halos : HaloEnsemble or iterable of HaloModel
+            Halos with boundness already computed (any potential).
+        """
+        lam = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)
+        log_keep, log_floor = np.log1p(-PLAUSIBILITY_FLOOR), np.log(PLAUSIBILITY_FLOOR)
+        self._alpha, self._t = {}, {}
+        floors = []
+        for h in halos:
+            if not h.has_boundness:
+                continue
+            rows, b, _ = h.get_boundness()
+            t = -h.log_phase_space_fraction(b.astype(np.float64))
+            mu_l, sd_l, sd_min = literature_depth(h)
+            floors.append(sd_min)
+            log_mix = _normal_log_pdf(t, mu_l, sd_l)
+            if self._mu is not None:
+                log_mix = np.logaddexp(np.log1p(-lam) + _normal_log_pdf(t, self._mu, self._sd),
+                                       np.log(lam) + log_mix)
+            log_alpha = np.logaddexp(log_keep + log_mix + t, log_floor)
+            sid = int(h.sub_tree_id)
+            self._alpha[sid] = np.exp(np.minimum(log_alpha, _LOG_ALPHA_MAX))
+            self._t[sid] = (rows, t)
+        if floors:
+            self._sd_min = float(np.median(floors))
+
+    def update(self, resp_map, weights=None):
+        """Refit ``(mu*, sigma*)`` as weighted moments of this snapshot's member depths.
+
+        ``sigma*`` is floored at this snapshot's width floor (see
+        :meth:`prepare`). With fewer than ``PLAUSIBILITY_MIN_MEMBERS``
+        effective members the previous fit is kept.
+
+        Parameters
+        ----------
+        resp_map : dict of {int: (ndarray, ndarray)}
+            ``Sub_tree_id -> (sorted particle rows, responsibilities)``.
+        weights : ndarray of shape (n_particles,), optional
+            Particle weights (masses under ``mass_weighting``).
+        """
+        t, w = self._member_depths(resp_map, weights)
+        if t is None:
+            return
+        mu = float(np.average(t, weights=w))
+        sd = float(np.sqrt(np.average((t - mu) ** 2, weights=w)))
+        self._mu, self._sd = mu, max(sd, self._sd_min)
+
+    @property
+    def state(self):
+        """``{"mu", "sd"}``, or ``None`` before the first refit."""
+        return None if self._mu is None else {"mu": self._mu, "sd": self._sd}
+
+    def set_state(self, state):
+        """Restore ``(mu*, sigma*)`` (``None``: literature model alone).
+
+        Parameters
+        ----------
+        state : dict or None
+        """
+        self._mu = None if state is None else float(state["mu"])
+        self._sd = None if state is None else float(state["sd"])
+
+
+_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility, "phase": PhaseSpacePlausibility}
 
 
 def make_plausibility(name):
@@ -349,11 +512,11 @@ def make_plausibility(name):
     Parameters
     ----------
     name : str
-        ``"rank"`` or ``"energy"``.
+        ``"rank"``, ``"energy"`` or ``"phase"``.
 
     Returns
     -------
-    model : RankPlausibility or EnergyPlausibility
+    model : RankPlausibility, EnergyPlausibility or PhaseSpacePlausibility
     """
     try:
         return _MODELS[name.lower()]()

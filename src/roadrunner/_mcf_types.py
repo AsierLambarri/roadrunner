@@ -296,8 +296,10 @@ class PotentialModel(Protocol):
     Implementations provide the potential, dynamical time and tidal
     denominator at given radii, the energy scale that normalises binding
     energies, and, where the potential has a finite centre, its central
-    value and its dark-matter energy distribution. Methods a model cannot
-    define raise ``NotImplementedError``.
+    value and its dark-matter energy distribution, and the log fraction of
+    the virial sphere's bound phase space that is more bound than a given
+    normalised boundness. Methods a model cannot define raise
+    ``NotImplementedError``.
     """
 
     def potential(self, r: np.ndarray) -> np.ndarray: ...
@@ -307,6 +309,7 @@ class PotentialModel(Protocol):
     def central_potential(self) -> float: ...
     def energy_fraction(self, eps: np.ndarray) -> np.ndarray: ...
     def log_energy_density(self, eps: np.ndarray) -> np.ndarray: ...
+    def log_phase_space_fraction(self, boundness: np.ndarray) -> np.ndarray: ...
 
 
 @runtime_checkable

@@ -4,12 +4,14 @@ import numpy as np
 import pytest
 from scipy.stats import rankdata
 
-from roadrunner._defaults import PLAUSIBILITY_FLOOR, math_dtype, precision
+from roadrunner._defaults import PLAUSIBILITY_FLOOR, PLAUSIBILITY_MIN_MEMBERS, math_dtype, precision
 from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.clustering.assignment.plausibility import (
     EnergyPlausibility,
     KRAVTSOV_RHALF,
+    PhaseSpacePlausibility,
     RankPlausibility,
+    literature_depth,
     _errani_scales,
     errani_log_ratio,
     make_plausibility,
@@ -145,6 +147,95 @@ class TestAssignerWithEnergyPlausibility:
         state = a.plausibility.state
         assert state is not None
         # Every bound pair keeps a positive prior, so it stays in the responsibilities.
+        for j, sid in enumerate(r1.responsibilities.column_id):
+            k = list(csc_b.column_id).index(sid)
+            np.testing.assert_array_equal(r1.responsibilities.column_indices[j], csc_b.column_indices[k])
+        r2 = a.assign(halos, coords, [[0, 1]], seed=1, previous_resp=r1.responsibilities)
+        assert (r2.particle_df["Sub_tree_id"] > 0).sum() == np.union1d(*csc_b.column_indices).size
+
+
+def _kepler_halo(xcen, vel, M, rvir, sid):
+    return HaloModel(KeplerPotential(M=M), np.asarray(xcen, float), np.asarray(vel, float), rvir,
+                     sub_tree_id=sid, redshift=0.0, comoving=False)
+
+
+def _two_kepler_halos(seed=3):
+    """Kepler host and satellite with overlapping bound sets, boundness computed."""
+    rng = np.random.default_rng(seed)
+    host = _kepler_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, 1)
+    sat = _kepler_halo([15, 0, 0], [0, 50, 0], 1e10, 25.0, 2)
+    coords = np.vstack([
+        np.hstack([rng.normal(0, 5, (300, 3)), rng.normal(0, 30, (300, 3))]),
+        np.hstack([rng.normal([15, 0, 0], 1.5, (200, 3)), rng.normal([0, 50, 0], 10, (200, 3))]),
+    ])
+    halos = HaloEnsemble([host, sat])
+    compute_halo_bound_particles(halos, coords)
+    return halos, coords
+
+
+class TestPhaseSpacePlausibility:
+    def test_literature_depth_values(self):
+        mu, sd, sd_min = literature_depth(_kepler_halo([0, 0, 0], [0, 0, 0], 1e10, 50.0, 1))
+        np.testing.assert_allclose([mu, sd, sd_min], [6.482, 1.382, 0.691], rtol=2e-3)
+        for c, ref in [(3.0, 17.44), (10.0, 14.88), (30.0, 12.80)]:
+            mu, sd, sd_min = literature_depth(_nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1))
+            np.testing.assert_allclose(mu, ref, rtol=1e-2)
+            assert 1.5 < sd_min < sd                       # NFW: ~1.8-2.0 floor, ~3.6-4.1 width
+
+    @pytest.mark.parametrize("make", [_two_kepler_halos, _two_nfw_halos])
+    def test_alpha_positive_and_literature_only_first(self, make):
+        halos, _ = make()
+        p = PhaseSpacePlausibility()
+        p.prepare(halos)
+        for h in halos:
+            rows, b, _ = h.get_boundness()
+            alpha = p.column_values([h.sub_tree_id])[0]
+            assert alpha.shape == rows.shape
+            assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-12))
+            t = -h.log_phase_space_fraction(b.astype(float))
+            mu, sd, _ = literature_depth(h)
+            ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(-0.5 * ((t - mu) / sd) ** 2 + t) / (sd * np.sqrt(2 * np.pi)) + PLAUSIBILITY_FLOOR
+            np.testing.assert_allclose(alpha, ref, rtol=1e-10)
+
+    def test_update_moments_floor_skip_and_state(self):
+        rng = np.random.default_rng(0)
+        rows = np.arange(5000)
+        t = rng.normal(7.0, 2.0, rows.size)
+        r = rng.uniform(0.1, 1.0, rows.size)
+        p = PhaseSpacePlausibility()
+        p._t, p._sd_min = {3: (rows, t)}, 0.5
+        p.update({3: (rows, r)})
+        mu = np.average(t, weights=r)
+        np.testing.assert_allclose([p._mu, p._sd], [mu, np.sqrt(np.average((t - mu) ** 2, weights=r))])
+        p._sd_min = 10.0                                     # floor binds
+        p.update({3: (rows, r)})
+        assert p._sd == 10.0
+        state = p.state
+        p.update({3: (rows[: PLAUSIBILITY_MIN_MEMBERS // 2], r[: PLAUSIBILITY_MIN_MEMBERS // 2])})
+        assert p.state == state                              # too few members: kept
+        q = PhaseSpacePlausibility()
+        q.set_state(state)
+        assert q.state == state
+        q.set_state(None)
+        assert q.state is None
+
+    def test_deep_satellite_particle_beats_shallow_host_pair(self):
+        host = _kepler_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 1)
+        sat = _kepler_halo([50, 0, 0], [0, 0, 0], 1e10, 30.0, 2)
+        host.set_boundness(np.array([0]), np.array([1.0]), np.ones(1))    # shallow in the host
+        sat.set_boundness(np.array([0]), np.array([30.0]), np.ones(1))    # deep in the satellite
+        p = PhaseSpacePlausibility()
+        p.prepare([host, sat])
+        a_host, a_sat = (v[0] for v in p.column_values([1, 2]))
+        assert a_sat / (a_sat + a_host) > 0.9
+
+    def test_assigner_runs_twice_on_kepler_halos(self):
+        halos, coords = _two_kepler_halos()
+        csc_b, _ = halos.get_particles()
+        assert np.intersect1d(*csc_b.column_indices).size > 0
+        a = XGMMAssigner(verbose=0, method="bgmm", plausibility="phase")
+        r1 = a.assign(halos, coords, [[0, 1]], seed=1)
+        assert a.plausibility.state is not None
         for j, sid in enumerate(r1.responsibilities.column_id):
             k = list(csc_b.column_id).index(sid)
             np.testing.assert_array_equal(r1.responsibilities.column_indices[j], csc_b.column_indices[k])

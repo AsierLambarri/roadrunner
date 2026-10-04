@@ -266,8 +266,8 @@ class XGMMAssigner:
         Requires ``particle_masses`` in :meth:`assign`. Not supported
         by ``'svi-bgmm'``.
     plausibility : str, default='rank'
-        Latent prior α model (:mod:`.plausibility`): ``'rank'`` or
-        ``'energy'`` (NFW halos only).
+        Latent prior α model (:mod:`.plausibility`): ``'rank'``,
+        ``'energy'`` (NFW halos only) or ``'phase'``.
     **mixture_kwargs
         Additional keyword arguments forwarded to the mixture
         constructor (e.g. ``n_svi_iters``, ``batch_size`` for SVI).

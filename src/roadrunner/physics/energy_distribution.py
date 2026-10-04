@@ -21,7 +21,10 @@ The energy distribution of a halo truncated at its virial radius
 ``x = c`` is ``n(calE | c) ∝ f(E) g(E, c)``, where ``f`` is the Eddington
 distribution function of the isotropic NFW profile and ``g`` the density
 of states inside ``x <= c``. ``n`` is normalised on ``calE in [0, 1]``.
-Tables on a (concentration, calE) grid are built once per process.
+The phase-space fraction ``w = q(E) / q(0)``, with ``q`` the phase-space
+volume more bound than ``E`` inside ``x <= c``, is uniform for particles
+spread uniformly in that bound phase space. Tables on a
+(concentration, calE) grid are built once per process.
 """
 
 import functools
@@ -106,6 +109,30 @@ def nfw_density_of_states(cal, c):
     return 16.0 * np.pi**2 * np.sum(_WW * 2.0 * x_max[..., None] * _W * x**2 * kin, axis=-1)
 
 
+def nfw_phase_volume(cal, c):
+    """Phase-space volume more bound than ``E`` inside ``x <= c``.
+
+    ``q = (16 pi^2 / 3) int_0^{min(c, r_E)} x^2 [2 (E - phi)]^{3/2} dx``, with
+    the same ``x = x_max (1 - w^2)`` substitution as the density of states.
+
+    Parameters
+    ----------
+    cal : ndarray
+        Binding depths ``calE`` (scaled energy ``E = calE - 1``).
+    c : float or ndarray
+        Truncation radius (concentration). Broadcasts against ``cal``.
+
+    Returns
+    -------
+    q : ndarray
+    """
+    e = np.asarray(cal, dtype=np.float64) - 1.0
+    x_max = np.minimum(c, _radius_of_energy(e))
+    x = x_max[..., None] * (1.0 - _W**2)
+    kin = np.clip(2.0 * (e[..., None] - nfw_phi(x)), 0.0, None) ** 1.5
+    return 16.0 * np.pi**2 / 3.0 * np.sum(_WW * 2.0 * x_max[..., None] * _W * x**2 * kin, axis=-1)
+
+
 @functools.cache
 def _eddington():
     """Eddington distribution function of the isotropic NFW profile on ``CAL_GRID``.
@@ -125,8 +152,9 @@ def _eddington():
 class NFWEnergyTables(NamedTuple):
     """NFW energy-distribution tables on ``(C_GRID, CAL_GRID)``."""
 
-    log_density: np.ndarray   # log n(calE | c), normalised on [0, 1]
-    cdf: np.ndarray           # u = F_c(calE), the mass fraction more bound
+    log_density: np.ndarray          # log n(calE | c), normalised on [0, 1]
+    cdf: np.ndarray                  # u = F_c(calE), the mass fraction more bound
+    log_volume_fraction: np.ndarray  # log w = log q(calE | c) - log q(1 | c)
 
 
 @functools.cache
@@ -143,7 +171,9 @@ def nfw_energy_tables():
     seg = 0.5 * (n[:, 1:] + n[:, :-1]) * np.diff(CAL_GRID)
     cdf = np.concatenate([np.zeros((len(C_GRID), 1)), np.cumsum(seg, axis=1)], axis=1)
     cdf /= cdf[:, -1:]
-    return NFWEnergyTables(np.log(n), cdf)
+    log_q = np.log(nfw_phase_volume(CAL_GRID[None, :], C_GRID[:, None]))
+    log_q_zero = np.log(nfw_phase_volume(np.ones(1), C_GRID[:, None]))     # E = 0
+    return NFWEnergyTables(np.log(n), cdf, log_q - log_q_zero)
 
 
 def _row(table, c):
@@ -192,3 +222,34 @@ def nfw_log_energy_density(eps, c):
     log_n : ndarray
     """
     return np.interp(_depth(eps), CAL_GRID, _row(nfw_energy_tables().log_density, c))
+
+
+_CENTRAL_VOLUME_SLOPE = 4.5        # q ∝ calE^(9/2) near the NFW centre (phi ≈ -1 + x/2)
+
+
+def nfw_log_phase_space_fraction(eps, c):
+    """Log fraction ``ln w = ln q(E) - ln q(0)`` of the virial sphere's bound phase space more bound than ``eps``.
+
+    ``w`` is uniform on ``(0, 1]`` for particles spread uniformly in the
+    bound phase space of ``x <= c``. Deeper than the table, the exact
+    central power law ``q ∝ calE^(9/2)`` extends it; working in logs keeps
+    the deepest values (``w`` down to ~1e-20 and below) exact.
+
+    Parameters
+    ----------
+    eps : ndarray
+        Normalised boundness ``E / Phi_0``.
+    c : float
+        Concentration.
+
+    Returns
+    -------
+    log_w : ndarray
+        ``<= 0``.
+    """
+    cal = 1.0 - np.asarray(eps, dtype=np.float64)
+    row = _row(nfw_energy_tables().log_volume_fraction, c)
+    log_w = np.interp(np.clip(cal, CAL_GRID[0], CAL_GRID[-1]), CAL_GRID, row)
+    deep = cal < CAL_GRID[0]
+    log_w[deep] = row[0] + _CENTRAL_VOLUME_SLOPE * np.log(np.maximum(cal[deep], 1e-300) / CAL_GRID[0])
+    return log_w

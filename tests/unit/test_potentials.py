@@ -174,3 +174,36 @@ class TestBindingEnergyInterface:
         assert p.potential(np.array([0.0]))[0] > phi0
         u = p.energy_fraction(np.array([0.9, 0.5, 0.1]))
         assert np.all((u > 0) & (u < 1)) and np.all(np.diff(u) > 0)
+
+
+class TestPhaseSpaceFraction:
+    @staticmethod
+    def _kepler_quad(b):
+        from scipy.integrate import quad
+        q = quad(lambda r: r * r * max(2.0 * (1.0 / r - b), 0.0) ** 1.5, 0.0, min(1.0, 1.0 / b))[0]
+        return q / quad(lambda r: r * r * (2.0 / r) ** 1.5, 0.0, 1.0)[0]
+
+    def test_kepler_closed_form(self):
+        p = KeplerPotential(M=1.0, G=1.0)
+        b = np.array([0.3, 1.0, 30.0])
+        np.testing.assert_allclose(np.exp(p.log_phase_space_fraction(b)),
+                                   [self._kepler_quad(x) for x in b], rtol=1e-6)
+        np.testing.assert_allclose(p.log_phase_space_fraction(b[1:]),
+                                   np.log(3 * np.pi / 32) - 1.5 * np.log(b[1:]), rtol=1e-12)
+
+    def test_kepler_uniform_background_is_uniform_in_w(self):
+        # G M = R_vir = 1: x density ∝ r^2 (2/r)^{3/2} ∝ r^{1/2}, so r = U^{2/3}.
+        rng = np.random.default_rng(2)
+        r = rng.uniform(size=40000) ** (2.0 / 3.0)
+        v = np.sqrt(2.0 / r) * rng.uniform(size=r.size) ** (1.0 / 3.0)
+        b = 1.0 / r - 0.5 * v**2                          # -E / v_vir^2
+        w = np.exp(KeplerPotential(M=1.0, G=1.0).log_phase_space_fraction(b))
+        assert abs(w.mean() - 0.5) < 0.01
+        np.testing.assert_allclose(np.quantile(w, [0.1, 0.5, 0.9]), [0.1, 0.5, 0.9], atol=0.01)
+
+    def test_nfw_delegates_to_tables(self):
+        from roadrunner.physics.energy_distribution import nfw_log_phase_space_fraction
+        p = NFWPotential(M=1e10, Rs=5.0, c=8.0)
+        eps = np.array([0.95, 0.5, 0.05])
+        np.testing.assert_array_equal(p.log_phase_space_fraction(eps), nfw_log_phase_space_fraction(eps, 8.0))
+        assert np.all(np.diff(p.log_phase_space_fraction(eps)) > 0)

@@ -7,9 +7,14 @@ by model name.
 """
 
 import numpy as np
+from scipy.special import betainc
 
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER, SOFTENING_NFW
-from roadrunner.physics.energy_distribution import nfw_energy_fraction, nfw_log_energy_density
+from roadrunner.physics.energy_distribution import (
+    nfw_energy_fraction,
+    nfw_log_energy_density,
+    nfw_log_phase_space_fraction,
+)
 
 _2PI = 2 * np.pi
 
@@ -104,6 +109,26 @@ class KeplerPotential:
     def log_energy_density(self, eps):
         """Not defined: a point mass has no dark-matter energy distribution."""
         raise NotImplementedError("The Kepler potential has no energy distribution.")
+
+    def log_phase_space_fraction(self, boundness):
+        """Log fraction ``ln w`` of the virial sphere's bound phase space more bound than ``b = -E / v_vir²``.
+
+        Closed form (softening holds negligible volume):
+        ``w = (3/2) B(3/2, 5/2) b^(-3/2) I_x(3/2, 5/2)``, ``x = min(1, b)``,
+        ``B(3/2, 5/2) = pi / 16``, so ``w = (3 pi / 32) b^(-3/2)`` once the
+        orbit stays inside the virial sphere (``b >= 1``).
+
+        Parameters
+        ----------
+        boundness : ndarray
+            ``b = -E / v_vir²`` (positive for bound particles).
+
+        Returns
+        -------
+        log_w : ndarray
+        """
+        b = np.asarray(boundness, dtype=np.float64)
+        return np.log(3.0 * np.pi / 32.0) - 1.5 * np.log(b) + np.log(betainc(1.5, 2.5, np.minimum(1.0, b)))
 
 
 class NFWPotential:
@@ -259,6 +284,20 @@ class NFWPotential:
         log_n : ndarray
         """
         return nfw_log_energy_density(eps, self.c)
+
+    def log_phase_space_fraction(self, boundness):
+        """Log fraction ``ln w`` of the virial sphere's bound phase space more bound than ``eps = E / Φ₀``.
+
+        Parameters
+        ----------
+        boundness : ndarray
+            ``eps = E / Φ₀``.
+
+        Returns
+        -------
+        log_w : ndarray
+        """
+        return nfw_log_phase_space_fraction(boundness, self.c)
 
 
 def potential(model, r, **kwargs):
