@@ -44,6 +44,7 @@ class RunConfig:
     svi_iters: int = 1000
     svi_batch_size: int = 10000
     halo_model: str = "kepler"
+    plausibility: str = "rank"
     cov_type: str = "full"
     max_iter: int = 10
     tol: float = 1e-2
@@ -78,6 +79,13 @@ class RunConfig:
         coerces numeric fields to the correct type when provided
         as strings or other types.
         """
+        if self.plausibility not in ("rank", "energy"):
+            raise ValueError(f"plausibility must be 'rank' or 'energy', got '{self.plausibility}'")
+        if self.plausibility == "energy" and self.halo_model.lower() != "nfw":
+            raise ValueError(
+                "plausibility='energy' needs halo_model='nfw': the Kepler potential "
+                "has no finite central potential nor an energy distribution")
+
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")
 

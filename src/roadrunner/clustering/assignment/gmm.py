@@ -33,9 +33,9 @@ import warnings
 import numpy as np
 import pandas as pd
 from numba import njit, prange
-from scipy.stats import rankdata
 
 from roadrunner._mcf_types import AssignmentResult
+from roadrunner.clustering.assignment.plausibility import make_plausibility
 from roadrunner.clustering.assignment.statistics import GMMAssignerStatistics
 from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.mixture._math import logsumexp, row_l1_normalize
@@ -104,31 +104,6 @@ def _no_transform(values):
         Same array, unchanged.
     """
     return values
-
-
-def _rank_transform(values, func_rank=np.log1p):
-    """Rank-based transform applied to boundness values before normalisation.
-
-    Ranks replace the raw boundness energies, then ``func_rank``
-    is applied (default: ``log1p``).  Empty arrays are returned
-    unchanged.
-
-    Parameters
-    ----------
-    values : ndarray
-        Input boundness values.
-    func_rank : callable, default=np.log1p
-        Transformation applied to the ranks.
-
-    Returns
-    -------
-    transformed : ndarray
-        Rank-transformed values (ambient math precision).
-    """
-    if len(values) == 0:
-        return values
-    ranks = rankdata(values, method="ordinal")
-    return func_rank(ranks).astype(math_dtype(), copy=False)
 
 
 @njit(parallel=True, cache=True)
@@ -290,6 +265,9 @@ class XGMMAssigner:
         the BGMM temporal priors, are then in these weighted units.
         Requires ``particle_masses`` in :meth:`assign`. Not supported
         by ``'svi-bgmm'``.
+    plausibility : str, default='rank'
+        Latent prior α model (:mod:`.plausibility`): ``'rank'`` or
+        ``'energy'`` (NFW halos only).
     **mixture_kwargs
         Additional keyword arguments forwarded to the mixture
         constructor (e.g. ``n_svi_iters``, ``batch_size`` for SVI).
@@ -298,7 +276,7 @@ class XGMMAssigner:
     def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
                  min_particles=10, reg_covar=1e-6, prior_type="",
                  verbose=1, method="gmm", use_bgmm_priors=True,
-                 mass_weighting=False, **mixture_kwargs):
+                 mass_weighting=False, plausibility="rank", **mixture_kwargs):
         self.cov_type = cov_type
         self.max_iter = max_iter
         self.tol = tol
@@ -315,6 +293,7 @@ class XGMMAssigner:
         if mass_weighting and method == "svi-bgmm":
             raise ValueError("mass_weighting is not supported with method='svi-bgmm'")
         self.mass_weighting = mass_weighting
+        self.plausibility = make_plausibility(plausibility)
         self.mixture_kwargs = mixture_kwargs
 
     def assign(self, halos, particle_coords, groups, **kwargs) -> AssignmentResult:
@@ -355,6 +334,7 @@ class XGMMAssigner:
             if not isinstance(halos, HaloEnsemble)
             else halos
         )
+        self.plausibility.prepare(self.ensemble)
         # Tree mass by Sub_tree_id: stored with the fitted parameters, it is
         # the next snapshot's reference for the covariance prior's growth.
         self._tree_mass = dict(zip(self.ensemble.sub_tree_ids.tolist(),
@@ -386,6 +366,8 @@ class XGMMAssigner:
             self.particles_df, self.resp_map, self.parameters,
             boundness_csc=csc_b,
         )
+        self.plausibility.update(
+            self.resp_map, self.particle_masses if self.mass_weighting else None)
 
         gids = np.array(sorted(self.resp_map.keys()), dtype=GALAXY_ID)
         resp_csc = SparseCSC(
@@ -442,8 +424,13 @@ class XGMMAssigner:
             )
             params, post_prob, nonz = self._fit_unresolved(gp_idx, group_subtrees, csc_b)
         else:
+            csc_a = SparseCSC(
+                csc_b.column_indices,
+                self.plausibility.column_values(csc_b.column_id),
+                column_id=csc_b.column_id,
+            )
             params, post_prob, nonz = self._fit_resolved(
-                gp_idx, group_subtrees, csc_b, seed=seed
+                gp_idx, group_subtrees, csc_b, csc_a, seed=seed
             )
 
         for i in range(len(group)):
@@ -576,7 +563,7 @@ class XGMMAssigner:
             }
         return params, post_prob, nonz
 
-    def _fit_resolved(self, gp_idx, group_subtrees, csc_b, seed=None):
+    def _fit_resolved(self, gp_idx, group_subtrees, csc_b, csc_a, seed=None):
         """Fit a resolved group with a proper XGMM fit.
 
         Scales coordinates, estimates initial parameters, builds
@@ -591,6 +578,8 @@ class XGMMAssigner:
             ``Sub_tree_id`` for each component.
         csc_b : SparseCSC
             Boundness matrix for this group.
+        csc_a : SparseCSC
+            Plausibility (α) matrix of the group, same layout as ``csc_b``.
         seed : int or None, optional
             Passed through as ``random_state`` to the mixture
             constructor (accepts a plain seed int or an rng/state
@@ -632,7 +621,7 @@ class XGMMAssigner:
                         self.particle_coords[gp_idx].astype(md, copy=False))
                     w = self._group_weights(gp_idx)
                     prior, nk, means, covs, cov_t = self._estimate_initial_params(
-                        coords, csc_b, w, scaler)
+                        coords, csc_b, csc_a, w, scaler)
                     init_kwargs = dict(
                         n_components=n_comp,
                         counts_init=np.asarray(nk, dtype=md),
@@ -916,9 +905,10 @@ class XGMMAssigner:
             nk[new] = np.maximum(w @ exclusive, d + 1.0)
         return nk, means, covs
 
-    def _initial_responsibilities(self, coords, csc_b, w, scaler):
+    def _initial_responsibilities(self, coords, csc_b, csc_a, w, scaler):
         """Latent prior and starting responsibilities of a resolved group.
 
+        The latent prior is the row-normalised plausibility ``csc_a``.
         Without previous responsibilities (first snapshot) the start is
         the latent prior. Otherwise each particle keeps its previous
         responsibilities for the components it is still bound to, except
@@ -933,6 +923,8 @@ class XGMMAssigner:
             Scaled coordinates of the group.
         csc_b : SparseCSC
             Boundness matrix of the group.
+        csc_a : SparseCSC
+            Plausibility (α) matrix of the group, same layout as ``csc_b``.
         w : ndarray of shape (n_particles,)
             Fit weights.
         scaler : StandardScaler
@@ -946,9 +938,10 @@ class XGMMAssigner:
         resp : ndarray of shape (n_particles, n_components)
             Starting responsibilities (rows sum to 1).
         """
+        md = math_dtype()
         latent = row_l1_normalize(
-            csc_b.to_dense(col_func=_rank_transform)
-        ).astype(math_dtype(), copy=False)
+            csc_a.to_dense(col_func=lambda v: v.astype(md, copy=False))
+        ).astype(md, copy=False)
         if not self.previous_resp:
             return latent, latent
 
@@ -965,8 +958,8 @@ class XGMMAssigner:
         resp = row_l1_normalize(resp)
         return (resp if self.prior_type.lower() == "temporal-log-lik" else latent), resp
 
-    def _estimate_initial_params(self, coords, csc_b, w, scaler):
-        """Estimate initial mixture parameters from boundness and previous responsibilities.
+    def _estimate_initial_params(self, coords, csc_b, csc_a, w, scaler):
+        """Estimate initial mixture parameters from plausibility and previous responsibilities.
 
         The starting responsibilities come from
         ``_initial_responsibilities``; the initial parameters are their
@@ -978,6 +971,8 @@ class XGMMAssigner:
             Scaled phase-space coordinates.
         csc_b : SparseCSC
             Boundness matrix.
+        csc_a : SparseCSC
+            Plausibility (α) matrix, same layout as ``csc_b``.
         w : ndarray of shape (n_particles,)
             Fit weights of the particles.
         scaler : StandardScaler
@@ -996,7 +991,7 @@ class XGMMAssigner:
         cov_t : str
             Covariance type.
         """
-        prior, resp = self._initial_responsibilities(coords, csc_b, w, scaler)
+        prior, resp = self._initial_responsibilities(coords, csc_b, csc_a, w, scaler)
         nk, means_init, covs_init = _estimate_gaussian_parameters(
             coords, resp, w, self.cov_type, reg_covar=self.reg_covar,
         )

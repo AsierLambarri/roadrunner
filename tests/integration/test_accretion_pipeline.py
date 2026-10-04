@@ -28,7 +28,8 @@ warnings.filterwarnings("ignore")
 DATA_DIR = "test_data/mock_snap_tight"
 
 
-def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers=True):
+def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers=True,
+                         halo_model="kepler", plausibility="rank"):
     tree = pd.read_csv(os.path.join(DATA_DIR, "merger_tree.csv"))
     frames = []
     for i in range(n_duplicate):
@@ -47,6 +48,7 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers
     assigner = XGMMAssigner(
         cov_type=cov_type, max_iter=3, tol=1e-2,
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
+        plausibility=plausibility,
     )
 
     bt = BirthTracker(factor=5, enforce_initial_hosts=False) if with_trackers else None
@@ -54,10 +56,10 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers
 
     orchestrator = SnapshotOrchestrator(
         processing_config=ProcessingConfig(
-            halo_model="kepler", search_factor=1.0, min_particles=10,
+            halo_model=halo_model, search_factor=1.0, min_particles=10,
         ),
         reduction_config=ReductionConfig(
-            accretion_id=1, halo_model="kepler", n_los=3,
+            accretion_id=1, halo_model=halo_model, n_los=3,
         ),
         assigner=assigner,
         birth_tracker=bt,
@@ -397,7 +399,7 @@ class TestAccretionPipeline:
             return real_save(path, data, *a, **k)
 
         monkeypatch.setattr(ap_mod, "save_checkpoint", spy_save)
-        pipeline._save_error_checkpoint((0, None, {}, None, None), [0])
+        pipeline._save_error_checkpoint((0, None, {}, None, None, None), [0])
 
         assert seen["during"] is not before
         assert signal_mod.getsignal(signal_mod.SIGINT) is before
@@ -609,3 +611,41 @@ class TestAccretionPipeline:
         assert resume_pipeline.orchestrator.assembly_tracker._last_snapshot == 1
         cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
         assert cat_reader.read_last_snapshot() == 1
+
+def test_energy_plausibility_checkpoint_resume(tmp_path):
+    """NFW + energy plausibility: the refit histogram survives a crash and resume."""
+    import h5py
+    from roadrunner.io.serialization import load_checkpoint
+
+    pipeline, _, mock_reader, _ = _build_mock_pipeline(
+        tmp_path, n_duplicate=2, halo_model="nfw", plausibility="energy")
+    original_load, calls = mock_reader.load, [0]
+
+    def failing_load(path):
+        calls[0] += 1
+        if calls[0] == 2:
+            raise RuntimeError("Simulated crash on snapshot 1")
+        return original_load(path)
+
+    mock_reader.load = failing_load
+    with pytest.raises(RuntimeError, match="Simulated crash"):
+        pipeline.run(str(tmp_path))
+    state = load_checkpoint(os.path.join(str(tmp_path), "checkpoint.zst"))["plausibility"]
+    assert state is not None
+    np.testing.assert_array_equal(state["edges"], pipeline.orchestrator.assigner.plausibility.state["edges"])
+
+    with h5py.File(os.path.join(str(tmp_path), "assignment", "snapshot0000.hdf5"), "r") as hf:
+        for gid, grp in hf["galaxies"].items():
+            b = grp["boundness"][:][grp["boundness_valid"][:]]
+            assert grp.attrs["energy_scale"] > 0
+            assert np.all((b > 0) & (b < 1))          # NFW boundness is E / Phi_0
+
+    resumed, _, _, _ = _build_mock_pipeline(
+        tmp_path, n_duplicate=2, halo_model="nfw", plausibility="energy")
+    restored = []
+    plaus = resumed.orchestrator.assigner.plausibility
+    original_set = plaus.set_state
+    plaus.set_state = lambda s: (restored.append(s), original_set(s))
+    resumed.run(str(tmp_path), resume=True)
+    np.testing.assert_array_equal(restored[0]["edges"], state["edges"])
+    assert HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5")).read_last_snapshot() == 1

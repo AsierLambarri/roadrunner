@@ -151,3 +151,26 @@ class TestGetPotentialClass:
         cls = get_potential("nfw")
         assert cls is NFWPotential
         assert issubclass(cls, PotentialModel)
+
+
+class TestBindingEnergyInterface:
+    def test_kepler_scale_and_undefined_methods(self):
+        import pytest
+        p = KeplerPotential(M=1e10)
+        assert isinstance(p, PotentialModel)
+        np.testing.assert_allclose(p.binding_energy_scale(20.0), G_KM * 1e10 / 20.0)
+        for call in (p.central_potential, lambda: p.energy_fraction(np.array([0.5])),
+                     lambda: p.log_energy_density(np.array([0.5]))):
+            with pytest.raises(NotImplementedError):
+                call()
+
+    def test_nfw_central_potential_and_scale(self):
+        p = NFWPotential(M=1e10, Rs=5.0, c=8.0)
+        assert isinstance(p, PotentialModel)
+        phi0 = -G_KM * 1e10 / (5.0 * (np.log(9.0) - 8.0 / 9.0))
+        np.testing.assert_allclose(p.central_potential(), phi0)
+        np.testing.assert_allclose(p.binding_energy_scale(40.0), -phi0)
+        # The softened potential stays above Phi_0.
+        assert p.potential(np.array([0.0]))[0] > phi0
+        u = p.energy_fraction(np.array([0.9, 0.5, 0.1]))
+        assert np.all((u > 0) & (u < 1)) and np.all(np.diff(u) > 0)

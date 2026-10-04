@@ -9,6 +9,7 @@ by model name.
 import numpy as np
 
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER, SOFTENING_NFW
+from roadrunner.physics.energy_distribution import nfw_energy_fraction, nfw_log_energy_density
 
 _2PI = 2 * np.pi
 
@@ -18,6 +19,8 @@ class KeplerPotential:
 
     ``Φ(r) = -G M / sqrt(r² + ε²)`` with a softening length
     :const:`SOFTENING_KEPLER` to avoid the singularity at ``r = 0``.
+    Its central value is set by the softening alone, so it has no
+    meaningful ``Φ₀`` nor an energy distribution: those methods raise.
 
     Parameters
     ----------
@@ -75,6 +78,32 @@ class KeplerPotential:
         denom : float or ndarray
         """
         return 3 * self.M
+
+    def binding_energy_scale(self, r_vir):
+        """Energy scale of binding energies: ``v_vir² = G M / r_vir``.
+
+        Parameters
+        ----------
+        r_vir : float
+            Physical virial radius.
+
+        Returns
+        -------
+        scale : float
+        """
+        return self.G * self.M / r_vir
+
+    def central_potential(self):
+        """Not defined: the softened central value is not physical."""
+        raise NotImplementedError("The Kepler potential has no finite central potential.")
+
+    def energy_fraction(self, eps):
+        """Not defined: a point mass has no dark-matter energy distribution."""
+        raise NotImplementedError("The Kepler potential has no energy distribution.")
+
+    def log_energy_density(self, eps):
+        """Not defined: a point mass has no dark-matter energy distribution."""
+        raise NotImplementedError("The Kepler potential has no energy distribution.")
 
 
 class NFWPotential:
@@ -179,6 +208,57 @@ class NFWPotential:
 
         x = np.minimum(self.c, np.sqrt(r**2 + SOFTENING_NFW**2) / self.Rs)
         return (self.M / _f(self.c)) * (3 * _f(x) - x**2 / (1 + x)**2)
+
+    def central_potential(self):
+        """Central potential ``Φ₀ = -G M / (Rs A(c))`` (unsoftened limit).
+
+        The softened potential never reaches it, so ``E / Φ₀ < 1``.
+
+        Returns
+        -------
+        phi0 : float
+        """
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        return -self.G * self.M / (self.Rs * A)
+
+    def binding_energy_scale(self, r_vir):
+        """Energy scale of binding energies: ``|Φ₀|``.
+
+        Parameters
+        ----------
+        r_vir : float (unused)
+
+        Returns
+        -------
+        scale : float
+        """
+        return -self.central_potential()
+
+    def energy_fraction(self, eps):
+        """Mass fraction of the halo more bound than ``eps = E / Φ₀``.
+
+        Parameters
+        ----------
+        eps : ndarray
+
+        Returns
+        -------
+        u : ndarray
+        """
+        return nfw_energy_fraction(eps, self.c)
+
+    def log_energy_density(self, eps):
+        """Log dark-matter energy distribution at ``calE = 1 - eps`` (normalised on [0, 1]).
+
+        Parameters
+        ----------
+        eps : ndarray
+
+        Returns
+        -------
+        log_n : ndarray
+        """
+        return nfw_log_energy_density(eps, self.c)
 
 
 def potential(model, r, **kwargs):

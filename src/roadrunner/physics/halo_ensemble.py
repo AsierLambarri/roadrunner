@@ -99,6 +99,11 @@ class HaloEnsemble:
         return np.array([h._inner.M for h in self._halos], dtype=np.float64)
 
     @property
+    def energy_scales(self) -> np.ndarray:
+        """Binding energy scale of each halo (``E = -boundness * scale``), shape ``(n_halos,)``."""
+        return np.array([h.binding_energy_scale() for h in self._halos], dtype=np.float64)
+
+    @property
     def sub_tree_ids(self) -> np.ndarray:
         """``Sub_tree_id`` of each halo, shape ``(n_halos,)``."""
         return np.array([h.sub_tree_id for h in self._halos], dtype=GALAXY_ID)

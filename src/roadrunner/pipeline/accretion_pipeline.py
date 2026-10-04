@@ -156,7 +156,7 @@ class AccretionPipeline:
 
         t_start = time.time()
         # last_good: (snap_id, previous_resp_sim, fitted_parameters,
-        # birth_tracker_ref, assembly_tracker_ref) for the last snapshot
+        # plausibility_state, birth_tracker_ref, assembly_tracker_ref) for the last snapshot
         # that fully completed -- seeded from the checkpoint on a real
         # resume. When nothing has completed yet, capture the trackers'
         # still-untouched state here, before the first snapshot can
@@ -166,7 +166,7 @@ class AccretionPipeline:
             bt = self.orchestrator.birth_tracker
             at = self.orchestrator.assembly_tracker
             last_good = (
-                None, previous_resp_sim, None,
+                None, previous_resp_sim, None, None,
                 bt._cheap_snapshot() if bt is not None else None,
                 at._cheap_snapshot() if at is not None else None,
             )
@@ -198,8 +198,10 @@ class AccretionPipeline:
             previous_resp_sim = snap_result.previous_resp_sim
             bt = self.orchestrator.birth_tracker
             at = self.orchestrator.assembly_tracker
+            plaus = self._plausibility()
             last_good = (
                 snap_id, previous_resp_sim, snap_result.result.fitted_parameters,
+                plaus.state if plaus is not None else None,
                 bt._cheap_snapshot() if bt is not None else None,
                 at._cheap_snapshot() if at is not None else None,
             )
@@ -235,7 +237,8 @@ class AccretionPipeline:
         ----------
         last_good : tuple
             ``(snap_id, previous_resp_sim, fitted_parameters,
-            birth_tracker_ref, assembly_tracker_ref)`` for the last
+            plausibility_state, birth_tracker_ref, assembly_tracker_ref)``
+            for the last
             snapshot that fully completed. ``snap_id`` is ``None`` when
             nothing has completed yet, and the tracker references then
             hold the untouched pre-run state.
@@ -252,7 +255,7 @@ class AccretionPipeline:
             except ValueError:
                 old_handler = None  # non-main thread: proceed unguarded
             try:
-                snap_id, previous_resp_sim, fitted_parameters, bt_ref, at_ref = last_good
+                snap_id, previous_resp_sim, fitted_parameters, plaus_state, bt_ref, at_ref = last_good
                 bt_state = (
                     self.orchestrator.birth_tracker._serialize(bt_ref)
                     if bt_ref is not None else None
@@ -271,6 +274,7 @@ class AccretionPipeline:
                     },
                     "previous_resp": previous_resp_sim,
                     "previous_parameters": fitted_parameters,
+                    "plausibility": plaus_state,
                     "birth_tracker": bt_state,
                     "assembly_tracker": at_state,
                 })
@@ -381,7 +385,8 @@ class AccretionPipeline:
             Index in ``snapshot_ids`` to resume from.
         last_good : tuple or None
             ``(last_completed, previous_resp_sim, previous_parameters,
-            birth_tracker_ref, assembly_tracker_ref)``, seeded from this
+            plausibility_state, birth_tracker_ref, assembly_tracker_ref)``,
+            seeded from this
             checkpoint's own (just-restored) state so a failure on the
             very first snapshot of this resumed run has a correct
             fallback to persist (C02) -- or ``None`` if the checkpoint
@@ -462,6 +467,10 @@ class AccretionPipeline:
         previous_parameters = ckpt.get("previous_parameters")
         if previous_parameters is not None:
             self.orchestrator.assigner.parameters = previous_parameters
+        plaus_state = ckpt.get("plausibility")
+        plaus = self._plausibility()
+        if plaus is not None:
+            plaus.set_state(plaus_state)
 
         bt = self.orchestrator.birth_tracker
         at = self.orchestrator.assembly_tracker
@@ -480,7 +489,7 @@ class AccretionPipeline:
         last_good = None
         if last_completed is not None:
             last_good = (
-                last_completed, previous_resp_sim, previous_parameters,
+                last_completed, previous_resp_sim, previous_parameters, plaus_state,
                 bt._cheap_snapshot() if bt is not None else None,
                 at._cheap_snapshot() if at is not None else None,
             )
@@ -493,6 +502,10 @@ class AccretionPipeline:
         else:
             print(f"Resuming after snapshot {last_completed}, starting at snapshot {snapshot_ids[next_idx]}")
         return previous_resp_sim, next_idx, last_good
+
+    def _plausibility(self):
+        """The assigner's plausibility model, or None for assigners without one."""
+        return getattr(self.orchestrator.assigner, "plausibility", None)
 
     def _ensure_merger_columns(self):
         """Ensure merger tree columns (scale radius, host, distance) are computed.
@@ -532,6 +545,7 @@ class AccretionPipeline:
                 # Any ParticleAssigner may be plugged in; one without the
                 # attribute does not mass-weight.
                 "mass_weighting": getattr(self.orchestrator.assigner, "mass_weighting", False),
+                "plausibility": getattr(self._plausibility(), "name", None),
                 "seed": self._base_seed,
                 "threads": thread_budget(),
             },
@@ -624,6 +638,8 @@ class AccretionPipeline:
                 bound_csc, _ = snap_result.ensemble.get_particles()
                 self.assign_writer.write_snapshot(
                     snap_id, snap_data.time, snap_result.result, bound_csc,
+                    energy_scales=dict(zip(snap_result.ensemble.sub_tree_ids.tolist(),
+                                           snap_result.ensemble.energy_scales.tolist())),
                 )
 
             elapsed = time.time() - t_start

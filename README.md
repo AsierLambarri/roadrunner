@@ -114,7 +114,7 @@ All readers support a particle selection. With `selection_snapshot` plus one of 
 
 ### 2. Boundness (`physics/boundness.py`, `physics/potentials.py`)
 
-Each merger-tree halo becomes a `HaloModel` with a Kepler or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Per-particle dynamical timescales are computed here too.
+Each merger-tree halo becomes a `HaloModel` with a Kepler or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Its boundness is -E over the halo's binding energy scale: -E/v_vir² for Kepler, E/Φ₀ (in (0, 1)) for NFW. Per-particle dynamical timescales are computed here too.
 
 ### 3. Overlap groups and ownership (`clustering/segmentation.py`)
 
@@ -128,7 +128,10 @@ Each group is fitted on standardised 6-D phase-space coordinates. One of three p
 - **Unresolved** (fewer than `10 x n_halos` particles): normalised boundness is used as the responsibilities, with no EM.
 - **Resolved:** a full mixture fit (`mixture/weighted_gmm.py` for `gmm`, `mixture/bayesian_gmm.py` for `bgmm`). It runs in the chosen `math_precision` and retries in double precision on a numerical failure.
 
-The E-step is masked by a latent prior a_nk, the row-normalised rank-transformed boundness, so a particle can only belong to halos it is bound to:
+The E-step is masked by a latent prior a_nk, the row-normalised plausibility of the particle's boundness (`plausibility`, `clustering/assignment/plausibility.py`), so a particle can only belong to halos it is bound to:
+
+- `rank`: log1p of the boundness rank within each halo.
+- `energy` (NFW only): a likelihood ratio on the particle's rank u in the halo's dark-matter energy distribution. It is a histogram of the previous snapshot's members in t = -ln u (refit between snapshots, outside EM), mixed with Errani et al. (2022)'s tagging ratio, with r½ = 0.015 R_vir, and floored.
 
 ```
 log r_nk = log a_nk + log π_k + log N(x_n | μ_k, Σ_k) - log Z_n
@@ -212,6 +215,7 @@ All keys are fields of the frozen dataclass `RunConfig` (`src/roadrunner/pipelin
 | Key | Default | Meaning |
 |---|---|---|
 | `halo_model` | `kepler` | Potential: `kepler` or `nfw`. |
+| `plausibility` | `rank` | Latent prior: `rank` or `energy` (NFW only). |
 | `search_factor` | `1.0` | Boundness search radius in units of the virial radius. |
 | `comoving` | `true` | Merger-tree and particle lengths are comoving kpc. |
 | `n_los` | `15` | Lines of sight for projected properties. |
@@ -255,7 +259,7 @@ checkpoint.zst                   (after a failure)
 | Path | Content |
 |---|---|
 | `header/accretion_id`, `header/snapshots`, `header/last_snapshot` | Host ID, snapshot list, last written snapshot. |
-| `header/config` | JSON string: `halo_model`, `n_los`, `search_factor`, `mass_weighting`, `seed`, `threads`. |
+| `header/config` | JSON string: `halo_model`, `n_los`, `search_factor`, `mass_weighting`, `plausibility`, `seed`, `threads`. |
 | `header/merger_tree`, `header/equivalence` | The merger tree, including the computed columns (`scale_radius`, `host_id`, distances), and the equivalence table as JSON. |
 | `snapshots/<id>/galaxy_properties` | `Sub_tree_id`, `mb_host_id`, `position_x/y/z`, `velocity_x/y/z`, `Mtot`, `r20`, `rh`, `r80`, `Rhp`, `sigma`, `sigma_los`, `r_t`. Attribute `time`. |
 | `snapshots/<id>/riley_criterion` | `Sub_tree_id`, `mstar`, `f_bound`, `sigma50`, `dynstate`. Only on `dynstate_snapshots`. |
@@ -270,7 +274,7 @@ A star in galaxy G's assembly set is in situ if its `birth_id == G`, and accrete
 - `galaxies/<Sub_tree_id>/` has one group per halo with non-zero responsibilities:
   - `indices`: row positions in that snapshot's particle array (the same order as `particle_data/.../data/indices`), not simulation IDs.
   - `log_resp`: natural-log responsibilities. Exact zeros are stored as `-inf`.
-  - `boundness` and `boundness_valid`: boundness values joined to `indices` by particle. NaN, with `valid = False`, where the particle is not a boundness candidate of this halo.
+  - `boundness` and `boundness_valid`: boundness values joined to `indices` by particle. NaN, with `valid = False`, where the particle is not a boundness candidate of this halo. The group attribute `energy_scale` recovers the energy, E = -boundness x energy_scale (for NFW, Φ₀ = -energy_scale).
   - `mean` (6-D), `covariance`, and `weight` (mixture weight within its group): in natural units.
   - `count`: effective particle count (summed responsibility, in the fit's weight units). A value below 1 marks a prior-only component.
 - `hard_assignment` holds `Sub_tree_id` and `particle_index` (simulation ID) for every loaded particle. `Sub_tree_id = -1` means unbound.

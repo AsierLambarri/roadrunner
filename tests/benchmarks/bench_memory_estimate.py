@@ -66,9 +66,9 @@ def measure(label, N, K):
         base = rss_mb()
         print(f"    baseline:                {base:>8.1f} MB")
 
-        # 2. prior = row_l1_normalize(csc_b.to_dense(col_func=_rank_transform))
-        from roadrunner.clustering.assignment.gmm import _rank_transform
-        dense_raw = csc_b.to_dense(col_func=_rank_transform)
+        # 2. prior = row_l1_normalize(to_dense(rank plausibility))
+        from roadrunner.clustering.assignment.plausibility import _log1p_rank
+        dense_raw = csc_b.to_dense(col_func=lambda v: _log1p_rank(v).astype(np.float32))
         r1 = rss_mb()
         print(f"    after to_dense(rank):    {r1 - base:>8.1f} MB  (peak: {r1:.1f})")
 

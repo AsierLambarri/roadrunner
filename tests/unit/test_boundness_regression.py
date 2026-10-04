@@ -36,6 +36,10 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
         vel_mags = np.linalg.norm(rel_vel, axis=1)
 
         v_vir_sq = G_KM * halo._inner.M / halo.virial_radius * (1 + halo.redshift)
+        if not isinstance(halo._inner, KeplerPotential):
+            # NFW boundness is E / Phi_0, Phi_0 = -G M / (Rs A(c)).
+            c = halo._inner.c
+            v_vir_sq = G_KM * halo._inner.M / (halo._inner.Rs * (np.log1p(c) - c / (1 + c)))
         phi = halo.potential(dist)
         v_esc = np.sqrt(2 * np.abs(phi))
         boundness = 0.5 * (v_esc**2 - vel_mags**2) / v_vir_sq

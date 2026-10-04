@@ -50,6 +50,12 @@ PRIOR_GROWTH_MAX = 2.0            # the stellar cloud is detached from the dark 
 PRIOR_WEIGHT_DIVISOR = 5.0         # nk / divisor → weight_concentration_prior
 PRIOR_MEAN_DIVISOR = 20.0          # nk / divisor → mean_precision_prior
 
+# ── Plausibility (latent prior α, "energy" model) ──────────────────
+PLAUSIBILITY_PRIOR_WEIGHT = 0.2    # A: Errani prior's weight relative to the member histogram
+PLAUSIBILITY_FLOOR = 1e-8          # κ: share of members that look like random halo particles
+PLAUSIBILITY_MIN_BINS = 10         # adaptive histogram in t = -ln u: equal-weight bins,
+PLAUSIBILITY_MAX_BINS = 100        # 2 n_eff^(1/3) of them (Rice rule), clipped to these
+
 # ── Coresets ───────────────────────────────────────────────────────
 CORESET_ALPHA_BASE = 16
 CORESET_ALPHA_OFFSET = 2

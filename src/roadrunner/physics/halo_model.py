@@ -165,6 +165,53 @@ class HaloModel:
             r = xyz_or_r * self._1plusz
         return self._inner.tidal_denominator(r)
 
+    def central_potential(self) -> float:
+        """Central potential ``Φ₀`` of the halo's potential model (physical units).
+
+        Returns
+        -------
+        phi0 : float
+        """
+        return self._inner.central_potential()
+
+    def binding_energy_scale(self) -> float:
+        """Energy scale that normalises this halo's binding energies.
+
+        Boundness is stored as ``-E / binding_energy_scale()``: ``-E / v_vir²``
+        for Kepler, ``E / Φ₀`` for NFW.
+
+        Returns
+        -------
+        scale : float
+        """
+        return self._inner.binding_energy_scale(self.virial_radius * self._1plusz)
+
+    def energy_fraction(self, eps: np.ndarray) -> np.ndarray:
+        """Mass fraction of the halo more bound than the normalised boundness ``eps``.
+
+        Parameters
+        ----------
+        eps : ndarray
+
+        Returns
+        -------
+        u : ndarray
+        """
+        return self._inner.energy_fraction(eps)
+
+    def log_energy_density(self, eps: np.ndarray) -> np.ndarray:
+        """Log dark-matter energy distribution at the normalised boundness ``eps``.
+
+        Parameters
+        ----------
+        eps : ndarray
+
+        Returns
+        -------
+        log_n : ndarray
+        """
+        return self._inner.log_energy_density(eps)
+
     def compute_energy(self, xyz_or_r, vxyz_or_mag, relative=True):
         """Total specific orbital energy ``E = Φ + ½v²``.
 

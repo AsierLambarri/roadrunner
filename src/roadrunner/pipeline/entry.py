@@ -120,6 +120,7 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         method=config.assignment_method,
         use_bgmm_priors=config.use_bgmm_priors,
         mass_weighting=config.mass_weighting,
+        plausibility=config.plausibility,
         n_svi_iters=config.svi_iters,
         batch_size=config.svi_batch_size,
     )

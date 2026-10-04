@@ -86,6 +86,18 @@ class MockPotentialModel:
     def tidal_denominator(self, r):
         return 3.0 * r
 
+    def binding_energy_scale(self, r_vir):
+        return 1.0 / r_vir
+
+    def central_potential(self):
+        raise NotImplementedError
+
+    def energy_fraction(self, eps):
+        raise NotImplementedError
+
+    def log_energy_density(self, eps):
+        raise NotImplementedError
+
 
 class TestPotentialModelProtocol:
     def test_mock_potential_passes_isinstance(self):

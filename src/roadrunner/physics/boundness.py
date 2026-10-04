@@ -18,7 +18,6 @@ from scipy.spatial import KDTree
 
 from roadrunner._defaults import LOCAL_IDX, math_dtype
 
-from roadrunner.physics.constants import G_KM
 from roadrunner.physics.potentials import KeplerPotential
 from roadrunner.threads import tree_workers
 
@@ -32,7 +31,10 @@ def compute_halo_bound_particles(
 
     Uses a KD-tree to efficiently find particles within ``search_factor``
     times the virial radius of each halo, then evaluates boundness
-    via the total specific orbital energy ``E = Φ + ½v²``.
+    via the total specific orbital energy ``E = Φ + ½v²``. The stored
+    boundness is ``-E`` over the halo's binding energy scale
+    (:meth:`HaloModel.binding_energy_scale`): ``-E / v_vir²`` for Kepler,
+    ``E / Φ₀`` (in ``(0, 1)``) for NFW.
     Bound particles are stored on each halo via
     :meth:`HaloModel.set_boundness`.
 
@@ -79,10 +81,8 @@ def compute_halo_bound_particles(
         dist = np.linalg.norm(rel_pos, axis=1)
 
         E = halo.compute_energy(rel_pos, rel_vel, relative=True)
-        # Physical virial radius, matching compute_energy's own internal
-        # comoving->physical conversion (halo._1plusz) -- see C08.
-        v_vir_sq = G_KM * halo._inner.M / (halo.virial_radius * halo._1plusz)
-        boundness = -E / v_vir_sq
+        # -E / v_vir^2 for Kepler (physical virial radius, C08), E / Phi_0 for NFW.
+        boundness = -E / halo.binding_energy_scale()
 
         if isinstance(halo._inner, KeplerPotential):
             # Kepler period for bound particles only: unbound ones (E >= 0)

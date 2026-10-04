@@ -6,7 +6,6 @@ from roadrunner.clustering.assignment.gmm import (
     XGMMAssigner,
     _drop_unbound_kernel,
     _no_transform,
-    _rank_transform,
     _rows_to_pad_kernel,
 )
 from roadrunner.clustering.sparse import SparseCSC
@@ -55,16 +54,6 @@ class TestTransformFunctions:
         result = _no_transform(vals)
         assert np.array_equal(result, vals)
 
-    def test_rank_transform_shape(self):
-        vals = np.array([0.1, 0.5, 2.0], dtype=np.float32)
-        result = _rank_transform(vals)
-        assert result.shape == (3,)
-        assert result.dtype == np.float32
-        assert np.all(np.diff(result) >= 0)
-
-    def test_rank_transform_empty(self):
-        result = _rank_transform(np.array([], dtype=np.float32))
-        assert result.size == 0
 
 
 class TestPaddingKernels:
@@ -241,9 +230,12 @@ class TestPredictivePadding:
         a.previous_resp = SparseCSC([np.arange(10, 100)], [np.ones(90, np.float32)],
                                     column_id=np.array([1], dtype=np.int64))
         csc_b, _ = a.ensemble.get_particles()
+        a.plausibility.prepare(a.ensemble)
+        csc_a = SparseCSC(csc_b.column_indices, a.plausibility.column_values(csc_b.column_id),
+                          column_id=csc_b.column_id)
         scaler = StandardScaler()
         X = scaler.fit_transform(coords.astype(np.float32))
-        _, resp = a._initial_responsibilities(X, csc_b, np.ones(len(X), np.float32), scaler)
+        _, resp = a._initial_responsibilities(X, csc_b, csc_a, np.ones(len(X), np.float32), scaler)
         np.testing.assert_allclose(resp.sum(axis=1), 1.0, rtol=1e-6)
         assert np.allclose(resp[:10], [1.0, 0.0])      # newborn, bound to halo 1 only
         assert np.allclose(resp[10:50], [1.0, 0.0])    # carried over

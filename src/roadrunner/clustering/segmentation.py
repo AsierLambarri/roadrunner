@@ -128,8 +128,8 @@ class HaloSegmenter:
 
         - Among "small" halos (``<= min_particles``), a particle
           claimed by more than one goes to whichever has the higher
-          boundness value for it (already normalized to that halo's
-          own virial scale, so directly comparable across halos);
+          boundness value for it (already normalized by that halo's
+          own binding energy scale, so directly comparable across halos);
           exact ties go to the smaller ``Sub_tree_id``.
         - Any "large" halo in the same group loses every particle
           claimed by any small halo, unconditionally -- small halos

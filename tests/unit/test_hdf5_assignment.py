@@ -168,3 +168,13 @@ class TestHDF5AssignmentWriter:
         path = os.path.join(tmp_dir, "assignment", "snapshot0000.hdf5")
         with h5py.File(path, "r") as hf:
             assert "hard_assignment" in hf
+
+
+def test_energy_scale_attribute(tmp_path):
+    w = HDF5AssignmentWriter(str(tmp_path))
+    result, csc = _make_assignment_result()
+    w.write_snapshot(0, 13.0, result, csc, energy_scales={1: 2.5e4, 2: 7.0})
+    with h5py.File(os.path.join(str(tmp_path), "assignment", "snapshot0000.hdf5"), "r") as hf:
+        assert hf["galaxies/1"].attrs["energy_scale"] == 2.5e4
+        assert hf["galaxies/2"].attrs["energy_scale"] == 7.0
+        assert "energy_scale" not in hf["galaxies/3"].attrs

@@ -132,7 +132,7 @@ class HDF5AssignmentWriter:
         return select_float_dtype(max_abs, self._float_atol, msg=what, stacklevel=3)
 
     def write_snapshot(self, snapshot_id, time,
-                       assignment_result, boundness_csc):
+                       assignment_result, boundness_csc, energy_scales=None):
         """Write a snapshot's assignment data to an HDF5 file.
 
         Parameters
@@ -145,6 +145,10 @@ class HDF5AssignmentWriter:
             Result from the assigner (responsibilities, hard labels, etc.).
         boundness_csc : SparseCSC
             Boundness matrix for this snapshot.
+        energy_scales : dict of {int: float}, optional
+            Binding energy scale per galaxy, written as the group attribute
+            ``energy_scale`` (``E = -boundness * energy_scale``; for NFW,
+            ``Phi_0 = -energy_scale``).
         """
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:
@@ -193,6 +197,8 @@ class HDF5AssignmentWriter:
                 )
 
                 grp = galaxies_grp.require_group(str(gid))
+                if energy_scales is not None and int(gid) in energy_scales:
+                    grp.attrs["energy_scale"] = float(energy_scales[int(gid)])
 
                 pid_dtype = select_uint_dtype(
                     int(resp_idx.max()) if resp_idx.size > 0 else 1,

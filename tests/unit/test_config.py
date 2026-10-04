@@ -93,3 +93,13 @@ class TestRunConfigFrozen:
         with pytest.raises(AttributeError):
             c.halo_model = "nfw"
 
+
+
+class TestPlausibilityConfig:
+    def test_default_and_validation(self):
+        assert RunConfig().plausibility == "rank"
+        assert RunConfig(halo_model="nfw", plausibility="energy").plausibility == "energy"
+        with pytest.raises(ValueError, match="needs halo_model='nfw'"):
+            RunConfig(halo_model="kepler", plausibility="energy")
+        with pytest.raises(ValueError, match="plausibility must be"):
+            RunConfig(plausibility="nope")
