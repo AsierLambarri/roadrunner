@@ -267,7 +267,7 @@ class XGMMAssigner:
         by ``'svi-bgmm'``.
     plausibility : str, default='rank'
         Latent prior α model (:mod:`.plausibility`): ``'rank'``,
-        ``'energy'`` (NFW halos only) or ``'phase'``.
+        ``'energy'`` (NFW halos only), ``'phase'`` or ``'kinematic'``.
     **mixture_kwargs
         Additional keyword arguments forwarded to the mixture
         constructor (e.g. ``n_svi_iters``, ``batch_size`` for SVI).
@@ -334,7 +334,7 @@ class XGMMAssigner:
             if not isinstance(halos, HaloEnsemble)
             else halos
         )
-        self.plausibility.prepare(self.ensemble)
+        self.plausibility.prepare(self.ensemble, particle_coords)
         # Tree mass by Sub_tree_id: stored with the fitted parameters, it is
         # the next snapshot's reference for the covariance prior's growth.
         self._tree_mass = dict(zip(self.ensemble.sub_tree_ids.tolist(),

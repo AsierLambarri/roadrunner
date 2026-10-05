@@ -241,3 +241,177 @@ class TestPhaseSpacePlausibility:
             np.testing.assert_array_equal(r1.responsibilities.column_indices[j], csc_b.column_indices[k])
         r2 = a.assign(halos, coords, [[0, 1]], seed=1, previous_resp=r1.responsibilities)
         assert (r2.particle_df["Sub_tree_id"] > 0).sum() == np.union1d(*csc_b.column_indices).size
+
+
+# ---------------------------------------------------------------- kinematic
+from scipy.integrate import quad
+from scipy.stats import kstest
+
+from roadrunner.clustering.assignment.plausibility import (
+    KinematicPlausibility,
+    _speed_log_ratio,
+    escape_speed_fraction,
+    literature_speed,
+)
+
+
+def _unit(rng, n):
+    v = rng.normal(size=(n, 3))
+    return v / np.linalg.norm(v, axis=1)[:, None]
+
+
+def _kin_floored(u2, m):
+    """Floored literature-only kinematic alpha (first snapshot)."""
+    p = np.exp(_speed_log_ratio(u2, m))
+    return np.minimum((1 - PLAUSIBILITY_FLOOR) * p + PLAUSIBILITY_FLOOR, np.exp(50.0))
+
+
+def _members(rng, h, n, r_scale):
+    """Isotropic members of halo h: positions ~ N(centre, r_scale), Wolf dispersion at r_1/2."""
+    sigma = np.sqrt(literature_speed(h) * -2.0 * h.potential(np.array([KRAVTSOV_RHALF * h.virial_radius]))[0] / 3.0)
+    pos = h.xcen + rng.normal(0.0, r_scale, (n, 3))
+    vel = h.velocity + rng.normal(0.0, sigma, (n, 3))
+    return np.hstack([pos, vel])
+
+
+def _alpha_pairs(halos, coords):
+    """Literature-only alpha of every particle for every halo it is bound to (u^2 < 1)."""
+    for h in halos:
+        u2 = escape_speed_fraction(h, np.arange(len(coords)), coords)
+        rows = np.flatnonzero(u2 < 1.0)
+        h.set_boundness(rows, np.ones(rows.size), np.ones(rows.size))
+    p = KinematicPlausibility()
+    p.prepare(halos, coords)
+    out = {}
+    for h in halos:
+        a = np.zeros(len(coords))
+        a[h.get_boundness()[0]] = p.column_values([h.sub_tree_id])[0]
+        out[int(h.sub_tree_id)] = a
+    return out
+
+
+class TestKinematicPlausibility:
+    @pytest.mark.parametrize("model", ["kepler", "nfw"])
+    @pytest.mark.parametrize("z,comoving", [(0.0, False), (1.5, True)])
+    def test_uniform_escape_ball_is_uniform_in_nu_and_matches_boundness(self, model, z, comoving):
+        rng = np.random.default_rng(4)
+        f = 1.0 / (1.0 + z) if comoving else 1.0
+        inner = KeplerPotential(M=1e11) if model == "kepler" else NFWPotential(M=1e11, Rs=60.0 * f / 10.0, c=10.0)
+        h = HaloModel(inner, np.array([100.0, 200.0, 300.0]), np.array([50.0, -20.0, 10.0]), 60.0,
+                      sub_tree_id=1, redshift=z, comoving=comoving)
+        n, r = 20000, 7.0
+        v_esc = np.sqrt(-2.0 * h.potential(np.array([r]))[0])
+        coords = np.hstack([h.xcen + r * _unit(rng, n),
+                            h.velocity + v_esc * rng.uniform(size=(n, 1)) ** (1 / 3) * _unit(rng, n)])
+        u2 = escape_speed_fraction(h, np.arange(n), coords)
+        assert kstest(u2 ** 1.5, "uniform").pvalue > 1e-3
+        ens = HaloEnsemble([h])
+        compute_halo_bound_particles(ens, coords)
+        rows, b, _ = h.get_boundness()
+        e_over_phi = -b.astype(float) * h.binding_energy_scale() / h.potential(np.array([r]))[0]
+        np.testing.assert_allclose(1.0 - u2[rows], e_over_phi, rtol=1e-4, atol=1e-5)
+
+    def test_member_model_normalisation_moment_and_null(self):
+        for m in (0.01, 0.1, 0.3, 0.59):
+            p = lambda nu: np.exp(_speed_log_ratio(np.array([nu ** (2 / 3)]), m))[0]
+            norm = quad(p, 0, 1, limit=400, points=[1e-6, 1e-3, 0.1])[0]
+            mom = quad(lambda nu: nu ** (2 / 3) * p(nu), 0, 1, limit=400, points=[1e-6, 1e-3, 0.1])[0]
+            np.testing.assert_allclose([norm, mom], [1.0, m], rtol=1e-6)
+        np.testing.assert_allclose(_speed_log_ratio(np.linspace(0, 0.99, 5), 0.7), 0.0, atol=1e-12)
+
+    def test_literature_speed(self):
+        np.testing.assert_allclose(literature_speed(_kepler_halo([0, 0, 0], [0, 0, 0], 1e11, 100.0, 1)), 0.5, rtol=1e-5)
+        for c, ref in [(3.0, 0.0108), (10.0, 0.0334), (30.0, 0.0824)]:
+            np.testing.assert_allclose(literature_speed(_nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1)), ref, rtol=1e-2)
+
+    @pytest.mark.parametrize("make", [_two_kepler_halos, _two_nfw_halos])
+    def test_first_snapshot_is_floored_literature(self, make):
+        halos, coords = make()
+        p = KinematicPlausibility()
+        p.prepare(halos, coords)
+        for h in halos:
+            rows = h.get_boundness()[0]
+            alpha = p.column_values([h.sub_tree_id])[0]
+            assert alpha.shape == rows.shape and np.all(np.isfinite(alpha))
+            assert np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-12))
+            ref = _kin_floored(escape_speed_fraction(h, rows, coords), literature_speed(h))
+            np.testing.assert_allclose(alpha, ref, rtol=1e-10)
+
+    def test_update_shrinkage_skip_and_state(self):
+        rng = np.random.default_rng(0)
+        p = KinematicPlausibility()
+        big, small = np.arange(5000), np.arange(20)
+        u_big, u_small = rng.uniform(0, 0.2, big.size), rng.uniform(0.3, 0.5, small.size)
+        p._t = {1: (big, u_big), 2: (small, u_small)}
+        w_big, w_small = rng.uniform(0.1, 1, big.size), np.ones(small.size)
+        p.update({1: (big, w_big), 2: (small, w_small)})
+        pool = np.average(np.r_[u_big, u_small], weights=np.r_[w_big, w_small])
+        assert p._m_pool == pytest.approx(pool)
+        n_big = w_big.sum() ** 2 / np.dot(w_big, w_big)
+        assert p._m[1] == pytest.approx((n_big * np.average(u_big, weights=w_big) + 100 * pool) / (n_big + 100))
+        assert p._m[2] == pytest.approx((20 * u_small.mean() + 100 * pool) / 120)
+        state = p.state
+        p.update({2: (small[:10], w_small[:10])})               # too few members: kept
+        assert p.state["m_pool"] == state["m_pool"]
+        q = KinematicPlausibility()
+        q.set_state(state)
+        assert q._m == p._m and q._m_pool == p._m_pool
+        q.set_state(None)
+        assert q.state is None and q._m == {}
+
+    @staticmethod
+    def _host_sat(bulk):
+        """Host 1e12 (c 10) at the origin; satellite 1e10 (c 15) at 3 kpc moving with `bulk`."""
+        host = _nfw_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 10.0, 1)
+        sat = _nfw_halo([3, 0, 0], bulk, 1e10, 40.0, 15.0, 2)
+        return host, sat
+
+    def test_infalling_satellite_stars_go_to_the_satellite(self):
+        rng = np.random.default_rng(1)
+        host, _ = self._host_sat([0, 0, 0])
+        v_esc = np.sqrt(-2.0 * host.potential(np.array([3.0]))[0])
+        host, sat = self._host_sat([-0.9 * v_esc, 0, 0])
+        coords = _members(rng, sat, 3000, 0.3)
+        a = _alpha_pairs([host, sat], coords)
+        share = a[2] / (a[1] + a[2])
+        assert np.median(share) > 0.99
+
+    def test_sunk_satellite_is_neutral_and_host_stars_go_to_host(self):
+        rng = np.random.default_rng(2)
+        host, _ = self._host_sat([0, 0, 0])
+        r = np.array([3.0 * np.exp(-1e-3), 3.0, 3.0 * np.exp(1e-3)])
+        phi = host.potential(r)
+        v_circ = np.sqrt((phi[2] - phi[0]) / 2e-3)
+        host, sat = self._host_sat([0, v_circ, 0])
+        sat_stars = _members(rng, sat, 3000, 0.3)
+        sigma_h = v_circ / np.sqrt(3.0)
+        host_stars = np.hstack([sat.xcen + rng.normal(0, 0.3, (3000, 3)), rng.normal(0, sigma_h, (3000, 3))])
+        a = _alpha_pairs([host, sat], np.vstack([sat_stars, host_stars]))
+        both = (a[1] > 0) & (a[2] > 0)
+        s, h = both[:3000], both[3000:]
+        assert abs(np.median(np.log(a[2][:3000][s] / a[1][:3000][s]))) < 1.0
+        assert np.median(np.log(a[1][3000:][h] / a[2][3000:][h])) > 5.0
+
+    def test_host_centre_newborn_beats_small_neighbour(self):
+        host = _nfw_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 10.0, 1)
+        nb = _nfw_halo([5, 0, 0], [0, 0, 0], 1e9, 20.0, 15.0, 2)
+        v_esc_nb = np.sqrt(-2.0 * nb.potential(np.array([5.0]))[0])
+        nb = _nfw_halo([5, 0, 0], [0.5 * v_esc_nb, 0, 0], 1e9, 20.0, 15.0, 2)
+        coords = np.array([[0.01, 0, 0, 0, 0, 0]], dtype=float)
+        a = _alpha_pairs([host, nb], coords)
+        assert a[2][0] > 0                                      # the newborn is bound to the neighbour too
+        assert a[1][0] / (a[1][0] + a[2][0]) > 0.9
+
+    @pytest.mark.parametrize("make", [_two_kepler_halos, _two_nfw_halos])
+    def test_assigner_runs_twice(self, make):
+        halos, coords = make()
+        csc_b, _ = halos.get_particles()
+        a = XGMMAssigner(verbose=0, method="bgmm", plausibility="kinematic")
+        r1 = a.assign(halos, coords, [[0, 1]], seed=1)
+        assert a.plausibility.state is not None
+        for j, sid in enumerate(r1.responsibilities.column_id):
+            k = list(csc_b.column_id).index(sid)
+            np.testing.assert_array_equal(r1.responsibilities.column_indices[j], csc_b.column_indices[k])
+        r2 = a.assign(halos, coords, [[0, 1]], seed=1, previous_resp=r1.responsibilities)
+        assert (r2.particle_df["Sub_tree_id"] > 0).sum() == np.union1d(*csc_b.column_indices).size
+        assert isinstance(make_plausibility("kinematic"), KinematicPlausibility)

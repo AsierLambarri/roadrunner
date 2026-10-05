@@ -79,9 +79,9 @@ class RunConfig:
         coerces numeric fields to the correct type when provided
         as strings or other types.
         """
-        if self.plausibility not in ("rank", "energy", "phase"):
+        if self.plausibility not in ("rank", "energy", "phase", "kinematic"):
             raise ValueError(
-                f"plausibility must be 'rank', 'energy' or 'phase', got '{self.plausibility}'")
+                f"plausibility must be 'rank', 'energy', 'phase' or 'kinematic', got '{self.plausibility}'")
         if self.plausibility == "energy" and self.halo_model.lower() != "nfw":
             raise ValueError(
                 "plausibility='energy' needs halo_model='nfw': the Kepler potential "

@@ -612,7 +612,7 @@ class TestAccretionPipeline:
         cat_reader = HDF5CatalogueReader(os.path.join(str(tmp_path), "catalogue.hdf5"))
         assert cat_reader.read_last_snapshot() == 1
 
-@pytest.mark.parametrize("halo_model,plausibility", [("nfw", "energy"), ("kepler", "phase")])
+@pytest.mark.parametrize("halo_model,plausibility", [("nfw", "energy"), ("kepler", "phase"), ("nfw", "kinematic")])
 def test_plausibility_checkpoint_resume(tmp_path, halo_model, plausibility):
     """The refit plausibility state survives a crash and resume."""
     import h5py

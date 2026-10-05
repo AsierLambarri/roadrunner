@@ -105,3 +105,5 @@ class TestPlausibilityConfig:
             RunConfig(plausibility="nope")
         assert RunConfig(halo_model="kepler", plausibility="phase").plausibility == "phase"
         assert RunConfig(halo_model="nfw", plausibility="phase").plausibility == "phase"
+        for hm in ("kepler", "nfw"):
+            assert RunConfig(halo_model=hm, plausibility="kinematic").plausibility == "kinematic"

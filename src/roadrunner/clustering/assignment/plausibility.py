@@ -40,11 +40,20 @@ Models:
   log-normal member model ``t ~ Normal(mu*, sigma*)``: the pooled moments of
   the previous snapshot's members mixed with each halo's literature model
   (circular orbits around ``r_1/2 = 0.015 R_vir``), and floored.
+- ``"kinematic"`` (any potential): co-movement. ``u^2 = |v - v_k|^2 / v_esc,k^2(r)``
+  at the particle's position, so ``nu = u^3`` is ``U(0, 1)`` for a uniform
+  phase-space background there and the potential at that position carries
+  no evidence. Members follow an isotropic equilibrium tracer
+  ``f ∝ (-E)^q`` (``u^2 ~ Beta(3/2, q + 1)``, hot or cold), with each halo's
+  ``<u^2>`` from its previous-snapshot members shrunk to the pooled value,
+  mixed with the literature value ``v_c^2 / v_esc^2`` at ``r_1/2``
+  (Wolf et al. 2010), and floored.
 """
 
 import functools
 
 import numpy as np
+from scipy.special import betaln, xlog1py
 from scipy.stats import rankdata
 
 from roadrunner._defaults import (
@@ -55,6 +64,7 @@ from roadrunner._defaults import (
     PLAUSIBILITY_MIN_MEMBERS,
     PLAUSIBILITY_MIN_SCATTER_DEX,
     PLAUSIBILITY_PRIOR_WEIGHT,
+    PLAUSIBILITY_SHRINK_COUNT,
 )
 from roadrunner.physics.energy_distribution import (
     CAL_GRID,
@@ -164,13 +174,15 @@ class _Plausibility:
     def __init__(self):
         self._alpha: dict[int, np.ndarray] = {}
 
-    def prepare(self, halos):
+    def prepare(self, halos, coords=None):
         """Compute α for every bound pair of this snapshot.
 
         Parameters
         ----------
         halos : HaloEnsemble or iterable of HaloModel
             Halos with boundness already computed.
+        coords : ndarray of shape (n_particles, 6), optional
+            Phase-space coordinates (used by ``kinematic`` only).
         """
         raise NotImplementedError
 
@@ -201,6 +213,37 @@ class _Plausibility:
             Particle weights (masses under ``mass_weighting``).
         """
         return None
+
+    def _member_pairs(self, resp_map, weights=None):
+        """Per halo: cached per-pair values and weights ``r_nk (x weight)`` of this snapshot's bound members.
+
+        Parameters
+        ----------
+        resp_map : dict of {int: (ndarray, ndarray)}
+            ``Sub_tree_id -> (sorted particle rows, responsibilities)``.
+        weights : ndarray of shape (n_particles,), optional
+            Particle weights (masses under ``mass_weighting``).
+
+        Returns
+        -------
+        per : dict of {int: (ndarray, ndarray)}
+            Positive weights only; halos without cached values are skipped.
+        """
+        per = {}
+        for sid, (rows_r, r) in resp_map.items():
+            cached = self._t.get(int(sid))
+            if cached is None:
+                continue
+            rows_b, t = cached
+            pos = np.searchsorted(rows_b, rows_r)
+            ok = pos < rows_b.size
+            ok[ok] = rows_b[pos[ok]] == rows_r[ok]
+            w = np.asarray(r, dtype=np.float64)[ok]
+            if weights is not None:
+                w = w * weights[rows_r[ok]]
+            keep = w > 0
+            per[int(sid)] = (t[pos[ok]][keep], w[keep])
+        return per
 
     def _member_depths(self, resp_map, weights=None):
         """Depths ``t`` and weights ``r_nk (x weight)`` of this snapshot's bound member pairs.
@@ -264,12 +307,14 @@ class RankPlausibility(_Plausibility):
 
     name = "rank"
 
-    def prepare(self, halos):
+    def prepare(self, halos, coords=None):
         """Compute α for every bound pair of this snapshot.
 
         Parameters
         ----------
         halos : HaloEnsemble or iterable of HaloModel
+        coords : ndarray of shape (n_particles, 6), optional
+            Unused here.
         """
         self._alpha = {int(h.sub_tree_id): _log1p_rank(h.get_boundness()[1])
                        for h in halos if h.has_boundness}
@@ -292,13 +337,15 @@ class EnergyPlausibility(_Plausibility):
         b = np.clip(np.searchsorted(self._edges, tc, side="right") - 1, 0, self._log_density.size - 1)
         return self._log_density[b] + tc
 
-    def prepare(self, halos):
+    def prepare(self, halos, coords=None):
         """Compute α for every bound pair of this snapshot.
 
         Parameters
         ----------
         halos : HaloEnsemble or iterable of HaloModel
             NFW halos with boundness ``E / Phi_0`` already computed.
+        coords : ndarray of shape (n_particles, 6), optional
+            Unused here.
         """
         lam = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)
         self._alpha, self._t = {}, {}
@@ -432,7 +479,7 @@ class PhaseSpacePlausibility(_Plausibility):
         self._sd: float | None = None
         self._sd_min = 0.0
 
-    def prepare(self, halos):
+    def prepare(self, halos, coords=None):
         """Compute α for every bound pair of this snapshot.
 
         Also records the snapshot's width floor: the median over halos of
@@ -443,6 +490,8 @@ class PhaseSpacePlausibility(_Plausibility):
         ----------
         halos : HaloEnsemble or iterable of HaloModel
             Halos with boundness already computed (any potential).
+        coords : ndarray of shape (n_particles, 6), optional
+            Unused here.
         """
         lam = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)
         log_keep, log_floor = np.log1p(-PLAUSIBILITY_FLOOR), np.log(PLAUSIBILITY_FLOOR)
@@ -503,7 +552,172 @@ class PhaseSpacePlausibility(_Plausibility):
         self._sd = None if state is None else float(state["sd"])
 
 
-_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility, "phase": PhaseSpacePlausibility}
+_LOG_2_3 = np.log(2.0 / 3.0)
+
+
+def escape_speed_fraction(halo, rows, coords):
+    """``u^2 = |v - v_k|^2 / (-2 Phi_k(r))`` of a halo's bound particles, in ``[0, 1]``.
+
+    Same centre, frame (tree bulk velocity) and ``(1 + z)`` scaling as
+    :func:`compute_halo_bound_particles`: ``E < 0`` there is ``u^2 < 1`` here
+    (float rounding clipped). ``nu = u^3`` is ``U(0, 1)`` for a uniform
+    phase-space background at fixed radius.
+
+    Parameters
+    ----------
+    halo : HaloModel
+    rows : ndarray of int
+        Bound particle rows.
+    coords : ndarray of shape (n_particles, 6)
+        Positions and velocities.
+
+    Returns
+    -------
+    u2 : ndarray
+    """
+    x = np.asarray(coords[rows], dtype=np.float64)
+    v2 = np.sum((x[:, 3:6] - halo.velocity) ** 2, axis=1)
+    return np.minimum(v2 / (-2.0 * halo.potential(x[:, :3])), 1.0)
+
+
+def literature_speed(halo):
+    """Literature member ``<u^2> = v_c^2 / v_esc^2`` at ``r_1/2 = KRAVTSOV_RHALF R_vir``.
+
+    Wolf et al. (2010): ``<v^2> = v_c^2(r_1/2)`` for any isotropic equilibrium
+    tracer, hot or cold; it matches Errani's NFW tracer to 5% for c = 3-30, and
+    Kepler gives 1/2. ``v_c^2 = dPhi / d ln r`` by central difference.
+
+    Parameters
+    ----------
+    halo : HaloModel
+
+    Returns
+    -------
+    m : float
+    """
+    r = KRAVTSOV_RHALF * halo.virial_radius * np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
+    phi = halo.potential(r)
+    return float((phi[2] - phi[0]) / (2.0 * _FD_STEP) / (-2.0 * phi[1]))
+
+
+def _speed_log_ratio(u2, m):
+    """``log p*(nu)`` of an isotropic power-law tracer ``f ∝ (-E)^q`` against the uniform escape ball.
+
+    ``u^2 ~ Beta(3/2, q + 1)`` at every radius in any potential, with
+    ``q = 3 / (2 m) - 5/2`` (``m = <u^2>``); ``m >= 3/5`` is the background
+    itself (``q = 0``, ratio 1). ``p*(nu) = 2 (1 - u^2)^q / (3 B(3/2, q + 1))``.
+
+    Parameters
+    ----------
+    u2 : ndarray
+    m : float
+
+    Returns
+    -------
+    log_ratio : ndarray
+    """
+    q = max(1.5 / m - 2.5, 0.0)
+    return _LOG_2_3 - betaln(1.5, q + 1.0) + xlog1py(q, -u2)
+
+
+class KinematicPlausibility(_Plausibility):
+    """Co-movement model on ``nu = (|v - v_k| / v_esc,k(r))^3`` (any potential).
+
+    ``nu`` is ``U(0, 1)`` for a uniform phase-space background at the
+    particle's position, so the potential there carries no evidence and
+    ``alpha = p*(nu)``. Members follow an isotropic equilibrium tracer, hot or
+    cold, whose ``<u^2>`` is each halo's previous-snapshot member mean, shrunk
+    to the pooled one with ``PLAUSIBILITY_SHRINK_COUNT``; it is mixed with the
+    halo's literature model (weight ``lam``) and floored, like the other models.
+    """
+
+    name = "kinematic"
+
+    def __init__(self):
+        super().__init__()
+        self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._m_pool: float | None = None
+        self._m: dict[int, float] = {}
+
+    def prepare(self, halos, coords):
+        """Compute α for every bound pair of this snapshot.
+
+        Parameters
+        ----------
+        halos : HaloEnsemble or iterable of HaloModel
+            Halos with boundness already computed (any potential).
+        coords : ndarray of shape (n_particles, 6)
+            Positions and velocities.
+        """
+        lam = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)
+        log_keep, log_floor = np.log1p(-PLAUSIBILITY_FLOOR), np.log(PLAUSIBILITY_FLOOR)
+        self._alpha, self._t = {}, {}
+        for h in halos:
+            if not h.has_boundness:
+                continue
+            rows = h.get_boundness()[0]
+            u2 = escape_speed_fraction(h, rows, coords)
+            sid = int(h.sub_tree_id)
+            log_mix = _speed_log_ratio(u2, literature_speed(h))
+            m = self._m.get(sid, self._m_pool)
+            if m is not None:
+                log_mix = np.logaddexp(np.log1p(-lam) + _speed_log_ratio(u2, m), np.log(lam) + log_mix)
+            log_alpha = np.logaddexp(log_keep + log_mix, log_floor)
+            self._alpha[sid] = np.exp(np.minimum(log_alpha, _LOG_ALPHA_MAX))
+            self._t[sid] = (rows, u2)
+
+    def update(self, resp_map, weights=None):
+        """Refit the pooled and per-halo member ``<u^2>``.
+
+        The pool is the weighted mean over all member pairs; each halo's value is
+        its own weighted mean shrunk to the pool:
+        ``m_k = (n_k m_hat_k + n0 m_pool) / (n_k + n0)``, ``n0 = PLAUSIBILITY_SHRINK_COUNT``.
+        Below ``PLAUSIBILITY_MIN_MEMBERS`` pooled effective members the previous
+        fit is kept.
+
+        Parameters
+        ----------
+        resp_map : dict of {int: (ndarray, ndarray)}
+            ``Sub_tree_id -> (sorted particle rows, responsibilities)``.
+        weights : ndarray of shape (n_particles,), optional
+            Particle weights (masses under ``mass_weighting``).
+        """
+        per = {sid: (u, w) for sid, (u, w) in self._member_pairs(resp_map, weights).items() if w.size}
+        if not per:
+            return
+        w_all = np.concatenate([w for _, w in per.values()])
+        if w_all.sum() ** 2 / np.dot(w_all, w_all) < PLAUSIBILITY_MIN_MEMBERS:
+            return
+        m_pool = float(np.average(np.concatenate([u for u, _ in per.values()]), weights=w_all))
+        n0 = PLAUSIBILITY_SHRINK_COUNT
+        m = {}
+        for sid, (u, w) in per.items():
+            n = w.sum() ** 2 / np.dot(w, w)
+            m[sid] = float((n * np.average(u, weights=w) + n0 * m_pool) / (n + n0))
+        self._m_pool, self._m = m_pool, m
+
+    @property
+    def state(self):
+        """``{"m_pool", "sid", "m"}``, or ``None`` before the first refit."""
+        if self._m_pool is None:
+            return None
+        sid = np.array(sorted(self._m), dtype=np.int64)
+        return {"m_pool": self._m_pool, "sid": sid, "m": np.array([self._m[s] for s in sid.tolist()])}
+
+    def set_state(self, state):
+        """Restore the member model (``None``: literature model alone).
+
+        Parameters
+        ----------
+        state : dict or None
+        """
+        self._m_pool = None if state is None else float(state["m_pool"])
+        self._m = {} if state is None else dict(zip(np.asarray(state["sid"]).tolist(),
+                                                     np.asarray(state["m"], dtype=float).tolist()))
+
+
+_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility, "phase": PhaseSpacePlausibility,
+           "kinematic": KinematicPlausibility}
 
 
 def make_plausibility(name):
@@ -512,11 +726,11 @@ def make_plausibility(name):
     Parameters
     ----------
     name : str
-        ``"rank"``, ``"energy"`` or ``"phase"``.
+        ``"rank"``, ``"energy"``, ``"phase"`` or ``"kinematic"``.
 
     Returns
     -------
-    model : RankPlausibility, EnergyPlausibility or PhaseSpacePlausibility
+    model : RankPlausibility, EnergyPlausibility, PhaseSpacePlausibility or KinematicPlausibility
     """
     try:
         return _MODELS[name.lower()]()
