@@ -3,9 +3,7 @@
 Provides :class:`PlummerPotential`, :class:`KeplerPotential` (a Plummer
 sphere with the fixed softening :const:`SOFTENING_KEPLER`),
 :class:`NFWPotential`, :class:`ShellPotential` (the spherical potential of
-a set of particles) and convenience functions (:func:`potential`,
-:func:`dynamical_time`, :func:`tidal_denominator`, :func:`get_potential`)
-for dispatch by model name.
+a set of particles) and :func:`get_potential` for dispatch by model name.
 Potentials are radial functions of the physical radius; their optional
 ``centre`` is read by :class:`~roadrunner.physics.halo_model.HaloModel`.
 """
@@ -411,81 +409,6 @@ class NFWPotential:
         log_w : ndarray
         """
         return nfw_log_phase_space_fraction(boundness, self.c)
-
-
-def potential(model, r, **kwargs):
-    """Evaluate the potential for a given model at radii ``r``.
-
-    Parameters
-    ----------
-    model : str
-        ``"kepler"`` or ``"nfw"``.
-    r : ndarray
-    **kwargs
-        Passed to the potential constructor.
-
-    Returns
-    -------
-    phi : ndarray
-    """
-    if model.lower() == "kepler":
-        p = KeplerPotential(M=kwargs["M"], G=kwargs.get("G", G_KM))
-        return p.potential(r)
-    if model.lower() == "nfw":
-        p = NFWPotential(
-            M=kwargs["M"], Rs=kwargs["Rs"],
-            c=kwargs["c"], G=kwargs.get("G", G_KM),
-        )
-        return p.potential(r)
-    raise ValueError(f"Unknown potential model: {model}")
-
-
-def dynamical_time(model, **kwargs):
-    """Compute the dynamical time for a given model.
-
-    Parameters
-    ----------
-    model : str
-    **kwargs
-        Passed to the potential constructor; must include ``"r"``.
-
-    Returns
-    -------
-    tdyn : ndarray
-    """
-    if model.lower() == "kepler":
-        p = KeplerPotential(M=kwargs["M"], G=kwargs.get("G", G_KM))
-        return p.dynamical_time(kwargs["r"])
-    if model.lower() == "nfw":
-        p = NFWPotential(
-            M=kwargs["M"], Rs=kwargs["Rs"],
-            c=kwargs["c"], G=kwargs.get("G", G_KM),
-        )
-        return p.dynamical_time(kwargs["r"])
-    raise ValueError(f"Unknown potential model: {model}")
-
-
-def tidal_denominator(model, **kwargs):
-    """Compute the tidal denominator for a given model.
-
-    Parameters
-    ----------
-    model : str
-    **kwargs
-        Passed to the potential constructor; must include ``"r"``.
-
-    Returns
-    -------
-    denom : ndarray
-    """
-    if model.lower() == "kepler":
-        return 3 * kwargs["M"]
-    if model.lower() == "nfw":
-        p = NFWPotential(
-            M=kwargs["M"], Rs=kwargs["Rs"], c=kwargs["c"],
-        )
-        return p.tidal_denominator(kwargs["r"])
-    raise ValueError(f"Unknown potential model: {model}")
 
 
 @njit(cache=True)

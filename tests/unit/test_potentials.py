@@ -7,9 +7,6 @@ from roadrunner.physics.potentials import (
     NFWPotential,
     PlummerPotential,
     ShellPotential,
-    dynamical_time,
-    potential,
-    tidal_denominator,
 )
 
 
@@ -79,44 +76,6 @@ class TestNFWPotential:
         r = np.array([0.0])
         result = nfw.potential(r)
         assert np.isfinite(result).all()
-
-
-class TestFactoryFunctions:
-    def test_potential_factory_kepler(self):
-        M, G = 1e12, 4.3e-6
-        r = np.array([100.0])
-        factory_result = potential("kepler", r, M=M, G=G)
-        direct_result = KeplerPotential(M, G=G).potential(r)
-        assert np.isclose(factory_result, direct_result).all()
-
-    def test_potential_factory_nfw(self):
-        M, Rs, c, G = 1e12, 10.0, 10.0, 4.3e-6
-        r = np.array([10.0])
-        factory_result = potential("nfw", r, M=M, Rs=Rs, c=c, G=G)
-        direct_result = NFWPotential(M, Rs, c, G=G).potential(r)
-        assert np.isclose(factory_result, direct_result).all()
-
-    def test_dynamical_time_factory_kepler(self):
-        M, G = 1e12, 4.3e-6
-        r = np.array([10.0, 20.0])
-        factory_result = dynamical_time("kepler", r=r, M=M, G=G)
-        direct_result = KeplerPotential(M, G=G).dynamical_time(r)
-        assert np.isclose(factory_result, direct_result).all()
-
-    def test_tidal_denominator_factory_kepler(self):
-        result = tidal_denominator("kepler", M=1e12)
-        assert result == 3 * 1e12
-
-    def test_tidal_denominator_factory_nfw(self):
-        result = tidal_denominator(
-            "nfw", r=np.array([10.0]), M=1e12, Rs=10.0, c=10.0
-        )
-        assert result > 0
-
-    def test_unknown_model_raises(self):
-        import pytest
-        with pytest.raises(ValueError, match="Unknown potential model"):
-            potential("foo", np.array([1.0]), M=1e12)
 
 
 class TestShellPotential:
