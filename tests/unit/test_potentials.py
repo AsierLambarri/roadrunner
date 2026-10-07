@@ -5,6 +5,7 @@ from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 from roadrunner.physics.potentials import (
     KeplerPotential,
     NFWPotential,
+    ShellPotential,
     dynamical_time,
     potential,
     tidal_denominator,
@@ -108,6 +109,22 @@ class TestFactoryFunctions:
         import pytest
         with pytest.raises(ValueError, match="Unknown potential model"):
             potential("foo", np.array([1.0]), M=1e12)
+
+
+class TestShellPotential:
+    def test_plummer_sample(self):
+        # Inverse-transform Plummer sphere: M(<r) / M = u = r³ / (r² + a²)^(3/2).
+        M, a, n = 1e12, 10.0, 200_000
+        u = np.random.default_rng(0).uniform(size=n)
+        p = ShellPotential(a / np.sqrt(u ** (-2 / 3) - 1), M / n)
+        assert isinstance(p, PotentialModel)
+        r = np.array([5.0, 10.0, 50.0])
+        s2 = r**2 + a**2
+        np.testing.assert_allclose(p.potential(r), -G_KM * M / np.sqrt(s2), rtol=5e-3)
+        np.testing.assert_allclose(p.dynamical_time(r), 2 * np.pi * np.sqrt(s2**1.5 / (G_KM * M)), rtol=1e-2)
+        np.testing.assert_allclose(p.tidal_denominator(r[1:]), 3 * M * (r[1:] ** 2 / s2[1:]) ** 2.5, rtol=5e-2)
+        np.testing.assert_allclose(p.central_potential(), -G_KM * M / a, rtol=1e-2)
+        np.testing.assert_allclose(p.binding_energy_scale(100.0), G_KM * M * 1e4 / (1e4 + a**2) ** 1.5, rtol=1e-2)
 
 
 class TestGetPotential:
