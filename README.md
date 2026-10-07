@@ -114,7 +114,7 @@ All readers support a particle selection. With `selection_snapshot` plus one of 
 
 ### 2. Boundness (`physics/boundness.py`, `physics/potentials.py`)
 
-Each merger-tree halo becomes a `HaloModel` with a Kepler or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Its boundness is -E over the halo's binding energy scale: -E/v_vir² for Kepler, E/Φ₀ (in (0, 1)) for NFW. Per-particle dynamical timescales are computed here too.
+Each merger-tree halo becomes a `HaloModel` with a Kepler (a softened point mass: a Plummer sphere with a = 1e-3 kpc) or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Its boundness is -E over the halo's binding energy scale: -E/v_vir² for Kepler, E/Φ₀ (in (0, 1)) for NFW. Per-particle dynamical timescales are computed here too.
 
 ### 3. Overlap groups and ownership (`clustering/segmentation.py`)
 
@@ -374,7 +374,7 @@ src/roadrunner/
                    SnapshotOrchestrator, processing (boundness, groups, assignment), reduction,
                    translation (array index <-> simulation ID)
   readers/         merger-tree CSV, equivalence table, yt / npz / particle-data snapshot readers
-  physics/         halo models, Kepler/NFW potentials, boundness, merger-tree handler (scale radii,
+  physics/         halo models, Kepler/NFW/Plummer potentials, boundness, merger-tree handler (scale radii,
                    hosts, satellites), dynamical timescales, scaler, constants
   clustering/      sparse CSC/CSR matrices, union-find, overlap segmentation and ownership
     assignment/    XGMMAssigner (gmm.py), BGMM priors (priors.py), run statistics (statistics.py)

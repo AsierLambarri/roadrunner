@@ -25,17 +25,31 @@ def physical_length_factor(redshift, comoving):
     return 1.0 / (1.0 + redshift) if comoving else 1.0
 
 
-class HaloModel:
-    """Single halo model containing a gravitational potential and boundness data.
+def _summed(values):
+    """Sum of per-potential values, starting from the first (one term is returned as is)."""
+    values = iter(values)
+    total = next(values)
+    for v in values:
+        total = total + v
+    return total
 
-    The halo stores its position, velocity, virial radius, and a
-    :class:`PotentialModel` instance for computing energies.
+
+class HaloModel:
+    """Merger-tree halo: its record (centre, bulk velocity, virial radius,
+    redshift) and one or more gravitational potentials, plus boundness data.
+
+    The first potential is the tree's. :meth:`potential` and
+    :meth:`compute_energy` measure each potential from its own ``centre`` (the
+    tree centre when ``None``); the radial summaries (dynamical and orbital
+    time, tidal denominator, central potential) and any 1-D radii treat every
+    potential as centred on the tree centre. The energy scale, the mass and the
+    energy distributions are the first potential's.
     Boundness results are stored as a tuple ``(indices, energies, tdyns)``.
 
     Parameters
     ----------
     inner : PotentialModel
-        Gravitational potential model.
+        The tree's potential (the first).
     xcen : ndarray of shape (3,)
         Halo centre position.
     velocity : ndarray of shape (3,)
@@ -61,7 +75,7 @@ class HaloModel:
         redshift: float,
         comoving: bool = True,
     ):
-        self._inner = inner
+        self._potentials = [inner]
         md = math_dtype()
         self.xcen = np.asarray(xcen, dtype=md)
         self.velocity = np.asarray(velocity, dtype=md)
@@ -107,28 +121,74 @@ class HaloModel:
         """``True`` if boundness data has been stored."""
         return self._boundness is not None
 
+    def add_potential(self, potential: PotentialModel) -> None:
+        """Add a potential to the halo's total.
+
+        Parameters
+        ----------
+        potential : PotentialModel
+            Centred on its ``centre`` (the tree centre when ``None``).
+        """
+        self._potentials.append(potential)
+
+    @property
+    def mass(self) -> float:
+        """Mass of the tree's (first) potential."""
+        return float(self._potentials[0].M)
+
+    def _radius(self, xyz_or_r: np.ndarray) -> np.ndarray:
+        """Physical radius from the tree centre (2-D positions) or of 1-D radii."""
+        if xyz_or_r.ndim == 2:
+            return np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
+        return xyz_or_r * self._1plusz
+
+    def _radii(self, xyz_or_r: np.ndarray, relative: bool = False) -> list[np.ndarray]:
+        """Physical radius from each potential's centre; 1-D radii are shared.
+
+        ``relative``: 2-D positions are already relative to the tree centre.
+        """
+        if xyz_or_r.ndim == 1:
+            return [xyz_or_r * self._1plusz] * len(self._potentials)
+        rel = xyz_or_r if relative else xyz_or_r - self.xcen
+        shared, radii = None, []
+        for p in self._potentials:
+            if p.centre is None:
+                if shared is None:
+                    shared = np.linalg.norm(rel, axis=1) * self._1plusz
+                radii.append(shared)
+            else:
+                offset = np.asarray(p.centre, dtype=self.xcen.dtype) - self.xcen
+                radii.append(np.linalg.norm(rel - offset, axis=1) * self._1plusz)
+        return radii
+
+    def _single(self) -> PotentialModel:
+        """The halo's only potential; energy distributions are not defined for several."""
+        if len(self._potentials) > 1:
+            raise NotImplementedError("Energy distributions are defined for a single-potential halo only.")
+        return self._potentials[0]
+
     def potential(self, xyz_or_r: np.ndarray) -> np.ndarray:
         """Evaluate the gravitational potential at given positions or radii.
 
         Parameters
         ----------
         xyz_or_r : ndarray of shape (n_points, 3) or (n_points,)
-            If 2-D the norm of the differences from ``xcen`` is computed;
-            if 1-D the values are treated as radii directly.
+            If 2-D each potential is measured from its own centre; if 1-D
+            the values are radii shared by every potential.
 
         Returns
         -------
         phi : ndarray
             Potential energy values.
         """
-        if xyz_or_r.ndim == 2:
-            r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
-        else:
-            r = xyz_or_r * self._1plusz
-        return self._inner.potential(r)
+        radii = self._radii(xyz_or_r)
+        return _summed(p.potential(r) for p, r in zip(self._potentials, radii))
 
     def dynamical_time(self, xyz_or_r: np.ndarray) -> np.ndarray:
         """Compute the dynamical time at given positions.
+
+        With several potentials ``1/t²`` adds up, since every
+        ``t = 2π sqrt(r³ / (G M_i(<r)))``.
 
         Parameters
         ----------
@@ -140,11 +200,30 @@ class HaloModel:
         -------
         tdyn : ndarray
         """
-        if xyz_or_r.ndim == 2:
-            r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
-        else:
-            r = xyz_or_r * self._1plusz
-        return self._inner.dynamical_time(r)
+        r = self._radius(xyz_or_r)
+        if len(self._potentials) == 1:
+            return self._potentials[0].dynamical_time(r)
+        with np.errstate(divide="ignore"):
+            return 1.0 / np.sqrt(_summed(1.0 / p.dynamical_time(r) ** 2 for p in self._potentials))
+
+    def orbital_time(self, E: np.ndarray, xyz_or_r: np.ndarray) -> np.ndarray:
+        """Per-particle orbital timescale for specific energies ``E``.
+
+        A single potential gives its own (the Kepler period for a point mass,
+        the dynamical time otherwise); several give :meth:`dynamical_time`.
+
+        Parameters
+        ----------
+        E : ndarray
+        xyz_or_r : ndarray of shape (n, 3) or (n,)
+
+        Returns
+        -------
+        t : ndarray
+        """
+        if len(self._potentials) == 1:
+            return self._potentials[0].orbital_time(E, self._radius(xyz_or_r))
+        return self.dynamical_time(xyz_or_r)
 
     def tidal_denominator(self, xyz_or_r: np.ndarray) -> np.ndarray:
         """Compute the tidal denominator for tidal-radius estimation.
@@ -159,23 +238,20 @@ class HaloModel:
         -------
         denom : ndarray
         """
-        if xyz_or_r.ndim == 2:
-            r = np.linalg.norm(xyz_or_r - self.xcen, axis=1) * self._1plusz
-        else:
-            r = xyz_or_r * self._1plusz
-        return self._inner.tidal_denominator(r)
+        r = self._radius(xyz_or_r)
+        return _summed(p.tidal_denominator(r) for p in self._potentials)
 
     def central_potential(self) -> float:
-        """Central potential ``Φ₀`` of the halo's potential model (physical units).
+        """Central potential ``Φ₀``, summed over the potentials (physical units).
 
         Returns
         -------
         phi0 : float
         """
-        return self._inner.central_potential()
+        return _summed(p.central_potential() for p in self._potentials)
 
     def binding_energy_scale(self) -> float:
-        """Energy scale that normalises this halo's binding energies.
+        """Energy scale that normalises this halo's binding energies (the tree potential's).
 
         Boundness is stored as ``-E / binding_energy_scale()``: ``-E / v_vir²``
         for Kepler, ``E / Φ₀`` for NFW.
@@ -184,7 +260,7 @@ class HaloModel:
         -------
         scale : float
         """
-        return self._inner.binding_energy_scale(self.virial_radius * self._1plusz)
+        return self._potentials[0].binding_energy_scale(self.virial_radius * self._1plusz)
 
     def energy_fraction(self, eps: np.ndarray) -> np.ndarray:
         """Mass fraction of the halo more bound than the normalised boundness ``eps``.
@@ -197,7 +273,7 @@ class HaloModel:
         -------
         u : ndarray
         """
-        return self._inner.energy_fraction(eps)
+        return self._single().energy_fraction(eps)
 
     def log_energy_density(self, eps: np.ndarray) -> np.ndarray:
         """Log dark-matter energy distribution at the normalised boundness ``eps``.
@@ -210,7 +286,7 @@ class HaloModel:
         -------
         log_n : ndarray
         """
-        return self._inner.log_energy_density(eps)
+        return self._single().log_energy_density(eps)
 
     def log_phase_space_fraction(self, boundness: np.ndarray) -> np.ndarray:
         """Log fraction of the virial sphere's bound phase space more bound than ``boundness``.
@@ -224,7 +300,7 @@ class HaloModel:
         -------
         log_w : ndarray
         """
-        return self._inner.log_phase_space_fraction(boundness)
+        return self._single().log_phase_space_fraction(boundness)
 
     def compute_energy(self, xyz_or_r, vxyz_or_mag, relative=True):
         """Total specific orbital energy ``E = Φ + ½v²``.
@@ -234,7 +310,8 @@ class HaloModel:
         xyz_or_r : ndarray of shape (n, 3) or (n,)
             Positions or radii.  If 2-D and ``relative=True`` they are
             already relative to the halo centre; if ``relative=False``
-            ``self.xcen`` is subtracted.
+            ``self.xcen`` is subtracted. Each potential is measured from
+            its own centre.
         vxyz_or_mag : ndarray of shape (n, 3) or (n,)
             Velocities or speed magnitudes.  If 2-D and ``relative=True``
             they are already relative to the halo bulk velocity; if
@@ -247,19 +324,14 @@ class HaloModel:
         E : ndarray
             Specific orbital energy (negative = bound).
         """
-        if xyz_or_r.ndim == 2:
-            pos = xyz_or_r if relative else xyz_or_r - self.xcen
-            r = np.linalg.norm(pos, axis=1) * self._1plusz
-        else:
-            r = xyz_or_r * self._1plusz
-
+        radii = self._radii(xyz_or_r, relative)
         if vxyz_or_mag.ndim == 2:
             vel = vxyz_or_mag if relative else vxyz_or_mag - self.velocity
             v2 = np.sum(vel**2, axis=1)
         else:
             v2 = vxyz_or_mag**2
 
-        return self._inner.potential(r) + 0.5 * v2
+        return _summed(p.potential(r) for p, r in zip(self._potentials, radii)) + 0.5 * v2
 
     @classmethod
     def from_snapshot_row(cls, row, model="kepler", comoving=True):

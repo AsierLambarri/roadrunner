@@ -1,10 +1,13 @@
-"""Kepler, NFW and particle-set gravitational potential implementations.
+"""Plummer, Kepler, NFW and particle-set gravitational potentials.
 
-Provides :class:`KeplerPotential`, :class:`NFWPotential`,
-:class:`ShellPotential` (the spherical potential of a set of particles), and
-convenience functions (:func:`potential`, :func:`dynamical_time`,
-:func:`tidal_denominator`, :func:`get_potential`) for dispatch
-by model name.
+Provides :class:`PlummerPotential`, :class:`KeplerPotential` (a Plummer
+sphere with the fixed softening :const:`SOFTENING_KEPLER`),
+:class:`NFWPotential`, :class:`ShellPotential` (the spherical potential of
+a set of particles) and convenience functions (:func:`potential`,
+:func:`dynamical_time`, :func:`tidal_denominator`, :func:`get_potential`)
+for dispatch by model name.
+Potentials are radial functions of the physical radius; their optional
+``centre`` is read by :class:`~roadrunner.physics.halo_model.HaloModel`.
 """
 
 import numpy as np
@@ -21,25 +24,31 @@ from roadrunner.physics.energy_distribution import (
 _2PI = 2 * np.pi
 
 
-class KeplerPotential:
-    """Kepler (point-mass) gravitational potential.
+class PlummerPotential:
+    """Plummer sphere: ``Φ(r) = -G M / sqrt(r² + a²)``.
 
-    ``Φ(r) = -G M / sqrt(r² + ε²)`` with a softening length
-    :const:`SOFTENING_KEPLER` to avoid the singularity at ``r = 0``.
-    Its central value is set by the softening alone, so it has no
-    meaningful ``Φ₀`` nor an energy distribution: those methods raise.
+    ``M(<r) = M r³ / (r² + a²)^(3/2)``; ``Φ₀ = -G M / a`` is finite. Binding
+    energies are normalised by ``v_vir² = G M / r_vir``. It has no dark-matter
+    energy distribution nor a closed-form phase-space volume: those methods raise.
 
     Parameters
     ----------
     M : float
-        Enclosed mass.
+        Total mass.
+    a : float
+        Plummer radius (physical); the half-mass radius is ``1.305 a``.
     G : float, default=G_KM
         Gravitational constant.
+    centre : ndarray of shape (3,), optional
+        Centre in the particles' (merger-tree) coordinates, read by
+        :class:`HaloModel`; ``None`` is the halo's own centre.
     """
 
-    def __init__(self, M, G=G_KM):
+    def __init__(self, M, a, G=G_KM, centre=None):
         self.M = M
+        self.a = a
         self.G = G
+        self.centre = centre
 
     def potential(self, r):
         """Evaluate the potential.
@@ -47,18 +56,18 @@ class KeplerPotential:
         Parameters
         ----------
         r : ndarray
-            Radius values.
+            Physical radii.
 
         Returns
         -------
         phi : ndarray
-            ``-G M / sqrt(r² + ε²)``.
+            ``-G M / sqrt(r² + a²)``.
         """
-        r_safe = np.sqrt(r**2 + SOFTENING_KEPLER**2)
+        r_safe = np.sqrt(r**2 + self.a**2)
         return -self.G * self.M / r_safe
 
     def dynamical_time(self, r):
-        """Dynamical time ``2π sqrt(r³ / (G M))``.
+        """Dynamical time ``2π sqrt(r³ / (G M(<r))) = 2π sqrt((r² + a²)^(3/2) / (G M))``.
 
         Parameters
         ----------
@@ -68,23 +77,35 @@ class KeplerPotential:
         -------
         tdyn : ndarray
         """
-        with np.errstate(invalid="ignore"):
-            return _2PI * np.sqrt(r**3 / (self.G * self.M))
+        return _2PI * np.sqrt((r**2 + self.a**2) ** 1.5 / (self.G * self.M))
 
-    def tidal_denominator(self, r):
-        """Tidal denominator for tidal-radius estimation.
-
-        For a Keplerian profile the tidal denominator is ``3 M``.
+    def orbital_time(self, E, r):
+        """Orbital timescale: the dynamical time at the instantaneous radius.
 
         Parameters
         ----------
-        r : ndarray (unused)
+        E : ndarray
+            Specific orbital energies (unused).
+        r : ndarray
 
         Returns
         -------
-        denom : float or ndarray
+        t : ndarray
         """
-        return 3 * self.M
+        return self.dynamical_time(r)
+
+    def tidal_denominator(self, r):
+        """Tidal denominator ``3 M(<r) - dM/d ln r = 3 M r⁵ / (r² + a²)^(5/2)``.
+
+        Parameters
+        ----------
+        r : ndarray
+
+        Returns
+        -------
+        denom : ndarray
+        """
+        return 3 * self.M * (r**2 / (r**2 + self.a**2)) ** 2.5
 
     def binding_energy_scale(self, r_vir):
         """Energy scale of binding energies: ``v_vir² = G M / r_vir``.
@@ -101,16 +122,88 @@ class KeplerPotential:
         return self.G * self.M / r_vir
 
     def central_potential(self):
-        """Not defined: the softened central value is not physical."""
-        raise NotImplementedError("The Kepler potential has no finite central potential.")
+        """Central potential ``Φ₀ = -G M / a``.
+
+        Returns
+        -------
+        phi0 : float
+        """
+        return -self.G * self.M / self.a
 
     def energy_fraction(self, eps):
-        """Not defined: a point mass has no dark-matter energy distribution."""
-        raise NotImplementedError("The Kepler potential has no energy distribution.")
+        """Not implemented: no dark-matter energy distribution."""
+        raise NotImplementedError(f"{type(self).__name__} has no energy distribution.")
 
     def log_energy_density(self, eps):
-        """Not defined: a point mass has no dark-matter energy distribution."""
-        raise NotImplementedError("The Kepler potential has no energy distribution.")
+        """Not implemented: no dark-matter energy distribution."""
+        raise NotImplementedError(f"{type(self).__name__} has no energy distribution.")
+
+    def log_phase_space_fraction(self, boundness):
+        """Not implemented: no closed-form phase-space volume."""
+        raise NotImplementedError(f"{type(self).__name__} has no phase-space volume.")
+
+
+class KeplerPotential(PlummerPotential):
+    """Kepler (point-mass) potential: a Plummer sphere with the fixed softening :const:`SOFTENING_KEPLER`.
+
+    Its central value is set by the softening alone, so it has no meaningful
+    ``Φ₀``: that method raises. Orbits are Keplerian, so its orbital timescale
+    is the period of the orbit, and its phase-space volume has a closed form.
+
+    Parameters
+    ----------
+    M : float
+        Enclosed mass.
+    G : float, default=G_KM
+        Gravitational constant.
+    centre : ndarray of shape (3,), optional
+        See :class:`PlummerPotential`.
+    """
+
+    def __init__(self, M, G=G_KM, centre=None):
+        super().__init__(M, SOFTENING_KEPLER, G=G, centre=centre)
+
+    def orbital_time(self, E, r):
+        """Kepler period ``2π sqrt(s³ / (G M))``, ``s = -G M / (2E)``, of bound particles; 0 when ``E >= 0``.
+
+        Evaluated on bound particles only (I03): unbound ones have no orbit.
+
+        Parameters
+        ----------
+        E : ndarray
+            Specific orbital energies.
+        r : ndarray
+            Radii (unused).
+
+        Returns
+        -------
+        t : ndarray
+        """
+        t = np.zeros(E.shape, dtype=np.result_type(E, self.G * self.M))
+        bound = E < 0
+        s = -0.5 * self.G * self.M / E[bound]
+        t[bound] = _2PI * np.sqrt(s**3 / (self.G * self.M))
+        return t
+
+    def tidal_denominator(self, r):
+        """Point-mass tidal denominator ``3 M`` at every radius.
+
+        The softened form vanishes at ``r = 0``, which would make the main
+        host's own tidal radius (at distance 0) undefined.
+
+        Parameters
+        ----------
+        r : ndarray (unused)
+
+        Returns
+        -------
+        denom : float
+        """
+        return 3 * self.M
+
+    def central_potential(self):
+        """Not defined: the softened central value is not physical."""
+        raise NotImplementedError("The Kepler potential has no finite central potential.")
 
     def log_phase_space_fraction(self, boundness):
         """Log fraction ``ln w`` of the virial sphere's bound phase space more bound than ``b = -E / v_vir²``.
@@ -150,13 +243,16 @@ class NFWPotential:
         Concentration ``c = Rvir / Rs``.
     G : float, default=G_KM
         Gravitational constant.
+    centre : ndarray of shape (3,), optional
+        See :class:`PlummerPotential`.
     """
 
-    def __init__(self, M, Rs, c, G=G_KM):
+    def __init__(self, M, Rs, c, G=G_KM, centre=None):
         self.M = M
         self.Rs = Rs
         self.c = c
         self.G = G
+        self.centre = centre
 
     def potential(self, r):
         """Evaluate the NFW potential.
@@ -203,6 +299,21 @@ class NFWPotential:
         with np.errstate(invalid="ignore"):
             menc = self.enclosed_mass(r)
             return _2PI * np.sqrt(r**3 / (self.G * menc))
+
+    def orbital_time(self, E, r):
+        """Orbital timescale: the dynamical time at the instantaneous radius.
+
+        Parameters
+        ----------
+        E : ndarray
+            Specific orbital energies (unused).
+        r : ndarray
+
+        Returns
+        -------
+        t : ndarray
+        """
+        return self.dynamical_time(r)
 
     def tidal_denominator(self, r):
         """Tidal denominator for the NFW profile.
@@ -678,15 +789,16 @@ class ShellPotential:
         raise NotImplementedError(f"{type(self).__name__} has no phase-space volume.")
 
 
-_POTENTIAL_MODELS: dict[str, type[KeplerPotential | NFWPotential]] = {
+_POTENTIAL_MODELS: dict[str, type[PlummerPotential | NFWPotential]] = {
     "kepler": KeplerPotential,
     "nfw": NFWPotential,
+    "plummer": PlummerPotential,
 }
 
 
 def get_potential(
     model: str, **kwargs
-) -> type[KeplerPotential | NFWPotential] | KeplerPotential | NFWPotential:
+) -> type[PlummerPotential | NFWPotential] | PlummerPotential | NFWPotential:
     """Return a potential class (no kwargs) or an instantiated object.
 
     Parameters

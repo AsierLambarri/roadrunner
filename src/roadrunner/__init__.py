@@ -57,7 +57,7 @@ from .postprocessing.mixing import compute_riley_criterion
 from .postprocessing.properties import compute_galaxy_properties
 from .clustering.assignment.gmm import XGMMAssigner
 from .physics.halo_model import HaloModel
-from .physics.potentials import get_potential, KeplerPotential, NFWPotential, ShellPotential
+from .physics.potentials import get_potential, KeplerPotential, NFWPotential, PlummerPotential, ShellPotential
 
 __all__ = [
     "run_accretion_history",
@@ -89,5 +89,6 @@ __all__ = [
     "get_potential",
     "KeplerPotential",
     "NFWPotential",
+    "PlummerPotential",
     "ShellPotential",
 ]

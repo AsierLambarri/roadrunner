@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from roadrunner.physics.halo_model import HaloModel
-from roadrunner.physics.potentials import KeplerPotential, NFWPotential
+from roadrunner.physics.potentials import KeplerPotential, NFWPotential, PlummerPotential
 
 VCENTER = np.array([0.0, 0.0, 0.0])
 RVR = 100.0
@@ -45,6 +46,23 @@ class TestPotential:
         r_phys = 40.0 / 4.0
         expected = inner.potential(np.array([r_phys]))
         assert np.allclose(result, expected)
+        # a second potential at its own centre: potential and energy measure each from its centre,
+        # radial summaries share the tree centre, and the scale, mass and distributions are the first's
+        star = PlummerPotential(M=1e9, a=0.5, centre=np.array([4.0, 0.0, 0.0]), G=4.3e-6)
+        halo.add_potential(star)
+        np.testing.assert_allclose(halo.potential(xyz), expected + star.potential(np.array([9.0])), rtol=1e-12)
+        v = np.array([[0.0, 30.0, 0.0]])
+        np.testing.assert_allclose(halo.compute_energy(xyz, v, relative=False),
+                                   expected + star.potential(np.array([9.0])) + 450.0, rtol=1e-12)
+        np.testing.assert_allclose(halo.tidal_denominator(np.array([40.0])),
+                                   inner.tidal_denominator(np.array([r_phys])) + star.tidal_denominator(np.array([r_phys])))
+        menc = inner.enclosed_mass(r_phys) + 1e9 * r_phys**3 / (r_phys**2 + 0.25) ** 1.5
+        np.testing.assert_allclose(halo.dynamical_time(np.array([40.0])),
+                                   2 * np.pi * np.sqrt(r_phys**3 / (4.3e-6 * menc)), rtol=1e-10)
+        np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.central_potential())
+        assert halo.mass == 1e12 and halo.binding_energy_scale() == inner.binding_energy_scale(RVR / 4.0)
+        with pytest.raises(NotImplementedError):
+            halo.energy_fraction(np.array([0.5]))
 
     def test_1d_virial_radius_mode(self):
         inner = KeplerPotential(M=1e12)
@@ -147,4 +165,4 @@ class TestFromSnapshotRow:
 
         halo_comoving = HaloModel.from_snapshot_row(row_comoving, model="nfw", comoving=True)
         halo_physical = HaloModel.from_snapshot_row(row_physical, model="nfw", comoving=False)
-        assert np.isclose(halo_comoving._inner.Rs, halo_physical._inner.Rs)
+        assert np.isclose(halo_comoving._potentials[0].Rs, halo_physical._potentials[0].Rs)

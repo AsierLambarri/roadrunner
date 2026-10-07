@@ -18,7 +18,6 @@ from scipy.spatial import KDTree
 
 from roadrunner._defaults import LOCAL_IDX, math_dtype
 
-from roadrunner.physics.potentials import KeplerPotential
 from roadrunner.threads import tree_workers
 
 
@@ -64,8 +63,6 @@ def compute_halo_bound_particles(
     empty_indices = np.array([], dtype=LOCAL_IDX)
     empty_values = np.array([], dtype=math_dtype())
 
-    _2PI = 2 * np.pi
-
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
@@ -84,17 +81,9 @@ def compute_halo_bound_particles(
         # -E / v_vir^2 for Kepler (physical virial radius, C08), E / Phi_0 for NFW.
         boundness = -E / halo.binding_energy_scale()
 
-        if isinstance(halo._inner, KeplerPotential):
-            # Kepler period for bound particles only: unbound ones (E >= 0)
-            # have no orbit, and their entries are discarded below anyway.
-            tdyns = np.zeros(E.shape, dtype=math_dtype())
-            bound_e = E < 0
-            a = -0.5 * halo._inner.G * halo._inner.M / E[bound_e]
-            tdyns[bound_e] = (_2PI * np.sqrt(
-                a**3 / (halo._inner.G * halo._inner.M)
-            )).astype(math_dtype(), copy=False)
-        else:
-            tdyns = halo.dynamical_time(dist).astype(math_dtype(), copy=False)
+        # Kepler: the period of the orbit with energy E (bound particles only, I03);
+        # otherwise the dynamical time at the instantaneous radius.
+        tdyns = halo.orbital_time(E, dist).astype(math_dtype(), copy=False)
 
         bound = E < 0
         valid = local[bound]

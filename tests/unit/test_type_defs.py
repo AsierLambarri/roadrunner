@@ -83,6 +83,9 @@ class MockPotentialModel:
     def dynamical_time(self, x):
         return x * 2.0
 
+    def orbital_time(self, E, r):
+        return self.dynamical_time(r)
+
     def tidal_denominator(self, r):
         return 3.0 * r
 

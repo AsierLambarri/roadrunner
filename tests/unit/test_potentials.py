@@ -5,6 +5,7 @@ from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 from roadrunner.physics.potentials import (
     KeplerPotential,
     NFWPotential,
+    PlummerPotential,
     ShellPotential,
     dynamical_time,
     potential,
@@ -38,6 +39,13 @@ class TestKeplerPotential:
         M = 1e12
         k = KeplerPotential(M)
         assert k.tidal_denominator(np.array([1.0])) == 3 * M
+        # Kepler is a Plummer sphere with a = SOFTENING_KEPLER; 3 M(<r) - dM/dln r for any a
+        assert isinstance(k, PlummerPotential) and k.a == SOFTENING_KEPLER
+        p, r, h = PlummerPotential(M, 0.5), np.array([0.2, 0.5, 3.0]), 1e-5
+        menc = lambda x: M * x**3 / (x**2 + 0.25) ** 1.5
+        dm_dlnr = (menc(r * np.exp(h)) - menc(r * np.exp(-h))) / (2 * h)
+        np.testing.assert_allclose(p.tidal_denominator(r), 3 * menc(r) - dm_dlnr, rtol=1e-6)
+        np.testing.assert_allclose(p.dynamical_time(r), 2 * np.pi * np.sqrt(r**3 / (p.G * menc(r))))
 
 
 class TestNFWPotential:
@@ -162,6 +170,7 @@ class TestGetPotentialClass:
         cls = get_potential("kepler")
         assert cls is KeplerPotential
         assert issubclass(cls, PotentialModel)
+        assert get_potential("plummer") is PlummerPotential and issubclass(PlummerPotential, PotentialModel)
 
     def test_get_nfw_class_no_kwargs(self):
         from roadrunner.physics.potentials import get_potential
@@ -180,6 +189,14 @@ class TestBindingEnergyInterface:
                      lambda: p.log_energy_density(np.array([0.5]))):
             with pytest.raises(NotImplementedError):
                 call()
+        E = np.array([-1e4, -10.0, 0.0, 5.0])
+        s = -0.5 * p.G * p.M / E[:2]
+        np.testing.assert_array_equal(p.orbital_time(E, np.ones(4)),
+                                      np.r_[2 * np.pi * np.sqrt(s**3 / (p.G * p.M)), 0.0, 0.0])
+        q = PlummerPotential(M=1e10, a=0.5)
+        np.testing.assert_allclose(q.central_potential(), -G_KM * 1e10 / 0.5)
+        with pytest.raises(NotImplementedError):
+            q.log_phase_space_fraction(np.array([2.0]))
 
     def test_nfw_central_potential_and_scale(self):
         p = NFWPotential(M=1e10, Rs=5.0, c=8.0)
