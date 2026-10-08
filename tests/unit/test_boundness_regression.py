@@ -43,7 +43,7 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
         phi = halo.potential(dist)
         v_esc = np.sqrt(2 * np.abs(phi))
         boundness = 0.5 * (v_esc**2 - vel_mags**2) / v_vir_sq
-        tdyns = halo.dynamical_time(dist)
+        tdyns = halo.orbital_time(phi + 0.5 * vel_mags**2, dist)
 
         bound = vel_mags <= v_esc
         valid = local[bound]

@@ -40,10 +40,11 @@ class HaloModel:
 
     The first potential is the tree's. :meth:`potential` and
     :meth:`compute_energy` measure each potential from its own ``centre`` (the
-    tree centre when ``None``); the radial summaries (dynamical and orbital
-    time, tidal denominator, central potential) and any 1-D radii treat every
-    potential as centred on the tree centre. The energy scale, the mass and the
-    energy distributions are the first potential's.
+    tree centre when ``None``); the radial summaries (orbital time, tidal
+    denominator, central potential) and any 1-D radii treat every
+    potential as centred on the tree centre. The energy distributions are the
+    first potential's; the energy scale ``G M_tot / r_vir`` is the halo's.
+    ``tree_mass`` is the first potential's mass, ``total_mass`` all of them.
     Boundness results are stored as a tuple ``(indices, energies, tdyns)``.
 
     Parameters
@@ -76,6 +77,7 @@ class HaloModel:
         comoving: bool = True,
     ):
         self._potentials = [inner]
+        self.tree_mass = float(inner.M)
         md = math_dtype()
         self.xcen = np.asarray(xcen, dtype=md)
         self.velocity = np.asarray(velocity, dtype=md)
@@ -132,9 +134,9 @@ class HaloModel:
         self._potentials.append(potential)
 
     @property
-    def mass(self) -> float:
-        """Mass of the tree's (first) potential."""
-        return float(self._potentials[0].M)
+    def total_mass(self) -> float:
+        """Sum of the masses of the halo's potentials."""
+        return float(_summed(p.M for p in self._potentials))
 
     def _radius(self, xyz_or_r: np.ndarray) -> np.ndarray:
         """Physical radius from the tree centre (2-D positions) or of 1-D radii."""
@@ -184,46 +186,32 @@ class HaloModel:
         radii = self._radii(xyz_or_r)
         return _summed(p.potential(r) for p, r in zip(self._potentials, radii))
 
-    def dynamical_time(self, xyz_or_r: np.ndarray) -> np.ndarray:
-        """Compute the dynamical time at given positions.
+    def orbital_time(self, E: np.ndarray, xyz_or_r: np.ndarray) -> np.ndarray:
+        """Per-particle orbital timescale for specific energies ``E``.
 
-        With several potentials ``1/t²`` adds up, since every
-        ``t = 2π sqrt(r³ / (G M_i(<r)))``.
+        A single potential gives its own (the Kepler period for a point mass,
+        the dynamical time otherwise); several give the dynamical time
+        ``2π sqrt(r³ / Σ G M_i(<r))`` of their total enclosed mass (``inf``
+        where none is enclosed).
 
         Parameters
         ----------
+        E : ndarray
         xyz_or_r : ndarray of shape (n, 3) or (n,)
             If 2-D the norm of differences from ``xcen`` is computed;
             if 1-D the values are treated as radii directly.
 
         Returns
         -------
-        tdyn : ndarray
+        t : ndarray
         """
         r = self._radius(xyz_or_r)
         if len(self._potentials) == 1:
-            return self._potentials[0].dynamical_time(r)
-        with np.errstate(divide="ignore"):
-            return 1.0 / np.sqrt(_summed(1.0 / p.dynamical_time(r) ** 2 for p in self._potentials))
-
-    def orbital_time(self, E: np.ndarray, xyz_or_r: np.ndarray) -> np.ndarray:
-        """Per-particle orbital timescale for specific energies ``E``.
-
-        A single potential gives its own (the Kepler period for a point mass,
-        the dynamical time otherwise); several give :meth:`dynamical_time`.
-
-        Parameters
-        ----------
-        E : ndarray
-        xyz_or_r : ndarray of shape (n, 3) or (n,)
-
-        Returns
-        -------
-        t : ndarray
-        """
-        if len(self._potentials) == 1:
-            return self._potentials[0].orbital_time(E, self._radius(xyz_or_r))
-        return self.dynamical_time(xyz_or_r)
+            return self._potentials[0].orbital_time(E, r)
+        gm = _summed(p.G * p.enclosed_mass(r) for p in self._potentials)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = 2 * np.pi * np.sqrt(r**3 / gm)
+        return np.where(gm > 0, t, np.inf)
 
     def tidal_denominator(self, xyz_or_r: np.ndarray) -> np.ndarray:
         """Compute the tidal denominator for tidal-radius estimation.
@@ -251,16 +239,17 @@ class HaloModel:
         return _summed(p.central_potential() for p in self._potentials)
 
     def binding_energy_scale(self) -> float:
-        """Energy scale that normalises this halo's binding energies (the tree potential's).
+        """Energy scale that normalises this halo's binding energies: ``v_vir² = G M_tot / r_vir``.
 
-        Boundness is stored as ``-E / binding_energy_scale()``: ``-E / v_vir²``
-        for Kepler, ``E / Φ₀`` for NFW.
+        ``M_tot`` sums the masses of the halo's potentials, the dark halo's
+        nearly all of it; ``r_vir`` is physical. Boundness is stored as
+        ``-E / binding_energy_scale()``.
 
         Returns
         -------
         scale : float
         """
-        return self._potentials[0].binding_energy_scale(self.virial_radius * self._1plusz)
+        return _summed(p.G * p.M for p in self._potentials) / (self.virial_radius * self._1plusz)
 
     def energy_fraction(self, eps: np.ndarray) -> np.ndarray:
         """Mass fraction of the halo more bound than the normalised boundness ``eps``.

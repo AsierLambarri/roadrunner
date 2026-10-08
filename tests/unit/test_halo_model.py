@@ -57,10 +57,11 @@ class TestPotential:
         np.testing.assert_allclose(halo.tidal_denominator(np.array([40.0])),
                                    inner.tidal_denominator(np.array([r_phys])) + star.tidal_denominator(np.array([r_phys])))
         menc = inner.enclosed_mass(r_phys) + 1e9 * r_phys**3 / (r_phys**2 + 0.25) ** 1.5
-        np.testing.assert_allclose(halo.dynamical_time(np.array([40.0])),
+        np.testing.assert_allclose(halo.orbital_time(np.array([-1.0]), np.array([40.0])),
                                    2 * np.pi * np.sqrt(r_phys**3 / (4.3e-6 * menc)), rtol=1e-10)
         np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.central_potential())
-        assert halo.mass == 1e12 and halo.binding_energy_scale() == inner.binding_energy_scale(RVR / 4.0)
+        assert halo.tree_mass == 1e12 and halo.total_mass == 1e12 + 1e9
+        np.testing.assert_allclose(halo.binding_energy_scale(), 4.3e-6 * (1e12 + 1e9) / (RVR / 4.0))
         with pytest.raises(NotImplementedError):
             halo.energy_fraction(np.array([0.5]))
 

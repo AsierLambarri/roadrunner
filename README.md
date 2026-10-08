@@ -374,7 +374,7 @@ src/roadrunner/
                    SnapshotOrchestrator, processing (boundness, groups, assignment), reduction,
                    translation (array index <-> simulation ID)
   readers/         merger-tree CSV, equivalence table, yt / npz / particle-data snapshot readers
-  physics/         halo models, Kepler/NFW/Plummer potentials, boundness, merger-tree handler (scale radii,
+  physics/         halo models, Kepler/NFW/Plummer/Hernquist/shell potentials, boundness, merger-tree handler (scale radii,
                    hosts, satellites), dynamical timescales, scaler, constants
   clustering/      sparse CSC/CSR matrices, union-find, overlap segmentation and ownership
     assignment/    XGMMAssigner (gmm.py), BGMM priors (priors.py), run statistics (statistics.py)

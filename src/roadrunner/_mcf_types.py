@@ -293,27 +293,29 @@ class ParticleAssigner(Protocol):
 class PotentialModel(Protocol):
     """Protocol for gravitational potential models.
 
-    Implementations provide the potential, dynamical time and tidal
-    denominator at given radii, the energy scale that normalises binding
-    energies, and, where the potential has a finite centre, its central
-    value and its dark-matter energy distribution, and the log fraction of
-    the virial sphere's bound phase space that is more bound than a given
+    Primitives, linear in mass (they add over potentials): the potential,
+    enclosed mass and density at given radii, and the central potential.
+    Derived from them: the orbital time and the tidal denominator, and, where
+    a model defines them, its dark-matter energy distribution and the log
+    fraction of the virial sphere's bound phase space more bound than a given
     normalised boundness. Methods a model cannot define raise
-    ``NotImplementedError``.
+    ``NotImplementedError``. :class:`~roadrunner.physics.potentials.SphericalPotential`
+    implements it from a potential and a density.
 
-    Implementations also carry ``M`` (the mass parameter) and ``centre`` (the
-    position, in the particles' coordinates, the potential is centred on;
-    ``None`` for the halo's centre), read by ``HaloModel``. They are documented
-    here, not declared: a runtime-checkable protocol with data members cannot
-    be used with ``issubclass``.
+    Implementations also carry ``M`` (the mass parameter), ``G`` and
+    ``centre`` (the position, in the particles' coordinates, the potential is
+    centred on; ``None`` for the halo's centre), read by ``HaloModel``, which
+    owns the energy scale that normalises binding energies. They are
+    documented here, not declared: a runtime-checkable protocol with data
+    members cannot be used with ``issubclass``.
     """
 
     def potential(self, r: np.ndarray) -> np.ndarray: ...
-    def dynamical_time(self, x: np.ndarray) -> np.ndarray: ...
+    def enclosed_mass(self, r: np.ndarray) -> np.ndarray: ...
+    def density(self, r: np.ndarray) -> np.ndarray: ...
+    def central_potential(self) -> float: ...
     def orbital_time(self, E: np.ndarray, r: np.ndarray) -> np.ndarray: ...
     def tidal_denominator(self, r: np.ndarray) -> np.ndarray: ...
-    def binding_energy_scale(self, r_vir: float) -> float: ...
-    def central_potential(self) -> float: ...
     def energy_fraction(self, eps: np.ndarray) -> np.ndarray: ...
     def log_energy_density(self, eps: np.ndarray) -> np.ndarray: ...
     def log_phase_space_fraction(self, boundness: np.ndarray) -> np.ndarray: ...

@@ -80,17 +80,17 @@ class MockPotentialModel:
     def potential(self, r):
         return -1.0 / r
 
-    def dynamical_time(self, x):
-        return x * 2.0
+    def enclosed_mass(self, r):
+        return r
+
+    def density(self, r):
+        return 1.0 / r
 
     def orbital_time(self, E, r):
-        return self.dynamical_time(r)
+        return r * 2.0
 
     def tidal_denominator(self, r):
         return 3.0 * r
-
-    def binding_energy_scale(self, r_vir):
-        return 1.0 / r_vir
 
     def central_potential(self):
         raise NotImplementedError

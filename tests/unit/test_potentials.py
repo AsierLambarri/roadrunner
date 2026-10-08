@@ -3,10 +3,13 @@ import numpy as np
 from roadrunner._mcf_types import PotentialModel
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 from roadrunner.physics.potentials import (
+    get_potential,
     KeplerPotential,
     NFWPotential,
     PlummerPotential,
+    HernquistPotential,
     ShellPotential,
+    SphericalPotential,
 )
 
 
@@ -26,10 +29,10 @@ class TestKeplerPotential:
         result = k.potential(r)
         assert np.isfinite(result).all()
 
-    def test_dynamical_time_positive(self):
+    def test_orbital_time_positive(self):
         k = KeplerPotential(1e12, G=4.3e-6)
         r = np.array([10.0, 20.0])
-        result = k.dynamical_time(r)
+        result = k.orbital_time(np.array([-1.0, -2.0]), r)
         assert np.all(result > 0)
 
     def test_tidal_denominator(self):
@@ -42,7 +45,11 @@ class TestKeplerPotential:
         menc = lambda x: M * x**3 / (x**2 + 0.25) ** 1.5
         dm_dlnr = (menc(r * np.exp(h)) - menc(r * np.exp(-h))) / (2 * h)
         np.testing.assert_allclose(p.tidal_denominator(r), 3 * menc(r) - dm_dlnr, rtol=1e-6)
-        np.testing.assert_allclose(p.dynamical_time(r), 2 * np.pi * np.sqrt(r**3 / (p.G * menc(r))))
+        np.testing.assert_allclose(p.orbital_time(np.full(r.size, -1.0), r), 2 * np.pi * np.sqrt(r**3 / (p.G * menc(r))))
+        # the exact overrides agree with the generic (numerical) forms of SphericalPotential
+        np.testing.assert_allclose(SphericalPotential.enclosed_mass(p, r), menc(r), rtol=1e-3)
+        np.testing.assert_allclose(SphericalPotential.orbital_time(p, None, r), p.orbital_time(None, r), rtol=1e-12)
+        np.testing.assert_allclose(SphericalPotential.central_potential(p), p.central_potential(), rtol=1e-9)
 
 
 class TestNFWPotential:
@@ -53,10 +60,10 @@ class TestNFWPotential:
         assert result[0] < result[1] < result[2]
         assert np.all(result < 0)
 
-    def test_dynamical_time_positive(self):
+    def test_orbital_time_positive(self):
         nfw = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6)
         r = np.array([1.0, 5.0, 10.0])
-        result = nfw.dynamical_time(r)
+        result = nfw.orbital_time(np.zeros(3), r)
         assert np.all(result > 0)
 
     def test_tidal_denominator_positive(self):
@@ -64,12 +71,17 @@ class TestNFWPotential:
         r = np.array([1.0, 10.0, 100.0])
         result = nfw.tidal_denominator(r)
         assert np.all(result > 0)
+        # inside r_vir the override is the generic 3 M(<r) - 4π r³ ρ up to the softening (2 ε² / r²)
+        np.testing.assert_allclose(SphericalPotential.tidal_denominator(nfw, r[:2]), result[:2], rtol=1e-5)
 
     def test_enclosed_mass_converges(self):
         nfw = NFWPotential(M=1e12, Rs=10.0, c=10.0)
         R200 = nfw.c * nfw.Rs
         result = nfw.enclosed_mass(np.array([R200]))
         assert np.isclose(result[0], nfw.M, rtol=0.1)
+        # the density is the exact derivative of the (softened, truncated) enclosed mass
+        r = np.array([1.0, 10.0, 99.0])
+        np.testing.assert_allclose(SphericalPotential.enclosed_mass(nfw, r), nfw.enclosed_mass(r), rtol=1e-3)
 
     def test_potential_at_zero(self):
         nfw = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6)
@@ -88,10 +100,31 @@ class TestShellPotential:
         r = np.array([5.0, 10.0, 50.0])
         s2 = r**2 + a**2
         np.testing.assert_allclose(p.potential(r), -G_KM * M / np.sqrt(s2), rtol=5e-3)
-        np.testing.assert_allclose(p.dynamical_time(r), 2 * np.pi * np.sqrt(s2**1.5 / (G_KM * M)), rtol=1e-2)
+        np.testing.assert_allclose(p.enclosed_mass(r), M * r**3 / s2**1.5, rtol=2e-2)
+        np.testing.assert_allclose(p.orbital_time(np.zeros(3), r), 2 * np.pi * np.sqrt(s2**1.5 / (G_KM * M)), rtol=1e-2)
         np.testing.assert_allclose(p.tidal_denominator(r[1:]), 3 * M * (r[1:] ** 2 / s2[1:]) ** 2.5, rtol=5e-2)
         np.testing.assert_allclose(p.central_potential(), -G_KM * M / a, rtol=1e-2)
-        np.testing.assert_allclose(p.binding_energy_scale(100.0), G_KM * M * 1e4 / (1e4 + a**2) ** 1.5, rtol=1e-2)
+
+
+class TestHernquistPotential:
+    def test_closed_forms_and_point_mass_limit(self):
+        # M(<r) = M r² / (r + a)²; tidal denominator 3 M(<r) - dM/dln r by central difference
+        M, a = 1e10, 0.5
+        p = get_potential("hernquist", M=M, a=a)
+        assert isinstance(p, HernquistPotential) and isinstance(p, PotentialModel)
+        r, h = np.array([0.05, 0.5, 5.0, 100.0]), 1e-5
+        menc = lambda x: M * x**2 / (x + a) ** 2
+        dm_dlnr = (menc(r * np.exp(h)) - menc(r * np.exp(-h))) / (2 * h)
+        np.testing.assert_allclose(p.potential(r), -G_KM * M / (r + a))
+        np.testing.assert_allclose(p.orbital_time(np.zeros(r.size), r), 2 * np.pi * np.sqrt(r**3 / (G_KM * menc(r))))
+        np.testing.assert_allclose(SphericalPotential.enclosed_mass(p, r), menc(r), rtol=1e-3)
+        np.testing.assert_allclose(SphericalPotential.orbital_time(p, None, r), p.orbital_time(None, r), rtol=1e-12)
+        np.testing.assert_allclose(SphericalPotential.central_potential(p), p.central_potential(), rtol=1e-5)
+        np.testing.assert_allclose(p.tidal_denominator(r), 3 * menc(r) - dm_dlnr, rtol=1e-6)
+        np.testing.assert_allclose(p.central_potential(), -G_KM * M / a)
+        k = HernquistPotential(M, 1e-8)
+        np.testing.assert_allclose(k.potential(r), -G_KM * M / r, rtol=1e-6)
+        np.testing.assert_allclose(k.tidal_denominator(r), 3 * M, rtol=1e-6)
 
 
 class TestGetPotential:
@@ -139,11 +172,10 @@ class TestGetPotentialClass:
 
 
 class TestBindingEnergyInterface:
-    def test_kepler_scale_and_undefined_methods(self):
+    def test_kepler_undefined_methods_and_period(self):
         import pytest
         p = KeplerPotential(M=1e10)
         assert isinstance(p, PotentialModel)
-        np.testing.assert_allclose(p.binding_energy_scale(20.0), G_KM * 1e10 / 20.0)
         for call in (p.central_potential, lambda: p.energy_fraction(np.array([0.5])),
                      lambda: p.log_energy_density(np.array([0.5]))):
             with pytest.raises(NotImplementedError):
@@ -157,12 +189,11 @@ class TestBindingEnergyInterface:
         with pytest.raises(NotImplementedError):
             q.log_phase_space_fraction(np.array([2.0]))
 
-    def test_nfw_central_potential_and_scale(self):
+    def test_nfw_central_potential(self):
         p = NFWPotential(M=1e10, Rs=5.0, c=8.0)
         assert isinstance(p, PotentialModel)
         phi0 = -G_KM * 1e10 / (5.0 * (np.log(9.0) - 8.0 / 9.0))
         np.testing.assert_allclose(p.central_potential(), phi0)
-        np.testing.assert_allclose(p.binding_energy_scale(40.0), -phi0)
         # The softened potential stays above Phi_0.
         assert p.potential(np.array([0.0]))[0] > phi0
         u = p.energy_fraction(np.array([0.9, 0.5, 0.1]))

@@ -96,7 +96,7 @@ class HaloEnsemble:
     @property
     def masses(self) -> np.ndarray:
         """Tree mass of each halo, shape ``(n_halos,)``."""
-        return np.array([h.mass for h in self._halos], dtype=np.float64)
+        return np.array([h.tree_mass for h in self._halos], dtype=np.float64)
 
     @property
     def energy_scales(self) -> np.ndarray:
