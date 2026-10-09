@@ -59,6 +59,7 @@ class TestPotential:
         menc = inner.enclosed_mass(r_phys) + 1e9 * r_phys**3 / (r_phys**2 + 0.25) ** 1.5
         np.testing.assert_allclose(halo.orbital_time(np.array([-1.0]), np.array([40.0])),
                                    2 * np.pi * np.sqrt(r_phys**3 / (4.3e-6 * menc)), rtol=1e-10)
+        assert halo.orbital_time(np.array([-1.0]), np.array([0.0]))[0] == 0   # the NFW cusp's limit at r = 0
         np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.central_potential())
         assert halo.tree_mass == 1e12 and halo.total_mass == 1e12 + 1e9
         np.testing.assert_allclose(halo.binding_energy_scale(), 4.3e-6 * (1e12 + 1e9) / (RVR / 4.0))

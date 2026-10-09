@@ -61,7 +61,8 @@ def compute_tidal_radius(halo, satellite_mass, distance):
     """Compute the tidal radius of a satellite in a host halo potential.
 
     Uses the tidal denominator from :meth:`HaloModel.tidal_denominator`
-    and the formula ``r_t = d * (M_sat / M_denom)^(1/3)``.
+    and the formula ``r_t = d * (M_sat / M_denom)^(1/3)``: 0 at ``d = 0``
+    (the main host itself), where an extended host's denominator vanishes.
 
     Parameters
     ----------
@@ -78,4 +79,6 @@ def compute_tidal_radius(halo, satellite_mass, distance):
         Tidal radius in the same units as ``distance``.
     """
     denom = np.asarray(halo.tidal_denominator(np.array([distance]))).flat[0]
-    return distance * (satellite_mass / denom) ** (1.0 / 3.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rt = distance * (satellite_mass / denom) ** (1.0 / 3.0)
+    return np.nan_to_num(rt, nan=0.0, posinf=np.inf)

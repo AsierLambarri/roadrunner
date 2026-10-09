@@ -114,7 +114,7 @@ All readers support a particle selection. With `selection_snapshot` plus one of 
 
 ### 2. Boundness (`physics/boundness.py`, `physics/potentials.py`)
 
-Each merger-tree halo becomes a `HaloModel` with a Kepler (a softened point mass: a Plummer sphere with a = 1e-3 kpc) or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Its boundness is -E over the halo's binding energy scale: -E/v_vir² for Kepler, E/Φ₀ (in (0, 1)) for NFW. Per-particle dynamical timescales are computed here too.
+Each merger-tree halo becomes a `HaloModel` with a Kepler (a softened point mass: a Plummer sphere with a = 1e-3 kpc) or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Its boundness is -E over the halo's energy scale ΣGM/r_vir. Per-particle dynamical timescales are computed here too.
 
 ### 3. Overlap groups and ownership (`clustering/segmentation.py`)
 

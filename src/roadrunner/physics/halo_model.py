@@ -64,6 +64,9 @@ class HaloModel:
     comoving : bool, default=True
         If ``True``, ``potential()`` applies the ``(1 + z)`` scaling
         to convert comoving to physical coordinates.
+    search_factor : float, default=1.0
+        Multiple of the virial radius: the boundness search sphere and the
+        counting radius of the energy distributions.
     """
 
     def __init__(
@@ -75,6 +78,7 @@ class HaloModel:
         sub_tree_id: int,
         redshift: float,
         comoving: bool = True,
+        search_factor: float = 1.0,
     ):
         self._potentials = [inner]
         self.tree_mass = float(inner.M)
@@ -85,6 +89,7 @@ class HaloModel:
         self.sub_tree_id = sub_tree_id
         self.redshift = float(redshift)
         self.comoving = comoving
+        self.search_factor = float(search_factor)
         self._1plusz  = 1 / (1 + self.redshift) if comoving else 1
         self._boundness: tuple | None = None
 
@@ -192,7 +197,8 @@ class HaloModel:
         A single potential gives its own (the Kepler period for a point mass,
         the dynamical time otherwise); several give the dynamical time
         ``2π sqrt(r³ / Σ G M_i(<r))`` of their total enclosed mass (``inf``
-        where none is enclosed).
+        where none is enclosed; at ``r = 0`` its limit
+        ``2π sqrt(3 / (4π Σ G ρ_i(0)))``).
 
         Parameters
         ----------
@@ -210,8 +216,10 @@ class HaloModel:
             return self._potentials[0].orbital_time(E, r)
         gm = _summed(p.G * p.enclosed_mass(r) for p in self._potentials)
         with np.errstate(divide="ignore", invalid="ignore"):
+            g_rho0 = _summed(p.G * p.density(np.zeros(1))[0] for p in self._potentials)
             t = 2 * np.pi * np.sqrt(r**3 / gm)
-        return np.where(gm > 0, t, np.inf)
+            t0 = 2 * np.pi * np.sqrt(3 / (4 * np.pi * g_rho0))
+        return np.nan_to_num(t, nan=t0, posinf=np.inf)
 
     def tidal_denominator(self, xyz_or_r: np.ndarray) -> np.ndarray:
         """Compute the tidal denominator for tidal-radius estimation.
@@ -251,45 +259,62 @@ class HaloModel:
         """
         return _summed(p.G * p.M for p in self._potentials) / (self.virial_radius * self._1plusz)
 
-    def energy_fraction(self, eps: np.ndarray) -> np.ndarray:
-        """Mass fraction of the halo more bound than the normalised boundness ``eps``.
+    def _counting_radius(self) -> float:
+        """Physical radius of the boundness search sphere, ``search_factor * r_vir``: where the distributions count."""
+        return self.search_factor * self.virial_radius * self._1plusz
+
+    def energy_fraction(self, b: np.ndarray) -> np.ndarray:
+        """Fraction of the halo's mass inside the search sphere more bound than the stored boundness ``b``.
+
+        ``b`` is converted to the physical energy ``E = -b * binding_energy_scale()``
+        and passed, with the search sphere's physical radius, to the halo's
+        potential; the result is a fraction, so it needs no conversion back.
 
         Parameters
         ----------
-        eps : ndarray
+        b : ndarray
+            Stored boundness, ``-E / binding_energy_scale()``.
 
         Returns
         -------
-        u : ndarray
+        u : ndarray of float64
         """
-        return self._single().energy_fraction(eps)
+        return self._single().energy_fraction(-b * self.binding_energy_scale(), self._counting_radius())
 
-    def log_energy_density(self, eps: np.ndarray) -> np.ndarray:
-        """Log dark-matter energy distribution at the normalised boundness ``eps``.
+    def log_energy_density(self, b: np.ndarray) -> np.ndarray:
+        """``ln dN/db``: energy distribution of the halo's mass inside the search sphere, per unit stored boundness.
+
+        The potential returns ``ln dN/dE`` at ``E = -b s`` (``s`` the energy
+        scale); ``|dE/db| = s`` adds ``ln s``.
 
         Parameters
         ----------
-        eps : ndarray
+        b : ndarray
+            Stored boundness.
 
         Returns
         -------
-        log_n : ndarray
+        log_n : ndarray of float64
         """
-        return self._single().log_energy_density(eps)
+        s = self.binding_energy_scale()
+        return self._single().log_energy_density(-b * s, self._counting_radius()) + np.log(s)
 
-    def log_phase_space_fraction(self, boundness: np.ndarray) -> np.ndarray:
-        """Log fraction of the virial sphere's bound phase space more bound than ``boundness``.
+    def log_phase_space_fraction(self, b: np.ndarray) -> np.ndarray:
+        """``ln w``: fraction of the search sphere's bound phase space more bound than the stored boundness ``b``.
+
+        Converted like :meth:`energy_fraction`; ``w`` is a fraction, so it
+        needs no conversion back.
 
         Parameters
         ----------
-        boundness : ndarray
-            Normalised boundness as stored by :func:`compute_halo_bound_particles`.
+        b : ndarray
+            Stored boundness.
 
         Returns
         -------
-        log_w : ndarray
+        log_w : ndarray of float64
         """
-        return self._single().log_phase_space_fraction(boundness)
+        return self._single().log_phase_space_fraction(-b * self.binding_energy_scale(), self._counting_radius())
 
     def compute_energy(self, xyz_or_r, vxyz_or_mag, relative=True):
         """Total specific orbital energy ``E = Φ + ½v²``.
@@ -323,7 +348,7 @@ class HaloModel:
         return _summed(p.potential(r) for p, r in zip(self._potentials, radii)) + 0.5 * v2
 
     @classmethod
-    def from_snapshot_row(cls, row, model="kepler", comoving=True):
+    def from_snapshot_row(cls, row, model="kepler", comoving=True, search_factor=1.0):
         """Construct a HaloModel from a merger-tree row.
 
         Parameters
@@ -334,6 +359,8 @@ class HaloModel:
             Potential model name.
         comoving : bool, default=True
             Whether coordinates are comoving.
+        search_factor : float, default=1.0
+            Multiple of the virial radius: the boundness search sphere.
 
         Returns
         -------
@@ -361,4 +388,5 @@ class HaloModel:
             sub_tree_id=int(row["Sub_tree_id"]),
             redshift=float(row["Redshift"]),
             comoving=comoving,
+            search_factor=search_factor,
         )

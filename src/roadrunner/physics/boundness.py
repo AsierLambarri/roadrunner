@@ -24,16 +24,13 @@ from roadrunner.threads import tree_workers
 def compute_halo_bound_particles(
     halos: list,
     particle_coordinates: np.ndarray,
-    search_factor: float = 1.0,
 ) -> list:
     """Compute gravitational boundness for a list of halos.
 
-    Uses a KD-tree to efficiently find particles within ``search_factor``
-    times the virial radius of each halo, then evaluates boundness
-    via the total specific orbital energy ``E = Φ + ½v²``. The stored
-    boundness is ``-E`` over the halo's binding energy scale
-    (:meth:`HaloModel.binding_energy_scale`): ``-E / v_vir²`` for Kepler,
-    ``E / Φ₀`` (in ``(0, 1)``) for NFW.
+    Uses a KD-tree to efficiently find particles within each halo's search
+    sphere (:attr:`HaloModel.search_factor` virial radii), then evaluates
+    boundness via the total specific orbital energy ``E = Φ + ½v²``. The
+    stored boundness is ``-E / HaloModel.binding_energy_scale()``.
     Bound particles are stored on each halo via
     :meth:`HaloModel.set_boundness`.
 
@@ -48,8 +45,6 @@ def compute_halo_bound_particles(
         Halos to evaluate.
     particle_coordinates : ndarray of shape (n_particles, 6)
         6-D phase-space coordinates.
-    search_factor : float, default=1.0
-        Virial radius multiplier for the candidate search region.
 
     Returns
     -------
@@ -66,7 +61,7 @@ def compute_halo_bound_particles(
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
-                halo.xcen, r=search_factor * halo.virial_radius, workers=tree_workers()
+                halo.xcen, r=halo.search_factor * halo.virial_radius, workers=tree_workers()
             )
         )
         if local.size == 0:
@@ -78,7 +73,7 @@ def compute_halo_bound_particles(
         dist = np.linalg.norm(rel_pos, axis=1)
 
         E = halo.compute_energy(rel_pos, rel_vel, relative=True)
-        # -E / v_vir^2 for Kepler (physical virial radius, C08), E / Phi_0 for NFW.
+        # -E over the halo's energy scale (physical virial radius, C08).
         boundness = -E / halo.binding_energy_scale()
 
         # Kepler: the period of the orbit with energy E (bound particles only, I03);

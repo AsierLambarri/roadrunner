@@ -44,12 +44,12 @@ class TestFunction:
         inner_comoving = KeplerPotential(M=1e12, G=4.3e-6)
         inner_physical = KeplerPotential(M=1e12, G=4.3e-6)
         halo_comoving = HaloModel(inner_comoving, VCENTER, VCENTER, 100.0 * factor,
-                                   sub_tree_id=1, redshift=z, comoving=True)
+                                   sub_tree_id=1, redshift=z, comoving=True, search_factor=0.2)
         halo_physical = HaloModel(inner_physical, VCENTER, VCENTER, 100.0,
-                                   sub_tree_id=1, redshift=z, comoving=False)
+                                   sub_tree_id=1, redshift=z, comoving=False, search_factor=0.2)
 
-        compute_halo_bound_particles([halo_comoving], coords_comoving, search_factor=0.2)
-        compute_halo_bound_particles([halo_physical], coords_physical, search_factor=0.2)
+        compute_halo_bound_particles([halo_comoving], coords_comoving)
+        compute_halo_bound_particles([halo_physical], coords_physical)
 
         i_com, e_com, _ = halo_comoving.get_boundness()
         i_phy, e_phy, _ = halo_physical.get_boundness()

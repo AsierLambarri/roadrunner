@@ -65,9 +65,9 @@ class TestRankPlausibility:
         a = XGMMAssigner(verbose=0)
         a.previous_resp = {}
         a.plausibility.prepare(ens)
-        csc_a = SparseCSC(csc_b.column_indices, a.plausibility.column_values(csc_b.column_id),
-                          column_id=csc_b.column_id)
-        with precision(math=math):
+        with precision(math=math):        # α is cast to the run's math_dtype by column_values
+            csc_a = SparseCSC(csc_b.column_indices, a.plausibility.column_values(csc_b.column_id),
+                              column_id=csc_b.column_id)
             old = row_l1_normalize(csc_b.to_dense(col_func=_old_rank_transform)).astype(math_dtype())
             new, _ = a._initial_responsibilities(None, csc_b, csc_a, None, None)
         assert new.dtype == old.dtype
@@ -100,15 +100,18 @@ class TestEnergyPlausibility:
             rows, eps, _ = h.get_boundness()
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape
-            assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-12))
+            assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
             ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(errani_log_ratio(h, eps.astype(float))) + PLAUSIBILITY_FLOOR
-            np.testing.assert_allclose(alpha, np.minimum(ref, np.exp(50.0)), rtol=1e-10)
+            np.testing.assert_allclose(alpha, np.minimum(ref, np.exp(50.0)), rtol=1e-6)
 
     def test_deep_satellite_particle_beats_shallow_host_pair(self):
         host = _nfw_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 10.0, 1)
         sat = _nfw_halo([50, 0, 0], [0, 0, 0], 1e10, 30.0, 12.0, 2)
-        host.set_boundness(np.array([0]), np.array([0.3]), np.ones(1))   # shallow in the host
-        sat.set_boundness(np.array([0]), np.array([0.8]), np.ones(1))    # deep in the satellite
+        # stored boundness b = -E / scale at E / Phi_0 = 0.3 (shallow in the host) and 0.8 (deep in the satellite)
+        host.set_boundness(np.array([0]), np.array([0.3 * -host.central_potential() / host.binding_energy_scale()]),
+                           np.ones(1))
+        sat.set_boundness(np.array([0]), np.array([0.8 * -sat.central_potential() / sat.binding_energy_scale()]),
+                          np.ones(1))
         p = EnergyPlausibility()
         p.prepare([host, sat])
         a_host, a_sat = (v[0] for v in p.column_values([1, 2]))
@@ -191,11 +194,11 @@ class TestPhaseSpacePlausibility:
             rows, b, _ = h.get_boundness()
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape
-            assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-12))
+            assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
             t = -h.log_phase_space_fraction(b.astype(float))
             mu, sd, _ = literature_depth(h)
             ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(-0.5 * ((t - mu) / sd) ** 2 + t) / (sd * np.sqrt(2 * np.pi)) + PLAUSIBILITY_FLOOR
-            np.testing.assert_allclose(alpha, ref, rtol=1e-10)
+            np.testing.assert_allclose(alpha, ref, rtol=1e-6)
 
     def test_update_moments_floor_skip_and_state(self):
         rng = np.random.default_rng(0)
@@ -333,9 +336,9 @@ class TestKinematicPlausibility:
             rows = h.get_boundness()[0]
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape and np.all(np.isfinite(alpha))
-            assert np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-12))
+            assert np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
             ref = _kin_floored(escape_speed_fraction(h, rows, coords), literature_speed(h))
-            np.testing.assert_allclose(alpha, ref, rtol=1e-10)
+            np.testing.assert_allclose(alpha, ref, rtol=1e-6)
 
     def test_update_shrinkage_skip_and_state(self):
         rng = np.random.default_rng(0)

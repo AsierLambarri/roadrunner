@@ -95,14 +95,17 @@ class MockPotentialModel:
     def central_potential(self):
         raise NotImplementedError
 
-    def energy_fraction(self, eps):
+    def distribution_function(self, E):
         raise NotImplementedError
 
-    def log_energy_density(self, eps):
+    def energy_fraction(self, E, r_max):
         raise NotImplementedError
 
-    def log_phase_space_fraction(self, boundness):
-        return -1.5 * np.log(boundness)
+    def log_energy_density(self, E, r_max):
+        raise NotImplementedError
+
+    def log_phase_space_fraction(self, E, r_max):
+        return -1.5 * np.log(-E * r_max)
 
 
 class TestPotentialModelProtocol:

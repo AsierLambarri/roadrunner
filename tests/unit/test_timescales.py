@@ -108,3 +108,4 @@ class TestTidalRadius:
         rt = compute_tidal_radius(halo, 1e10, 100.0)
         assert np.isfinite(rt)
         assert rt > 0
+        assert compute_tidal_radius(halo, 1e10, 0.0) == 0   # the main host itself: the denominator vanishes at d = 0

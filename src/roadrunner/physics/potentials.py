@@ -12,6 +12,11 @@ fixed softening :const:`SOFTENING_KEPLER`), :class:`HernquistPotential`,
 set of particles) and :func:`get_potential` for dispatch by model name.
 Potentials are radial functions of the physical radius; their optional
 ``centre`` is read by :class:`~roadrunner.physics.halo_model.HaloModel`.
+Radii may be 0: every method evaluates its formula on the whole array and
+replaces the 0/0 or 0·∞ it meets at the centre by the limit there. The
+energy distribution and the phase-space fraction come from
+:class:`~roadrunner.physics.distribution.SphericalDistribution` unless a
+potential overrides them.
 """
 
 from abc import abstractmethod
@@ -22,8 +27,10 @@ from scipy.integrate import cumulative_trapezoid
 from scipy.special import betainc
 
 from roadrunner._mcf_types import PotentialModel
-from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER, SOFTENING_NFW
-from roadrunner.physics.energy_distribution import (
+from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
+from roadrunner.physics.distribution import (
+    SphericalDistribution,
+    eddington_distribution_function,
     nfw_energy_fraction,
     nfw_log_energy_density,
     nfw_log_phase_space_fraction,
@@ -32,19 +39,20 @@ from roadrunner.physics.energy_distribution import (
 _2PI = 2 * np.pi
 _MASS_GRID_NODES = 1024            # generic M(<r): trapezoid nodes, log-spaced in r
 _MASS_GRID_INNER = 1e-8            # innermost node / outermost radius (plus r = 0)
-_CENTRAL_RADIUS = 1e-6             # generic Φ₀: the potential at this physical radius
 
 
 class SphericalPotential(PotentialModel):
     """Spherical potential: the protocol's methods from a potential and a density.
 
     A concrete potential implements :meth:`potential` and :meth:`density`. The
-    enclosed mass and the central potential have numerical generic forms (the
-    trapezoid rule over the density; the potential at ``_CENTRAL_RADIUS``),
+    enclosed mass and the central potential have generic forms (the
+    trapezoid rule over the density; the potential at ``r = 0``),
     which a concrete potential overrides with its exact ones. The orbital time
     and the tidal denominator follow from them; a concrete potential overrides
     one only with an exact closed form. The energy distribution and the
-    phase-space fraction raise unless a potential defines them.
+    phase-space fraction, counted inside a radius ``r_max``, come from
+    :class:`SphericalDistribution` (cached per ``r_max``), with ``f`` from
+    :meth:`distribution_function`.
 
     Parameters
     ----------
@@ -61,6 +69,7 @@ class SphericalPotential(PotentialModel):
         self.M = M
         self.G = G
         self.centre = centre
+        self._distributions = {}
 
     @abstractmethod
     def potential(self, r):
@@ -92,8 +101,8 @@ class SphericalPotential(PotentialModel):
         """Mass ``M(<r) = ∫_0^r 4π x² ρ(x) dx`` by the trapezoid rule.
 
         Nodes: ``r = 0`` and ``_MASS_GRID_NODES`` log-spaced radii from
-        ``_MASS_GRID_INNER`` times the largest ``r`` to it; ``x² ρ`` is taken
-        as 0 at ``r = 0`` (any density shallower than ``r⁻³``).
+        ``_MASS_GRID_INNER`` times the largest ``r`` to it; ``x² ρ`` takes its
+        limit 0 at ``r = 0`` (any density shallower than ``r⁻³``).
 
         Parameters
         ----------
@@ -104,28 +113,26 @@ class SphericalPotential(PotentialModel):
         menc : ndarray
         """
         r = np.asarray(r, dtype=np.float64)
-        r_max = r.max(initial=0.0)
-        if r_max <= 0:
-            return np.zeros_like(r)
-        x = np.concatenate(([0.0], np.geomspace(_MASS_GRID_INNER * r_max, r_max, _MASS_GRID_NODES)))
+        x = r.max(initial=0.0) * np.concatenate(([0.0], np.geomspace(_MASS_GRID_INNER, 1.0, _MASS_GRID_NODES)))
         with np.errstate(divide="ignore", invalid="ignore"):
-            f = 4 * np.pi * x**2 * self.density(x)
-        f[0] = 0.0
+            f = np.nan_to_num(4 * np.pi * x**2 * self.density(x), nan=0.0)
         return np.interp(r, x, cumulative_trapezoid(f, x, initial=0.0))
 
     def central_potential(self):
-        """Central potential ``Φ₀``: the potential at ``_CENTRAL_RADIUS``.
+        """Central potential ``Φ₀``: the potential at ``r = 0``.
 
         Returns
         -------
         phi0 : float
         """
-        return float(self.potential(np.array([_CENTRAL_RADIUS]))[0])
+        return float(self.potential(np.zeros(1))[0])
 
     def orbital_time(self, E, r):
         """Orbital timescale: the dynamical time ``2π sqrt(r³ / (G M(<r)))`` at the instantaneous radius.
 
-        ``inf`` where no mass is enclosed.
+        ``inf`` where no mass is enclosed. At ``r = 0`` it is the limit
+        ``2π sqrt(3 / (4π G ρ(0)))``, where the mean enclosed density becomes
+        ``ρ(0)``: 0 in a cusp, finite in a core.
 
         Parameters
         ----------
@@ -137,10 +144,10 @@ class SphericalPotential(PotentialModel):
         -------
         t : ndarray
         """
-        menc = self.enclosed_mass(r)
         with np.errstate(divide="ignore", invalid="ignore"):
-            t = _2PI * np.sqrt(r**3 / (self.G * menc))
-        return np.where(menc > 0, t, np.inf)
+            t = _2PI * np.sqrt(r**3 / (self.G * self.enclosed_mass(r)))
+            t0 = _2PI * np.sqrt(3 / (4 * np.pi * self.G * self.density(np.zeros(1))[0]))
+        return np.nan_to_num(t, nan=t0, posinf=np.inf)
 
     def tidal_denominator(self, r):
         """Tidal denominator ``3 M(<r) - dM/d ln r``, with ``dM/d ln r = 4π r³ ρ(r)`` (0 at ``r = 0``).
@@ -153,21 +160,97 @@ class SphericalPotential(PotentialModel):
         -------
         denom : ndarray
         """
-        with np.errstate(invalid="ignore"):
-            dm_dlnr = 4 * np.pi * r**3 * self.density(r)
-        return 3 * self.enclosed_mass(r) - np.where(r > 0, dm_dlnr, 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dm_dlnr = np.nan_to_num(4 * np.pi * r**3 * self.density(r), nan=0.0)
+        return 3 * self.enclosed_mass(r) - dm_dlnr
 
-    def energy_fraction(self, eps):
-        """Not defined for this potential: no dark-matter energy distribution."""
-        raise NotImplementedError(f"{type(self).__name__} has no energy distribution.")
+    def distribution_function(self, E):
+        """Isotropic distribution function ``f(E)`` of the potential's own, untruncated density.
 
-    def log_energy_density(self, eps):
-        """Not defined for this potential: no dark-matter energy distribution."""
-        raise NotImplementedError(f"{type(self).__name__} has no energy distribution.")
+        Generic: Eddington's inversion of :meth:`density` in :meth:`potential`
+        (:func:`~roadrunner.physics.distribution.eddington_distribution_function`).
+        A potential with a closed form overrides it, and one without a mass
+        distribution raises. It feeds the energy distribution ``N = f g``.
 
-    def log_phase_space_fraction(self, boundness):
-        """Not defined for this potential: no phase-space volume."""
-        raise NotImplementedError(f"{type(self).__name__} has no phase-space volume.")
+        Parameters
+        ----------
+        E : ndarray
+            Physical specific energies; ``f = 0`` for ``E >= 0``.
+
+        Returns
+        -------
+        f : ndarray of float64
+        """
+        return eddington_distribution_function(self, E)
+
+    def _distribution(self, r_max):
+        """The cached :class:`SphericalDistribution` inside ``r_max``."""
+        d = self._distributions.get(r_max)
+        if d is None:
+            d = self._distributions[r_max] = SphericalDistribution(self, r_max)
+        return d
+
+    def energy_fraction(self, E, r_max):
+        """Fraction of the mass inside ``r_max`` more bound than ``E``.
+
+        The potential's untruncated, isotropic profile (``f`` from
+        :meth:`distribution_function`) counted inside the sphere of radius
+        ``r_max``: uniform on ``(0, 1)`` for that mass itself. Generic
+        numerical tables (:class:`SphericalDistribution`) unless overridden.
+
+        Parameters
+        ----------
+        E : ndarray
+            Physical specific energies.
+        r_max : float
+            Counting radius (physical), the boundness search sphere.
+
+        Returns
+        -------
+        u : ndarray of float64
+        """
+        return self._distribution(r_max).energy_fraction(E)
+
+    def log_energy_density(self, E, r_max):
+        """``ln dN/dE``: energy distribution of the mass inside ``r_max``, per unit physical ``E``.
+
+        ``N = f g``, normalised over the bound energies (see
+        :meth:`energy_fraction`). Generic numerical tables unless overridden.
+
+        Parameters
+        ----------
+        E : ndarray
+            Physical specific energies.
+        r_max : float
+            Counting radius (physical).
+
+        Returns
+        -------
+        log_n : ndarray of float64
+        """
+        return self._distribution(r_max).log_energy_density(E)
+
+    def log_phase_space_fraction(self, E, r_max):
+        """``ln w``: fraction of the bound phase space inside ``r_max`` more bound than ``E``.
+
+        ``w = q(E) / q(0)``, with ``q`` the phase-space volume inside the
+        sphere of radius ``r_max`` more bound than ``E``. It needs only the
+        potential, so it is defined for every potential, and it is uniform
+        on ``(0, 1]`` for particles spread uniformly in that bound phase
+        space. Generic numerical tables unless overridden.
+
+        Parameters
+        ----------
+        E : ndarray
+            Physical specific energies.
+        r_max : float
+            Counting radius (physical).
+
+        Returns
+        -------
+        log_w : ndarray of float64
+        """
+        return self._distribution(r_max).log_phase_space_fraction(E)
 
 
 class PlummerPotential(SphericalPotential):
@@ -257,6 +340,39 @@ class PlummerPotential(SphericalPotential):
         """
         return _2PI * np.sqrt((r**2 + self.a**2) ** 1.5 / (self.G * self.M))
 
+    def tidal_denominator(self, r):
+        """Exact: ``3 M(<r) - 4π r³ ρ = 3 M r⁵ / (r² + a²)^(5/2)``, without the generic form's cancellation at small ``r``.
+
+        Parameters
+        ----------
+        r : ndarray
+
+        Returns
+        -------
+        denom : ndarray
+        """
+        return 3 * self.M * r**5 / (r**2 + self.a**2) ** 2.5
+
+    def distribution_function(self, E):
+        """Exact isotropic distribution function of the (untruncated) Plummer sphere.
+
+        ``f(E) = 24√2 / (7π³) · a² / (G⁵ M⁴) · (-E)^(7/2)`` for ``E < 0``, 0
+        otherwise (Binney & Tremaine 2008, eq. 4.83): the phase-space density
+        whose velocity integral is :meth:`density`. It replaces the generic
+        Eddington inversion, which it equals.
+
+        Parameters
+        ----------
+        E : ndarray
+            Physical specific energies.
+
+        Returns
+        -------
+        f : ndarray of float64
+        """
+        b = np.clip(-np.asarray(E, dtype=np.float64), 0.0, None)
+        return 24 * np.sqrt(2) / (7 * np.pi**3) * self.a**2 / (self.G**5 * self.M**4) * b**3.5
+
 
 class KeplerPotential(PlummerPotential):
     """Kepler (point-mass) potential: a Plummer sphere with the fixed softening :const:`SOFTENING_KEPLER`.
@@ -282,7 +398,8 @@ class KeplerPotential(PlummerPotential):
     def orbital_time(self, E, r):
         """Kepler period ``2π sqrt(s³ / (G M))``, ``s = -G M / (2E)``, of bound particles; 0 when ``E >= 0``.
 
-        Evaluated on bound particles only (I03): unbound ones have no orbit.
+        Unbound particles have no orbit (I03): their ``s <= 0`` makes the
+        square root NaN, which becomes 0.
 
         Parameters
         ----------
@@ -295,52 +412,60 @@ class KeplerPotential(PlummerPotential):
         -------
         t : ndarray
         """
-        t = np.zeros(E.shape, dtype=np.result_type(E, self.G * self.M))
-        bound = E < 0
-        s = -0.5 * self.G * self.M / E[bound]
-        t[bound] = _2PI * np.sqrt(s**3 / (self.G * self.M))
-        return t
+        with np.errstate(divide="ignore", invalid="ignore"):
+            s = -0.5 * self.G * self.M / E
+            t = _2PI * np.sqrt(s**3 / (self.G * self.M))
+        return np.nan_to_num(t, nan=0.0, posinf=np.inf)
 
     def tidal_denominator(self, r):
         """Point-mass tidal denominator ``3 M`` at every radius.
 
-        The softened form vanishes at ``r = 0``, which would make the main
-        host's own tidal radius (at distance 0) undefined.
+        The softened (Plummer) form would vanish inside the softening.
 
         Parameters
         ----------
-        r : ndarray (unused)
+        r : ndarray
 
         Returns
         -------
-        denom : float
+        denom : ndarray
         """
-        return 3 * self.M
+        return np.full(np.shape(r), 3 * self.M)
 
     def central_potential(self):
         """Not defined: the softened central value is not physical."""
         raise NotImplementedError("The Kepler potential has no finite central potential.")
 
-    def log_phase_space_fraction(self, boundness):
-        """Log fraction ``ln w`` of the virial sphere's bound phase space more bound than ``b = -E / v_vir²``.
+    def distribution_function(self, E):
+        """Not defined: a point mass has no extended mass distribution, so no energy distribution.
 
-        Closed form (softening holds negligible volume):
+        The energy pair (:meth:`energy_fraction`, :meth:`log_energy_density`)
+        therefore raises too; the phase-space fraction has its own closed form.
+        """
+        raise NotImplementedError("The Kepler potential has no energy distribution.")
+
+    def log_phase_space_fraction(self, E, r_max):
+        """Exact ``ln w``: fraction of the bound phase space inside ``r_max`` more bound than ``E``.
+
+        For a point mass, with ``b = -E r_max / (G M)``:
         ``w = (3/2) B(3/2, 5/2) b^(-3/2) I_x(3/2, 5/2)``, ``x = min(1, b)``,
         ``B(3/2, 5/2) = pi / 16``, so ``w = (3 pi / 32) b^(-3/2)`` once the
-        orbit stays inside the virial sphere (``b >= 1``).
+        orbit stays inside ``r_max`` (``b >= 1``). The softening holds a
+        negligible volume, so it is ignored.
 
         Parameters
         ----------
-        boundness : ndarray
-            ``b = -E / v_vir²`` (positive for bound particles).
+        E : ndarray
+            Physical specific energies (negative for bound particles).
+        r_max : float
+            Counting radius (physical), the boundness search sphere.
 
         Returns
         -------
-        log_w : ndarray
+        log_w : ndarray of float64
         """
-        b = np.asarray(boundness, dtype=np.float64)
+        b = -np.asarray(E, dtype=np.float64) * r_max / (self.G * self.M)
         return np.log(3.0 * np.pi / 32.0) - 1.5 * np.log(b) + np.log(betainc(1.5, 2.5, np.minimum(1.0, b)))
-
 
 class HernquistPotential(SphericalPotential):
     """Hernquist sphere: ``Φ(r) = -G M / (r + a)``.
@@ -429,19 +554,46 @@ class HernquistPotential(SphericalPotential):
         """
         return _2PI * (r + self.a) * np.sqrt(r / (self.G * self.M))
 
+    def distribution_function(self, E):
+        """Exact isotropic distribution function of the (untruncated) Hernquist sphere (Hernquist 1990, eq. 17).
+
+        ``f(E) = M / (8√2 π³ a³ v_g³) · (1 - q²)^(-5/2) ·
+        [3 asin q + q sqrt(1 - q²) (1 - 2q²) (8q⁴ - 8q² - 3)]``, with
+        ``q = sqrt(-E a / (G M))`` and ``v_g = sqrt(G M / a)``; 0 for
+        ``E >= 0``. It diverges as ``E -> Φ₀`` (the cusp). It replaces the
+        generic Eddington inversion, which it equals. The bracket, which
+        cancels to ``(4 asin q)⁵ / 40`` as ``q -> 0``, is evaluated as its
+        equal ``(3π/2) I_{q²}(5/2, 5/2)`` (regularised incomplete beta):
+        with ``q = sin θ`` it is ``∫_0^{4θ} 2 sin⁴(t/2) dt``.
+
+        Parameters
+        ----------
+        E : ndarray
+            Physical specific energies.
+
+        Returns
+        -------
+        f : ndarray of float64
+        """
+        q2 = np.clip(-np.asarray(E, dtype=np.float64) * self.a / (self.G * self.M), 0.0, 1.0)
+        vg3 = (self.G * self.M / self.a) ** 1.5
+        with np.errstate(divide="ignore"):
+            core = 1.5 * np.pi * betainc(2.5, 2.5, q2)
+            return self.M / (8 * np.sqrt(2) * np.pi**3 * self.a**3 * vg3) * core / (1 - q2) ** 2.5
+
 
 class NFWPotential(SphericalPotential):
     """Navarro–Frenk–White gravitational potential.
 
     ``Φ(r) = -G M / r · ln(1 + r/Rs) / A`` where
-    ``A = ln(1 + c) - c/(1 + c)``, with a softening length
-    :const:`SOFTENING_NFW` to regularise the origin. ``M(<r)`` is truncated at
-    ``x = c``; :meth:`density` is its exact derivative.
+    ``A = ln(1 + c) - c/(1 + c)``: finite at ``r = 0`` (``Φ₀``), over the
+    density's ``1/r`` cusp. The profile is untruncated: ``M(<R_vir) = M``,
+    the virial mass, and ``M(<r)`` keeps growing beyond.
 
     Parameters
     ----------
     M : float
-        Virial mass.
+        Virial mass, ``M(<R_vir)``.
     Rs : float
         Scale radius.
     c : float
@@ -458,7 +610,7 @@ class NFWPotential(SphericalPotential):
         self.c = c
 
     def potential(self, r):
-        """Evaluate the NFW potential.
+        """``Φ₀ ln(1 + x) / x``, ``x = r / Rs``: ``Φ₀`` at ``r = 0`` (the 0/0 limit).
 
         Parameters
         ----------
@@ -468,15 +620,14 @@ class NFWPotential(SphericalPotential):
         -------
         phi : ndarray
         """
-        r_safe = np.sqrt(r**2 + SOFTENING_NFW**2)
-        A = np.log(1 + self.c) - self.c / (1 + self.c)
-        return -self.G * (self.M / r_safe) * np.log(1 + r_safe / self.Rs) / A
+        x = r / self.Rs
+        phi0 = self.central_potential()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            phi = phi0 * np.log1p(x) / x
+        return np.nan_to_num(phi, nan=phi0)
 
     def density(self, r):
-        """Density of the softened, truncated ``M(<r)``: ``M / (4π A Rs² r (1 + x)²)``, 0 beyond ``x = c``.
-
-        ``x = sqrt(r² + ε²) / Rs``, so ``∫ 4π r² ρ dr`` is exactly
-        :meth:`enclosed_mass`; infinite at ``r = 0``.
+        """``M / (4π A Rs² r (1 + x)²)``, ``x = r / Rs``; infinite at ``r = 0`` (the cusp).
 
         Parameters
         ----------
@@ -486,14 +637,16 @@ class NFWPotential(SphericalPotential):
         -------
         rho : ndarray
         """
-        x = np.sqrt(r**2 + SOFTENING_NFW**2) / self.Rs
+        x = r / self.Rs
         A = np.log(1 + self.c) - self.c / (1 + self.c)
         with np.errstate(divide="ignore"):
-            rho = self.M / (4 * np.pi * A * self.Rs**2 * r * (1 + x) ** 2)
-        return np.where(x < self.c, rho, 0.0)
+            return self.M / (4 * np.pi * A * self.Rs**2 * r * (1 + x) ** 2)
 
     def enclosed_mass(self, r):
-        """Enclosed mass at radius ``r``.
+        """Exact: ``M A(x) / A(c)``, ``A(x) = ln(1 + x) - x/(1 + x)``, ``x = r / Rs``.
+
+        ``ln(1 + x)`` is ``log1p``: ``A(x) ≈ x²/2`` at small ``x`` stays
+        accurate (to ``~ 2e-16 / x`` relative).
 
         Parameters
         ----------
@@ -503,18 +656,17 @@ class NFWPotential(SphericalPotential):
         -------
         menc : ndarray
         """
-        x = np.minimum(self.c, np.sqrt(r**2 + SOFTENING_NFW**2) / self.Rs)
+        x = r / self.Rs
         A = np.log(1 + self.c) - self.c / (1 + self.c)
-        B = np.log(1 + x) - x / (1 + x)
+        B = np.log1p(x) - x / (1 + x)
         return self.M * B / A
 
     def tidal_denominator(self, r):
-        """Tidal denominator for the NFW profile.
+        """Exact: ``3 M(<r) - 4π r³ ρ = (M / A(c)) (3 A(x) - x² / (1 + x)²)``.
 
-        ``(M / A(c)) · (3 A(x) − x²/(1 + x)²)`` where
-        ``A(x) = ln(1 + x) − x/(1 + x)`` and ``x = r / Rs``. Inside r_vir it is
-        the derivative form with ``x`` softened; beyond, ``x`` is clipped at
-        ``c`` (the generic ``3 M(<r) - 4π r³ ρ`` would give ``3 M``).
+        ``A(x) = ln(1 + x) - x/(1 + x)``, ``x = r / Rs``: the untruncated
+        profile of :meth:`enclosed_mass` and :meth:`density`. ``≈ M x² / (2 A(c))``
+        at small ``x``, 0 at ``r = 0``.
 
         Parameters
         ----------
@@ -524,28 +676,13 @@ class NFWPotential(SphericalPotential):
         -------
         denom : ndarray
         """
-
-        def _f(x):
-            """``ln(1 + x) - x / (1 + x)``, the NFW profile shape function.
-
-            Parameters
-            ----------
-            x : ndarray
-                ``r / Rs``, the scaled radius.
-
-            Returns
-            -------
-            f : ndarray
-            """
-            return np.log(1 + x) - x / (1 + x)
-
-        x = np.minimum(self.c, np.sqrt(r**2 + SOFTENING_NFW**2) / self.Rs)
-        return (self.M / _f(self.c)) * (3 * _f(x) - x**2 / (1 + x)**2)
+        x = r / self.Rs
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        B = np.log1p(x) - x / (1 + x)
+        return self.M / A * (3 * B - x**2 / (1 + x) ** 2)
 
     def central_potential(self):
-        """Central potential ``Φ₀ = -G M / (Rs A(c))`` (unsoftened limit).
-
-        The softened potential never reaches it, so ``E / Φ₀ < 1``.
+        """Exact: ``Φ₀ = -G M / (Rs A(c))``, the potential at ``r = 0``.
 
         Returns
         -------
@@ -554,45 +691,68 @@ class NFWPotential(SphericalPotential):
         A = np.log(1 + self.c) - self.c / (1 + self.c)
         return -self.G * self.M / (self.Rs * A)
 
-    def energy_fraction(self, eps):
-        """Mass fraction of the halo more bound than ``eps = E / Φ₀``.
+    def energy_fraction(self, E, r_max):
+        """Exact (tabulated) fraction of the NFW mass inside ``r_max`` more bound than ``E``.
+
+        The per-process NFW tables
+        (:func:`~roadrunner.physics.distribution.nfw_energy_fraction`), read at
+        the scaled energy ``eps = E / Φ₀`` and the truncation ``c = r_max / Rs``.
+        In the tables ``c`` only bounds ``g``; the virial normalisation
+        ``A(c)`` is already carried by ``Φ₀``.
 
         Parameters
         ----------
-        eps : ndarray
+        E : ndarray
+            Physical specific energies.
+        r_max : float
+            Counting radius (physical).
 
         Returns
         -------
-        u : ndarray
+        u : ndarray of float64
         """
-        return nfw_energy_fraction(eps, self.c)
+        return nfw_energy_fraction(np.asarray(E, dtype=np.float64) / self.central_potential(), r_max / self.Rs)
 
-    def log_energy_density(self, eps):
-        """Log dark-matter energy distribution at ``calE = 1 - eps`` (normalised on [0, 1]).
+    def log_energy_density(self, E, r_max):
+        """Exact (tabulated) ``ln dN/dE`` of the NFW mass inside ``r_max``, per unit physical ``E``.
+
+        The tables give ``ln dN/dcal`` (``cal = 1 - E / Φ₀``, normalised on
+        ``[0, 1]``), and ``|dcal/dE| = 1 / |Φ₀|`` turns it into a density per
+        unit ``E``.
 
         Parameters
         ----------
-        eps : ndarray
+        E : ndarray
+            Physical specific energies.
+        r_max : float
+            Counting radius (physical).
 
         Returns
         -------
-        log_n : ndarray
+        log_n : ndarray of float64
         """
-        return nfw_log_energy_density(eps, self.c)
+        phi0 = self.central_potential()
+        return nfw_log_energy_density(np.asarray(E, dtype=np.float64) / phi0, r_max / self.Rs) - np.log(-phi0)
 
-    def log_phase_space_fraction(self, boundness):
-        """Log fraction ``ln w`` of the virial sphere's bound phase space more bound than ``eps = E / Φ₀``.
+    def log_phase_space_fraction(self, E, r_max):
+        """Exact (tabulated) ``ln w``: fraction of the NFW bound phase space inside ``r_max`` more bound than ``E``.
+
+        The per-process NFW tables at ``eps = E / Φ₀`` and ``c = r_max / Rs``,
+        extended deeper than the table by the exact central power law
+        ``q ∝ cal^(9/2)``.
 
         Parameters
         ----------
-        boundness : ndarray
-            ``eps = E / Φ₀``.
+        E : ndarray
+            Physical specific energies.
+        r_max : float
+            Counting radius (physical).
 
         Returns
         -------
-        log_w : ndarray
+        log_w : ndarray of float64
         """
-        return nfw_log_phase_space_fraction(boundness, self.c)
+        return nfw_log_phase_space_fraction(np.asarray(E, dtype=np.float64) / self.central_potential(), r_max / self.Rs)
 
 
 @njit(cache=True)
@@ -718,7 +878,8 @@ class ShellPotential(SphericalPotential):
     beyond the outermost, ``-G M / r``. Radii are floored at ``softening`` so a
     particle at the centre keeps ``Φ₀`` finite. The enclosed mass is the one
     of the interpolated potential, ``M(<r) = -(dΦ/d(1/r)) / G``, constant in
-    each cell; the density follows from its windowed log slope.
+    each cell; the density follows from its windowed log slope. It has no
+    energy distribution yet; its phase-space fraction is the generic one.
 
     Parameters
     ----------
@@ -826,6 +987,14 @@ class ShellPotential(SphericalPotential):
         phi0 : float
         """
         return float(self._coef[0, 1])
+
+    def distribution_function(self, E):
+        """Not defined yet: the density is a windowed log-slope estimate, too noisy for ``d²ρ/dψ²``.
+
+        The energy pair therefore raises; the phase-space fraction, which
+        needs only the potential, is the generic one.
+        """
+        raise NotImplementedError("ShellPotential has no energy distribution yet.")
 
 
 _POTENTIAL_MODELS: dict[str, type[SphericalPotential]] = {

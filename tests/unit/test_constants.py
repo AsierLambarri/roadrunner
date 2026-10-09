@@ -16,6 +16,3 @@ class TestConstantsExist:
 
     def test_softening_kepler_positive(self):
         assert C.SOFTENING_KEPLER > 0
-
-    def test_softening_nfw_positive(self):
-        assert C.SOFTENING_NFW > 0

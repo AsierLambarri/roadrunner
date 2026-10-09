@@ -57,6 +57,7 @@ from scipy.special import betaln, xlog1py
 from scipy.stats import rankdata
 
 from roadrunner._defaults import (
+    math_dtype,
     PLAUSIBILITY_FLOOR,
     PLAUSIBILITY_LIT_SCATTER_DEX,
     PLAUSIBILITY_MAX_BINS,
@@ -66,16 +67,13 @@ from roadrunner._defaults import (
     PLAUSIBILITY_PRIOR_WEIGHT,
     PLAUSIBILITY_SHRINK_COUNT,
 )
-from roadrunner.physics.energy_distribution import (
-    CAL_GRID,
-    nfw_density_of_states,
-    nfw_phi,
-    trapezoid_weights,
-)
+from roadrunner.physics.distribution import nfw_density_of_states, nfw_phi, trapezoid_weights
 
 ERRANI_SLOPE = 3.3          # dN*/dcalE ∝ calE^3.3 exp(-(calE / calE_s)^4)
 ERRANI_SHARPNESS = 4.0
 KRAVTSOV_RHALF = 0.015      # stellar half-mass radius / virial radius
+CAL_GRID = np.concatenate([np.geomspace(1e-4, 0.1, 200, endpoint=False), np.linspace(0.1, 1.0 - 1e-4, 200)])
+                            # binding depths of Errani's integrals
 _U_MIN = 1e-12              # u floor: t = -ln u <= 27.6
 _LOG_ALPHA_MAX = 50.0       # alpha in [1e-8, e^50]: row sums finite and row ratios
                             # (>= 1e-8 / (K e^50) ~ 1e-30) normal in float32
@@ -136,34 +134,38 @@ def _errani_scales():
     return 1.0 + nfw_phi(r_half), es_try
 
 
-def errani_log_ratio(halo, eps):
+def errani_log_ratio(halo, b):
     """Log Errani tagging ratio ``log P*`` of a halo's bound particles.
 
-    ``P* = n*(calE; calE_s) / n_DM(calE)`` at ``calE = 1 - eps``, both
+    ``P* = n*(calE; calE_s) / n_DM(calE)`` at ``calE = 1 - E / Φ₀``, both
     normalised on ``[0, 1]``. ``calE_s`` places the stellar half-mass
     radius at ``KRAVTSOV_RHALF * R_vir`` (Kravtsov 2013); it is found from
-    the halo's potential depth there.
+    the halo's potential depth there. The stored boundness gives
+    ``E = -b s`` (``s`` the halo's energy scale), and the halo's
+    ``ln dN/db`` becomes ``ln dN/dcalE`` with ``|db / dcalE| = |Φ₀| / s``.
 
     Parameters
     ----------
     halo : HaloModel
         Halo whose potential defines ``central_potential`` and
         ``log_energy_density`` (NFW).
-    eps : ndarray
-        Normalised boundness ``E / Phi_0``.
+    b : ndarray
+        Stored boundness ``-E / halo.binding_energy_scale()``.
 
     Returns
     -------
     log_ratio : ndarray
     """
+    phi0, s = halo.central_potential(), halo.binding_energy_scale()
     r_half = np.array([KRAVTSOV_RHALF * halo.virial_radius])
-    depth = 1.0 - float(halo.potential(r_half)[0]) / halo.central_potential()
+    depth = 1.0 - float(halo.potential(r_half)[0]) / phi0
     cal_half, es_try = _errani_scales()
     es = float(np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es_try))))
-    cal = np.clip(1.0 - eps, CAL_GRID[0], CAL_GRID[-1])
+    cal = np.clip(1.0 + b * s / phi0, CAL_GRID[0], CAL_GRID[-1])        # calE = 1 - E / Φ₀, E = -b s
     log_norm = np.log(trapezoid_weights(CAL_GRID) @ _errani_unnormalised(CAL_GRID, es))
     log_star = ERRANI_SLOPE * np.log(cal) - (cal / es) ** ERRANI_SHARPNESS - log_norm
-    return log_star - halo.log_energy_density(eps)
+    # n_DM per unit calE = per unit b times |db / dcalE| = |Φ₀| / s
+    return log_star - (halo.log_energy_density(b) + np.log(-phi0 / s))
 
 
 class _Plausibility:
@@ -196,11 +198,14 @@ class _Plausibility:
 
         Returns
         -------
-        values : list of ndarray of float64
+        values : list of ndarray of math_dtype
             Parallel to the columns' (index-sorted) bound particles; empty
-            for halos without boundness (empty columns).
+            for halos without boundness (empty columns). α is computed in
+            float64, from the halos' float64 distributions, and cast here
+            once: the boundary to ``math_dtype()``.
         """
-        return [self._alpha.get(int(s), _EMPTY) for s in column_id]
+        md = math_dtype()
+        return [self._alpha.get(int(s), _EMPTY).astype(md, copy=False) for s in column_id]
 
     def update(self, resp_map, weights=None):
         """Refit after a snapshot (no-op here).
@@ -343,7 +348,7 @@ class EnergyPlausibility(_Plausibility):
         Parameters
         ----------
         halos : HaloEnsemble or iterable of HaloModel
-            NFW halos with boundness ``E / Phi_0`` already computed.
+            NFW halos with boundness already computed.
         coords : ndarray of shape (n_particles, 6), optional
             Unused here.
         """
@@ -352,10 +357,10 @@ class EnergyPlausibility(_Plausibility):
         for h in halos:
             if not h.has_boundness:
                 continue
-            rows, eps, _ = h.get_boundness()
-            eps = eps.astype(np.float64)
-            t = -np.log(np.clip(h.energy_fraction(eps), _U_MIN, 1.0))
-            log_mix = errani_log_ratio(h, eps)
+            rows, b, _ = h.get_boundness()
+            b = b.astype(np.float64)
+            t = -np.log(np.clip(h.energy_fraction(b), _U_MIN, 1.0))
+            log_mix = errani_log_ratio(h, b)
             if self._edges is not None:
                 log_mix = np.logaddexp(np.log1p(-lam) + self._log_pstar(t), np.log(lam) + log_mix)
             log_alpha = np.logaddexp(np.log1p(-PLAUSIBILITY_FLOOR) + log_mix, np.log(PLAUSIBILITY_FLOOR))

@@ -7,7 +7,6 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from roadrunner.physics.constants import G_KM
-from roadrunner.physics.potentials import KeplerPotential
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.halo_model import HaloModel
 
@@ -35,11 +34,7 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
         dist = np.linalg.norm(rel_pos, axis=1)
         vel_mags = np.linalg.norm(rel_vel, axis=1)
 
-        v_vir_sq = G_KM * halo._potentials[0].M / halo.virial_radius * (1 + halo.redshift)
-        if not isinstance(halo._potentials[0], KeplerPotential):
-            # NFW boundness is E / Phi_0, Phi_0 = -G M / (Rs A(c)).
-            c = halo._potentials[0].c
-            v_vir_sq = G_KM * halo._potentials[0].M / (halo._potentials[0].Rs * (np.log1p(c) - c / (1 + c)))
+        v_vir_sq = halo.binding_energy_scale()                   # the halo-owned scale
         phi = halo.potential(dist)
         v_esc = np.sqrt(2 * np.abs(phi))
         boundness = 0.5 * (v_esc**2 - vel_mags**2) / v_vir_sq
@@ -59,7 +54,7 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
 
 
 def _make_halo(position, velocity, mass, rvir, rs, hid, redshift=0.1,
-               model="kepler"):
+               model="kepler", search_factor=1.0):
     kwargs = {"M": mass, "G": G_KM}
     if model == "nfw":
         kwargs["Rs"] = rs / (1 + redshift)
@@ -69,7 +64,7 @@ def _make_halo(position, velocity, mass, rvir, rs, hid, redshift=0.1,
     return HaloModel(
         inner=inner, xcen=position, velocity=velocity,
         virial_radius=rvir, sub_tree_id=hid, redshift=redshift,
-        comoving=True,
+        comoving=True, search_factor=search_factor,
     )
 
 
@@ -90,13 +85,13 @@ class TestBoundnessRegression:
         ]
         halos_new = [
             _make_halo(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 0.0]),
-                       1e10, 50.0, 5.0, 1),
+                       1e10, 50.0, 5.0, 1, search_factor=2.0),
             _make_halo(np.array([20.0, 10.0, 5.0]), np.array([30.0, 0.0, 0.0]),
-                       5e9, 30.0, 3.0, 2),
+                       5e9, 30.0, 3.0, 2, search_factor=2.0),
         ]
 
         old_result = old_boundness(halos_old, coords, search_factor=2.0)
-        new_result = compute_halo_bound_particles(halos_new, coords, search_factor=2.0)
+        new_result = compute_halo_bound_particles(halos_new, coords)
 
         for h_old, h_new in zip(old_result, new_result):
             i_old, e_old, t_old = h_old.get_boundness()

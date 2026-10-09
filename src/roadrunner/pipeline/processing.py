@@ -71,12 +71,11 @@ def process_snapshot(
     particle_coords = snap_data.data
 
     ensemble = HaloEnsemble([
-        HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving)
+        HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving,
+                                    search_factor=config.search_factor)
         for row in snap_df.to_dict("records")
     ])
-    compute_halo_bound_particles(
-        ensemble, particle_coords, search_factor=config.search_factor,
-    )
+    compute_halo_bound_particles(ensemble, particle_coords)
 
     csc_b, _ = ensemble.get_particles()
     pop_idx = ensemble.populated_indices()
