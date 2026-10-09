@@ -27,42 +27,54 @@ def physical_length_factor(redshift, comoving):
 
 
 class HaloModel:
-    """Merger-tree halo: its record (centre, bulk velocity, virial radius,
-    redshift) and one or more gravitational potentials, plus boundness data.
+    """Merger-tree halo: its record, its potential and its boundness data, in the catalogue's units.
 
-    The potential, :attr:`potential_model`, is a
-    :class:`~roadrunner.physics.potentials.CompositeSphericalPotential` of one
-    or more components, each centred on its own absolute physical ``centre``
-    (the tree's on the halo centre, ``xcen * length_scale``). Positions and
-    velocities come in as absolute snapshot coordinates (positions in tree
-    units, comoving when ``comoving``; velocities peculiar, in km/s, not
-    scaled): :meth:`potential`, :meth:`compute_energy` and
-    :meth:`orbital_time` convert positions to physical float64, evaluate the
-    potential model there and return ``math_dtype()``. The energy
-    distributions are the potential model's, at the stored boundness ``b``.
-    ``tree_mass`` is the first component's mass. Boundness results are stored
-    as a tuple ``(indices, energies, tdyns)``;
-    :func:`compute_halo_bound_particles` also sets ``inner_position``, the
-    innermost particle of the search sphere (snapshot coordinates; the centre
-    until then), where the energy scale is taken.
+    The halo works in its catalogue's units (lengths comoving when
+    ``comoving``, otherwise physical; velocities peculiar, in km/s) and is the
+    one place that translates them for the physics. Its potential,
+    :attr:`potential_model`, is a
+    :class:`~roadrunner.physics.potentials.CompositeSphericalPotential` in
+    physical units, each component centred on its own absolute physical
+    ``centre`` and moving with its own ``velocity`` (the tree's at
+    ``tree_position * length_scale`` and ``tree_velocity``). The halo exposes the
+    potential model's methods as one-line wrappers at catalogue coordinates:
+    positions ``xyz`` are made physical (``length_scale``, float64), energies
+    ``E`` are physical and pass as they are, and the energy distributions are
+    counted inside the halo's search sphere (``search_factor`` virial radii).
+    Particle-level results are returned in ``math_dtype()``, the energy
+    distributions in float64.
+
+    It adds its record (``tree_position``, ``tree_velocity``, ``tree_mass``:
+    the catalogue's centre, bulk velocity and mass, the search sphere being
+    centred on ``tree_position``; ``virial_radius``, ``redshift``,
+    ``comoving``, ``length_scale``, ``search_factor``, ``sub_tree_id``;
+    ``inner_position``, the innermost particle of the search sphere, set by
+    :func:`compute_halo_bound_particles`, the centre until then), the
+    components' totals (:attr:`total_mass`, and the mass-weighted
+    :attr:`com_position` and :attr:`com_velocity`), the energy of its
+    particles (:meth:`compute_energy`, in the centre-of-mass frame), the scale of its binding
+    energies (:meth:`binding_energy_scale`) and the boundness storage
+    ``(indices, energies, tdyns)``, the stored boundness being
+    ``b = -E / binding_energy_scale()``.
 
     Parameters
     ----------
     inner : PotentialModel
         The tree's potential (the first component); its ``centre`` must be
-        the physical halo centre ``xcen * length_scale``.
-    xcen : ndarray of shape (3,)
-        Halo centre position (snapshot coordinates).
-    velocity : ndarray of shape (3,)
-        Halo bulk velocity.
+        the physical halo centre ``tree_position * length_scale`` and its
+        ``velocity`` the halo's bulk velocity ``tree_velocity``.
+    tree_position : ndarray of shape (3,)
+        Halo centre (catalogue coordinates).
+    tree_velocity : ndarray of shape (3,)
+        Halo bulk velocity (km/s).
     virial_radius : float
-        Virial radius in kpc (snapshot units).
+        Virial radius (catalogue units).
     sub_tree_id : int
         Halo identifier from the merger tree.
     redshift : float
         Snapshot redshift.
     comoving : bool, default=True
-        If ``True``, snapshot lengths are comoving and ``length_scale`` is
+        If ``True``, catalogue lengths are comoving and ``length_scale`` is
         ``1 / (1 + z)``.
     search_factor : float, default=1.0
         Multiple of the virial radius: the boundness search sphere and the
@@ -72,8 +84,8 @@ class HaloModel:
     def __init__(
         self,
         inner: PotentialModel,
-        xcen: np.ndarray,
-        velocity: np.ndarray,
+        tree_position: np.ndarray,
+        tree_velocity: np.ndarray,
         virial_radius: float,
         sub_tree_id: int,
         redshift: float,
@@ -81,8 +93,8 @@ class HaloModel:
         search_factor: float = 1.0,
     ):
         md = math_dtype()
-        self.xcen = np.asarray(xcen, dtype=md)
-        self.velocity = np.asarray(velocity, dtype=md)
+        self.tree_position = np.asarray(tree_position, dtype=md)
+        self.tree_velocity = np.asarray(tree_velocity, dtype=md)
         self.virial_radius = float(virial_radius)
         self.sub_tree_id = sub_tree_id
         self.redshift = float(redshift)
@@ -91,7 +103,7 @@ class HaloModel:
         self.length_scale = physical_length_factor(self.redshift, comoving)
         self.potential_model = CompositeSphericalPotential(inner)
         self.tree_mass = float(inner.M)
-        self.inner_position = self.xcen.copy()
+        self.inner_position = self.tree_position.copy()
         self._boundness: tuple | None = None
 
     def set_boundness(
@@ -129,28 +141,57 @@ class HaloModel:
         """``True`` if boundness data has been stored."""
         return self._boundness is not None
 
+    def __iter__(self):
+        return iter(self.potential_model)
+
+    @property
+    def total_mass(self) -> float:
+        """Mass of all the components, ``Σ M_i``."""
+        return float(self.potential_model.M)
+
+    @property
+    def com_position(self) -> np.ndarray:
+        """Mass-weighted centre of the components (catalogue coordinates, float64)."""
+        return self.potential_model.com_centre / self.length_scale
+
+    @property
+    def com_velocity(self) -> np.ndarray:
+        """Mass-weighted velocity of the components (km/s, float64): the frame of :meth:`compute_energy`."""
+        return self.potential_model.com_velocity
+
+    def __len__(self):
+        return len(self.potential_model)
+
+    def __getitem__(self, i):
+        return self.potential_model[i]
+
     def add_potential(self, potential: PotentialModel) -> None:
-        """Add a component to the halo's potential (a new composite).
+        """Add a component to the halo's potential on the fly.
 
         Parameters
         ----------
         potential : PotentialModel
             Centred on its own ``centre``, an absolute physical position.
         """
-        self.potential_model = CompositeSphericalPotential(*self.potential_model, potential)
+        self.potential_model.add(potential)
 
     def _physical(self, xyz: np.ndarray) -> np.ndarray:
-        """Absolute snapshot positions as absolute physical positions, in float64."""
+        """Catalogue positions as absolute physical positions, in float64."""
         return np.asarray(xyz, dtype=np.float64) * self.length_scale
 
+    def _counting_radius(self) -> float:
+        """Physical radius of the boundness search sphere, ``search_factor * r_vir``: where the distributions count."""
+        return self.search_factor * self.virial_radius * self.length_scale
+
+    # ── the potential model at catalogue coordinates ─────────────────
+
     def potential(self, xyz: np.ndarray) -> np.ndarray:
-        """Gravitational potential at absolute snapshot positions.
+        """Gravitational potential at catalogue positions (each component from its own centre).
 
         Parameters
         ----------
         xyz : ndarray of shape (n, 3)
-            Absolute positions (snapshot coordinates); each component is
-            measured from its own centre.
+            Absolute positions (catalogue coordinates).
 
         Returns
         -------
@@ -158,8 +199,47 @@ class HaloModel:
         """
         return self.potential_model.potential(self._physical(xyz)).astype(math_dtype(), copy=False)
 
+    def density(self, xyz: np.ndarray) -> np.ndarray:
+        """Density at catalogue positions (each component from its own centre).
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        rho : ndarray of math_dtype, shape (n,)
+        """
+        return self.potential_model.density(self._physical(xyz)).astype(math_dtype(), copy=False)
+
+    def enclosed_mass(self, xyz: np.ndarray) -> np.ndarray:
+        """Each component's mass inside the sphere about its own centre through each catalogue position, summed.
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        menc : ndarray of math_dtype, shape (n,)
+        """
+        return self.potential_model.enclosed_mass(self._physical(xyz)).astype(math_dtype(), copy=False)
+
+    def tidal_denominator(self, xyz: np.ndarray) -> np.ndarray:
+        """Tidal denominator at catalogue positions (each component from its own centre).
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        denom : ndarray of math_dtype, shape (n,)
+        """
+        return self.potential_model.tidal_denominator(self._physical(xyz)).astype(math_dtype(), copy=False)
+
     def orbital_time(self, E: np.ndarray, xyz: np.ndarray) -> np.ndarray:
-        """Per-particle orbital timescale for specific energies ``E`` at absolute snapshot positions.
+        """Orbital timescale of physical energies ``E`` at catalogue positions.
 
         A single component gives its own (the Kepler period for a point mass,
         the dynamical time otherwise); several combine theirs as
@@ -168,8 +248,8 @@ class HaloModel:
         Parameters
         ----------
         E : ndarray
+            Specific orbital energies (physical).
         xyz : ndarray of shape (n, 3)
-            Absolute positions (snapshot coordinates).
 
         Returns
         -------
@@ -187,94 +267,104 @@ class HaloModel:
         """
         return self.potential_model.central_potential()
 
-    def binding_energy_scale(self) -> float:
-        """Energy scale that normalises this halo's binding energies: the depth of its well.
+    def well_depth(self, xyz: np.ndarray) -> float:
+        """Depth of the potential well with the innermost particle at the catalogue position ``xyz``.
 
-        The potential model's :meth:`well_depth` at the innermost particle,
-        :attr:`inner_position`: ``-Φ(0)`` for a well with a finite centre, and
-        ``-Φ`` there for a point mass, whose ``Φ(0)`` the softening alone sets.
-        Boundness is stored as ``-E / binding_energy_scale()``.
+        Parameters
+        ----------
+        xyz : ndarray of shape (1, 3)
+
+        Returns
+        -------
+        depth : float
+        """
+        return float(self.potential_model.well_depth(self._physical(xyz)))
+
+    def binding_energy_scale(self) -> float:
+        """Scale of the halo's binding energies: the depth of its well at the innermost particle.
+
+        :meth:`well_depth` at :attr:`inner_position`: ``-Φ(0)`` for a well
+        with a finite centre, ``-Φ`` there for a point mass, whose ``Φ(0)``
+        the softening alone sets. Boundness is stored as
+        ``-E / binding_energy_scale()``.
 
         Returns
         -------
         scale : float
         """
-        return float(self.potential_model.well_depth(self._physical(self.inner_position[None])))
+        return self.well_depth(self.inner_position[None])
 
-    def _counting_radius(self) -> float:
-        """Physical radius of the boundness search sphere, ``search_factor * r_vir``: where the distributions count."""
-        return self.search_factor * self.virial_radius * self.length_scale
-
-    def energy_fraction(self, b: np.ndarray) -> np.ndarray:
-        """Fraction of the halo's mass inside the search sphere more bound than the stored boundness ``b``.
-
-        ``b`` is converted to the physical energy ``E = -b * binding_energy_scale()``
-        and passed, with the search sphere's physical radius, to the halo's
-        potential; the result is a fraction, so it needs no conversion back.
+    def distribution_function(self, E: np.ndarray) -> np.ndarray:
+        """Isotropic distribution function ``f(E)`` of the potential model at physical energies.
 
         Parameters
         ----------
-        b : ndarray
-            Stored boundness, ``-E / binding_energy_scale()``.
+        E : ndarray
+
+        Returns
+        -------
+        f : ndarray of float64
+        """
+        return self.potential_model.distribution_function(np.asarray(E, dtype=np.float64))
+
+    def energy_fraction(self, E: np.ndarray) -> np.ndarray:
+        """Fraction of the halo's mass inside the search sphere more bound than the physical energy ``E``.
+
+        Parameters
+        ----------
+        E : ndarray
 
         Returns
         -------
         u : ndarray of float64
         """
-        return self.potential_model.energy_fraction(-b * self.binding_energy_scale(), self._counting_radius())
+        return self.potential_model.energy_fraction(np.asarray(E, dtype=np.float64), self._counting_radius())
 
-    def log_energy_density(self, b: np.ndarray) -> np.ndarray:
-        """``ln dN/db``: energy distribution of the halo's mass inside the search sphere, per unit stored boundness.
-
-        The potential returns ``ln dN/dE`` at ``E = -b s`` (``s`` the energy
-        scale); ``|dE/db| = s`` adds ``ln s``.
+    def log_energy_density(self, E: np.ndarray) -> np.ndarray:
+        """``ln dN/dE``: energy distribution of the halo's mass inside the search sphere, per unit physical ``E``.
 
         Parameters
         ----------
-        b : ndarray
-            Stored boundness.
+        E : ndarray
 
         Returns
         -------
         log_n : ndarray of float64
         """
-        s = self.binding_energy_scale()
-        return self.potential_model.log_energy_density(-b * s, self._counting_radius()) + np.log(s)
+        return self.potential_model.log_energy_density(np.asarray(E, dtype=np.float64), self._counting_radius())
 
-    def log_phase_space_fraction(self, b: np.ndarray) -> np.ndarray:
-        """``ln w``: fraction of the search sphere's bound phase space more bound than the stored boundness ``b``.
-
-        Converted like :meth:`energy_fraction`; ``w`` is a fraction, so it
-        needs no conversion back.
+    def log_phase_space_fraction(self, E: np.ndarray) -> np.ndarray:
+        """``ln w``: fraction of the search sphere's bound phase space more bound than the physical energy ``E``.
 
         Parameters
         ----------
-        b : ndarray
-            Stored boundness.
+        E : ndarray
 
         Returns
         -------
         log_w : ndarray of float64
         """
-        return self.potential_model.log_phase_space_fraction(-b * self.binding_energy_scale(), self._counting_radius())
+        return self.potential_model.log_phase_space_fraction(np.asarray(E, dtype=np.float64), self._counting_radius())
 
-    def compute_energy(self, xyz, vxyz):
-        """Total specific orbital energy ``E = Φ + ½|v - v_halo|²`` at absolute snapshot coordinates.
+    def compute_energy(self, xyz: np.ndarray, vxyz: np.ndarray) -> np.ndarray:
+        """Specific orbital energy ``E = Φ + ½|v - v_com|²`` at catalogue coordinates.
 
         Parameters
         ----------
         xyz : ndarray of shape (n, 3)
-            Absolute positions (snapshot coordinates); each component is
+            Absolute positions (catalogue coordinates); each component is
             measured from its own centre.
         vxyz : ndarray of shape (n, 3)
-            Absolute velocities; the halo bulk velocity is subtracted.
+            Absolute velocities; the components' mass-weighted velocity
+            :attr:`com_velocity` is subtracted (the tree velocity for a single
+            component).
 
         Returns
         -------
         E : ndarray of math_dtype, shape (n,)
             Specific orbital energy (negative = bound).
         """
-        v = np.asarray(vxyz, dtype=np.float64) - self.velocity
+        v = np.asarray(vxyz, dtype=np.float64) - self.com_velocity
         E = self.potential_model.potential(self._physical(xyz)) + 0.5 * row_squared_norms(v)
         return E.astype(math_dtype(), copy=False)
 
@@ -283,7 +373,8 @@ class HaloModel:
         """Construct a HaloModel from a merger-tree row.
 
         The potential is centred on the row's position, converted to physical
-        (``length_scale``); its scale radius is the row's, converted likewise
+        (``length_scale``), and moves with the row's velocity; its scale radius
+        is the row's, converted likewise
         (``Rs`` and ``c = r_vir / r_s`` for NFW, ``a`` for Plummer and
         Hernquist; a Kepler point mass needs neither).
 
@@ -302,22 +393,23 @@ class HaloModel:
         -------
         halo : HaloModel
         """
-        xcen = np.array([
+        tree_position = np.array([
             row["position_x"], row["position_y"], row["position_z"],
         ], dtype=math_dtype())
-        velocity = np.array([
+        tree_velocity = np.array([
             row["velocity_x"], row["velocity_y"], row["velocity_z"],
         ], dtype=math_dtype())
         ls = physical_length_factor(row["Redshift"], comoving)
         scale = row["scale_radius"] * ls
-        kwargs = {"M": row["mass"], "G": G_KM, "centre": xcen.astype(np.float64) * ls}
+        kwargs = {"M": row["mass"], "G": G_KM, "centre": tree_position.astype(np.float64) * ls,
+                  "velocity": tree_velocity.astype(np.float64)}
         kwargs.update({"nfw": {"Rs": scale, "c": row["virial_radius"] / row["scale_radius"]},
                        "plummer": {"a": scale}, "hernquist": {"a": scale}}.get(model.lower(), {}))
         inner = get_potential(model, **kwargs)
         return cls(
             inner=inner,
-            xcen=xcen,
-            velocity=velocity,
+            tree_position=tree_position,
+            tree_velocity=tree_velocity,
             virial_radius=float(row["virial_radius"]),
             sub_tree_id=int(row["Sub_tree_id"]),
             redshift=float(row["Redshift"]),

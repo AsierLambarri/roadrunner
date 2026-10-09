@@ -22,7 +22,7 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
-                halo.xcen, r=search_factor * halo.virial_radius, workers=-1
+                halo.tree_position, r=search_factor * halo.virial_radius, workers=-1
             )
         )
         if local.size == 0:
@@ -30,10 +30,10 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
             continue
 
         pos, vel = positions[local], velocities[local]
-        rel_vel = vel - halo.velocity
+        rel_vel = vel - halo.com_velocity
         vel_mags = np.linalg.norm(rel_vel, axis=1)
 
-        halo.inner_position = pos[np.argmin(np.linalg.norm(pos - halo.xcen, axis=1))]
+        halo.inner_position = pos[np.argmin(np.linalg.norm(pos - halo.tree_position, axis=1))]
         v_vir_sq = halo.binding_energy_scale()                   # the halo-owned scale
         phi = halo.potential(pos)
         v_esc = np.sqrt(2 * np.abs(phi))
@@ -60,10 +60,11 @@ def _make_halo(position, velocity, mass, rvir, rs, hid, redshift=0.1,
         kwargs["Rs"] = rs / (1 + redshift)
         kwargs["c"] = rvir / rs
     kwargs["centre"] = np.asarray(position, dtype=np.float64) / (1 + redshift)
+    kwargs["velocity"] = np.asarray(velocity, dtype=np.float64)
     from roadrunner.physics.potentials import get_potential
     inner = get_potential(model, **kwargs)
     return HaloModel(
-        inner=inner, xcen=position, velocity=velocity,
+        inner=inner, tree_position=position, tree_velocity=velocity,
         virial_radius=rvir, sub_tree_id=hid, redshift=redshift,
         comoving=True, search_factor=search_factor,
     )

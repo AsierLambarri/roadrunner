@@ -64,7 +64,7 @@ def compute_halo_bound_particles(
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
-                halo.xcen, r=halo.search_factor * halo.virial_radius, workers=tree_workers()
+                halo.tree_position, r=halo.search_factor * halo.virial_radius, workers=tree_workers()
             )
         )
         if local.size == 0:
@@ -73,7 +73,7 @@ def compute_halo_bound_particles(
 
         pos, vel = positions[local], velocities[local]
         # Before the scale is formed: a point mass's well depth is taken at the innermost particle.
-        halo.inner_position = pos[np.argmin(row_squared_norms(np.asarray(pos, dtype=np.float64) - halo.xcen))]
+        halo.inner_position = pos[np.argmin(row_squared_norms(np.asarray(pos, dtype=np.float64) - halo.tree_position))]
 
         E = halo.compute_energy(pos, vel)
         # -E over the halo's energy scale (physical virial radius, C08).

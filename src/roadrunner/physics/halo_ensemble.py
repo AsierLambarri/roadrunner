@@ -81,12 +81,12 @@ class HaloEnsemble:
     @property
     def positions(self) -> np.ndarray:
         """Positions of all halos, shape ``(n_halos, 3)``."""
-        return np.array([h.xcen for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
+        return np.array([h.tree_position for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
 
     @property
     def velocities(self) -> np.ndarray:
         """Velocities of all halos, shape ``(n_halos, 3)``."""
-        return np.array([h.velocity for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
+        return np.array([h.tree_velocity for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
 
     @property
     def virial_radii(self) -> np.ndarray:

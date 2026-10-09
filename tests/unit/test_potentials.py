@@ -339,3 +339,33 @@ class TestPositions:
         np.testing.assert_allclose(comp._potential(r1), nfw._potential(r1) + pl._potential(r1), rtol=1e-12)
         k = KeplerPotential(1e10, centre=c1)
         np.testing.assert_allclose(k.well_depth(c1 + np.array([[0.2, 0.0, 0.0]])), -k._potential(np.array([0.2]))[0], rtol=1e-9)
+
+
+class TestCompositeAdd:
+    def test_add_on_the_fly_matches_building_at_once(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        nfw, plummer = NFWPotential(1e11, 8.0, 10.0), PlummerPotential(1e10, 0.5)
+        c = CompositeSphericalPotential(nfw)
+        E, R = np.array([0.9, 0.5, 0.1]) * nfw.central_potential(), 20.0
+        np.testing.assert_array_equal(c.log_phase_space_fraction(E, R), nfw.log_phase_space_fraction(E, R))
+        c.add(plummer)
+        both = CompositeSphericalPotential(nfw, plummer)
+        assert len(c) == 2 and c[1] is plummer and c.M == nfw.M + plummer.M and c.has_distribution
+        assert "orbital_time" not in c.__dict__ and "log_phase_space_fraction" not in c.__dict__
+        xyz = _xyz([0.0, 0.3, 5.0])
+        np.testing.assert_array_equal(c.potential(xyz), both.potential(xyz))
+        np.testing.assert_array_equal(c.orbital_time(None, xyz), both.orbital_time(None, xyz))
+        E = np.array([0.9, 0.5, 0.1]) * c.central_potential()
+        for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):
+            np.testing.assert_allclose(getattr(c, name)(E, R), getattr(both, name)(E, R), rtol=1e-12)
+        # a composite whose cache is filled drops it on add: the third component is seen
+        hernquist = HernquistPotential(1e9, 0.2)
+        before = c.energy_fraction(E, R)
+        c.add(hernquist)
+        three = CompositeSphericalPotential(nfw, plummer, hernquist)
+        assert not np.array_equal(c.energy_fraction(E, R), before)
+        np.testing.assert_allclose(c.energy_fraction(E, R), three.energy_fraction(E, R), rtol=1e-12)
+        c.add(KeplerPotential(1e9))
+        assert not c.has_distribution
+        with pytest.raises(ValueError):
+            c.add(PlummerPotential(1e10, 0.5, G=1.0))

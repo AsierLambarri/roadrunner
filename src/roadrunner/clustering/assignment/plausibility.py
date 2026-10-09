@@ -142,7 +142,7 @@ def errani_log_ratio(halo, b):
     radius at ``KRAVTSOV_RHALF * R_vir`` (Kravtsov 2013); it is found from
     the halo's potential depth there. The stored boundness gives
     ``E = -b s`` (``s`` the halo's energy scale), and the halo's
-    ``ln dN/db`` becomes ``ln dN/dcalE`` with ``|db / dcalE| = |Φ₀| / s``.
+    ``ln dN/dE`` becomes ``ln dN/dcalE`` with ``|dE / dcalE| = |Φ₀|``.
 
     Parameters
     ----------
@@ -164,8 +164,8 @@ def errani_log_ratio(halo, b):
     cal = np.clip(1.0 + b * s / phi0, CAL_GRID[0], CAL_GRID[-1])        # calE = 1 - E / Φ₀, E = -b s
     log_norm = np.log(trapezoid_weights(CAL_GRID) @ _errani_unnormalised(CAL_GRID, es))
     log_star = ERRANI_SLOPE * np.log(cal) - (cal / es) ** ERRANI_SHARPNESS - log_norm
-    # n_DM per unit calE = per unit b times |db / dcalE| = |Φ₀| / s
-    return log_star - (halo.log_energy_density(b) + np.log(-phi0 / s))
+    # n_DM per unit calE = per unit E times |dE / dcalE| = |Φ₀|
+    return log_star - (halo.log_energy_density(-b * s) + np.log(-phi0))
 
 
 class _Plausibility:
@@ -359,7 +359,7 @@ class EnergyPlausibility(_Plausibility):
                 continue
             rows, b, _ = h.get_boundness()
             b = b.astype(np.float64)
-            t = -np.log(np.clip(h.energy_fraction(b), _U_MIN, 1.0))
+            t = -np.log(np.clip(h.energy_fraction(-b * h.binding_energy_scale()), _U_MIN, 1.0))
             log_mix = errani_log_ratio(h, b)
             if self._edges is not None:
                 log_mix = np.logaddexp(np.log1p(-lam) + self._log_pstar(t), np.log(lam) + log_mix)
@@ -434,7 +434,7 @@ def _summary_potential(halo, r):
     Read from the potential model at physical positions, so finite differences
     of it keep float64 precision whatever ``math_dtype()`` is.
     """
-    xyz = np.asarray(halo.xcen, dtype=np.float64) + np.asarray(r, dtype=np.float64).reshape(-1, 1) * _X_HAT
+    xyz = np.asarray(halo.tree_position, dtype=np.float64) + np.asarray(r, dtype=np.float64).reshape(-1, 1) * _X_HAT
     return halo.potential_model.potential(xyz * halo.length_scale)
 
 
@@ -471,8 +471,7 @@ def literature_depth(halo):
     steps = np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
     phi = _summary_potential(halo, (r[:, None] * steps).ravel()).reshape(r.size, 3)
     v2 = (phi[:, 2] - phi[:, 0]) / (2.0 * _FD_STEP)
-    b = -(phi[:, 1] + 0.5 * v2) / halo.binding_energy_scale()
-    t = -halo.log_phase_space_fraction(b)
+    t = -halo.log_phase_space_fraction(phi[:, 1] + 0.5 * v2)
     return float(t[0]), 0.5 * abs(t[1] - t[2]), 0.5 * abs(t[3] - t[4])
 
 
@@ -517,7 +516,7 @@ class PhaseSpacePlausibility(_Plausibility):
             if not h.has_boundness:
                 continue
             rows, b, _ = h.get_boundness()
-            t = -h.log_phase_space_fraction(b.astype(np.float64))
+            t = -h.log_phase_space_fraction(-b.astype(np.float64) * h.binding_energy_scale())
             mu_l, sd_l, sd_min = literature_depth(h)
             floors.append(sd_min)
             log_mix = _normal_log_pdf(t, mu_l, sd_l)
@@ -574,7 +573,7 @@ _LOG_2_3 = np.log(2.0 / 3.0)
 def escape_speed_fraction(halo, rows, coords):
     """``u^2 = |v - v_k|^2 / (-2 Phi_k(r))`` of a halo's bound particles, in ``[0, 1]``.
 
-    Same centre, frame (tree bulk velocity) and ``(1 + z)`` scaling as
+    Same centre, frame (the halo's centre-of-mass velocity) and ``(1 + z)`` scaling as
     :func:`compute_halo_bound_particles`: ``E < 0`` there is ``u^2 < 1`` here
     (float rounding clipped). ``nu = u^3`` is ``U(0, 1)`` for a uniform
     phase-space background at fixed radius.
@@ -592,7 +591,7 @@ def escape_speed_fraction(halo, rows, coords):
     u2 : ndarray
     """
     x = np.asarray(coords[rows], dtype=np.float64)
-    v2 = np.sum((x[:, 3:6] - halo.velocity) ** 2, axis=1)
+    v2 = np.sum((x[:, 3:6] - halo.com_velocity) ** 2, axis=1)
     return np.minimum(v2 / (-2.0 * halo.potential(x[:, :3])), 1.0)
 
 

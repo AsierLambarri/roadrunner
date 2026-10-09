@@ -78,6 +78,9 @@ class SphericalPotential(PotentialModel):
     centre : ndarray of shape (3,), optional
         Absolute physical position of the potential's centre; the origin
         when ``None``.
+    velocity : ndarray of shape (3,), optional
+        Absolute velocity of the potential's centre (km/s); at rest when
+        ``None``.
 
     Attributes
     ----------
@@ -88,10 +91,11 @@ class SphericalPotential(PotentialModel):
 
     has_distribution = True
 
-    def __init__(self, M, G=G_KM, centre=None):
+    def __init__(self, M, G=G_KM, centre=None, velocity=None):
         self.M = M
         self.G = G
         self.centre = np.zeros(3) if centre is None else np.asarray(centre, dtype=np.float64)
+        self.velocity = np.zeros(3) if velocity is None else np.asarray(velocity, dtype=np.float64)
         self._distributions = {}
 
     @abstractmethod
@@ -433,10 +437,12 @@ class PlummerPotential(SelfSimilarPotential):
         Gravitational constant.
     centre : ndarray of shape (3,), optional
         See :class:`SphericalPotential`.
+    velocity : ndarray of shape (3,), optional
+        See :class:`SphericalPotential`.
     """
 
-    def __init__(self, M, a, G=G_KM, centre=None):
-        super().__init__(M, G=G, centre=centre)
+    def __init__(self, M, a, G=G_KM, centre=None, velocity=None):
+        super().__init__(M, G=G, centre=centre, velocity=velocity)
         self.a = a
 
     def _potential(self, r):
@@ -559,12 +565,14 @@ class KeplerPotential(PlummerPotential):
         Gravitational constant.
     centre : ndarray of shape (3,), optional
         See :class:`SphericalPotential`.
+    velocity : ndarray of shape (3,), optional
+        See :class:`SphericalPotential`.
     """
 
     has_distribution = False
 
-    def __init__(self, M, G=G_KM, centre=None):
-        super().__init__(M, SOFTENING_KEPLER, G=G, centre=centre)
+    def __init__(self, M, G=G_KM, centre=None, velocity=None):
+        super().__init__(M, SOFTENING_KEPLER, G=G, centre=centre, velocity=velocity)
 
     def _orbital_time(self, E, r):
         """Kepler period ``2π sqrt(s³ / (G M))``, ``s = -G M / (2E)``, of bound particles; 0 when ``E >= 0``.
@@ -679,10 +687,12 @@ class HernquistPotential(SelfSimilarPotential):
         Gravitational constant.
     centre : ndarray of shape (3,), optional
         See :class:`SphericalPotential`.
+    velocity : ndarray of shape (3,), optional
+        See :class:`SphericalPotential`.
     """
 
-    def __init__(self, M, a, G=G_KM, centre=None):
-        super().__init__(M, G=G, centre=centre)
+    def __init__(self, M, a, G=G_KM, centre=None, velocity=None):
+        super().__init__(M, G=G, centre=centre, velocity=velocity)
         self.a = a
 
     def _potential(self, r):
@@ -802,10 +812,12 @@ class NFWPotential(SphericalPotential):
         Gravitational constant.
     centre : ndarray of shape (3,), optional
         See :class:`SphericalPotential`.
+    velocity : ndarray of shape (3,), optional
+        See :class:`SphericalPotential`.
     """
 
-    def __init__(self, M, Rs, c, G=G_KM, centre=None):
-        super().__init__(M, G=G, centre=centre)
+    def __init__(self, M, Rs, c, G=G_KM, centre=None, velocity=None):
+        super().__init__(M, G=G, centre=centre, velocity=velocity)
         self.Rs = Rs
         self.c = c
 
@@ -1104,11 +1116,14 @@ class ShellPotential(SphericalPotential):
         for :meth:`density` (and so the tidal denominator).
     centre : ndarray of shape (3,), optional
         See :class:`SphericalPotential`.
+    velocity : ndarray of shape (3,), optional
+        See :class:`SphericalPotential`.
     """
 
     has_distribution = False
 
-    def __init__(self, xyz, m, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=4096, tidal_dlnr=0.1, centre=None):
+    def __init__(self, xyz, m, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=4096, tidal_dlnr=0.1, centre=None,
+                 velocity=None):
         origin = np.zeros(3) if centre is None else np.asarray(centre, dtype=np.float64)
         r = np.sqrt(row_squared_norms(np.asarray(xyz, dtype=np.float64) - origin))
         m = np.broadcast_to(np.asarray(m, dtype=np.float64), r.shape)
@@ -1128,7 +1143,7 @@ class ShellPotential(SphericalPotential):
         self._coef[1:-1, 1] = phi[:-1] - self._coef[1:-1, 0] * u[:-1]
         self._coef[-1] = -G * m_in[-1], 0.0
         self._w = max(1, round(tidal_dlnr * self._inv_d))
-        super().__init__(float(m_in[-1]), G=G, centre=centre)
+        super().__init__(float(m_in[-1]), G=G, centre=centre, velocity=velocity)
 
     def _potential(self, r):
         """Evaluate the potential.
@@ -1214,8 +1229,10 @@ _OWN_METHODS = ("orbital_time", "_orbital_time", "distribution_function", "energ
 class CompositeSphericalPotential(SphericalPotential):
     """Sum of spherical potentials: the total potential of a halo built from several components.
 
-    An immutable, iterable container of its components (``for p in composite``, ``len``,
-    indexing). The primitives and the quantities linear in mass are the sums of the
+    An iterable container of its components (``for p in composite``, ``len``, indexing);
+    :meth:`add` adds one on the fly. Each component carries its own ``centre`` and
+    ``velocity``; the composite's own are its first component's, and :attr:`com_centre` and
+    :attr:`com_velocity` are the components' mass-weighted ones. The primitives and the quantities linear in mass are the sums of the
     components' own methods (potential, density, enclosed mass, central potential, well
     depth, tidal denominator), so every component keeps its exact forms; the profile stacks
     their rows. The public methods take absolute physical positions and measure each
@@ -1232,8 +1249,8 @@ class CompositeSphericalPotential(SphericalPotential):
     energy pair, exists only when every component has one (``has_distribution``); the
     phase-space fraction exists for any components.
 
-    A single component answers those (``_OWN_METHODS``) itself, chosen once at
-    construction: its own orbital time, tables and closed forms, exactly.
+    A single component answers those (``_OWN_METHODS``) itself, chosen when components are
+    added: its own orbital time, tables and closed forms, exactly.
 
     Parameters
     ----------
@@ -1243,21 +1260,56 @@ class CompositeSphericalPotential(SphericalPotential):
     Raises
     ------
     ValueError
-        If the components' ``G`` differ.
+        If the components' ``G`` differ (also on :meth:`add`).
     """
 
     def __init__(self, *components):
-        if len({p.G for p in components}) > 1:
+        super().__init__(0.0, G=components[0].G, centre=components[0].centre, velocity=components[0].velocity)
+        self._components = ()
+        for p in components:
+            self.add(p)
+
+    def add(self, potential):
+        """Add a component on the fly (e.g. a halo's stellar counterpart).
+
+        The composite's mass, ``has_distribution`` and single-component
+        shortcuts are updated, and its cached distributions are dropped, to be
+        rebuilt on next use. Its centre stays its first component's.
+
+        Parameters
+        ----------
+        potential : SphericalPotential
+            With the composite's ``G``.
+
+        Raises
+        ------
+        ValueError
+            If its ``G`` differs from the composite's (the generic route uses one ``G``).
+        """
+        if potential.G != self.G:
             raise ValueError("The components of a composite potential must share G.")
-        self._components = tuple(components)
-        super().__init__(sum(p.M for p in components), G=components[0].G, centre=components[0].centre)
-        self.has_distribution = all(p.has_distribution for p in components)
-        if len(components) == 1:
+        self._components += (potential,)
+        self.M = sum(p.M for p in self._components)
+        self.has_distribution = all(p.has_distribution for p in self._components)
+        self._distributions = {}
+        for name in _OWN_METHODS:
+            self.__dict__.pop(name, None)
+        if len(self._components) == 1:
             for name in _OWN_METHODS:
-                setattr(self, name, getattr(components[0], name))
+                setattr(self, name, getattr(potential, name))
 
     def __iter__(self):
         return iter(self._components)
+
+    @property
+    def com_centre(self):
+        """Mass-weighted centre of the components, ``Σ M_i c_i / Σ M_i`` (absolute physical position)."""
+        return sum((p.M / self.M) * p.centre for p in self._components)
+
+    @property
+    def com_velocity(self):
+        """Mass-weighted velocity of the components, ``Σ M_i v_i / Σ M_i`` (km/s)."""
+        return sum((p.M / self.M) * p.velocity for p in self._components)
 
     def __len__(self):
         return len(self._components)

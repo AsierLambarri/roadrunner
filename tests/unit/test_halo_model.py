@@ -17,8 +17,8 @@ class TestConstructor:
         halo = HaloModel(inner, xcen, vel, RVR, sub_tree_id=42, redshift=0.5)
         assert halo.sub_tree_id == 42
         assert halo.redshift == 0.5
-        assert np.allclose(halo.xcen, xcen)
-        assert np.allclose(halo.velocity, vel)
+        assert np.allclose(halo.tree_position, xcen)
+        assert np.allclose(halo.tree_velocity, vel)
         assert halo.virial_radius == RVR
         assert halo.comoving is True
 
@@ -61,7 +61,7 @@ class TestPotential:
             np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.central_potential())
             assert halo.tree_mass == 1e12
             np.testing.assert_allclose(halo.binding_energy_scale(), -inner.central_potential() - star.central_potential())
-            u = halo.energy_fraction(np.array([0.5]))
+            u = halo.energy_fraction(np.array([-0.5]) * halo.binding_energy_scale())
             assert np.all((u > 0) & (u < 1))
 
 
@@ -117,7 +117,7 @@ class TestFromSnapshotRow:
         })
         halo = HaloModel.from_snapshot_row(row, model="kepler")
         assert halo.sub_tree_id == 42
-        assert np.allclose(halo.xcen, [1.0, 2.0, 3.0])
+        assert np.allclose(halo.tree_position, [1.0, 2.0, 3.0])
         assert np.isclose(halo.redshift, 0.5)
         assert halo.comoving is True
 
@@ -157,3 +157,61 @@ class TestFromSnapshotRow:
         halo_comoving = HaloModel.from_snapshot_row(row_comoving, model="nfw", comoving=True)
         halo_physical = HaloModel.from_snapshot_row(row_physical, model="nfw", comoving=False)
         assert np.isclose(halo_comoving.potential_model[0].Rs, halo_physical.potential_model[0].Rs)
+
+
+class TestWrappers:
+    def test_catalogue_coordinates_delegate_to_the_potential_model(self):
+        from roadrunner._defaults import precision
+        with precision(math="double"):
+            z, ls = 1.0, 0.5
+            xcen = np.array([200.0, -40.0, 10.0])
+            inner = NFWPotential(M=1e12, Rs=10.0, c=10.0, centre=xcen * ls)
+            halo = HaloModel(inner, xcen, VCENTER, RVR, sub_tree_id=1, redshift=z, search_factor=2.0)
+            xyz = xcen + np.array([[30.0, 0.0, 0.0], [0.0, -5.0, 2.0]])
+            phys = xyz * ls
+            for name in ("potential", "density", "enclosed_mass", "tidal_denominator"):
+                np.testing.assert_allclose(getattr(halo, name)(xyz), getattr(inner, name)(phys), rtol=1e-12)
+            np.testing.assert_allclose(halo.orbital_time(-np.ones(2), xyz), inner.orbital_time(-np.ones(2), phys), rtol=1e-12)
+            np.testing.assert_allclose(halo.well_depth(xyz[:1]), inner.well_depth(phys[:1]))
+            E = np.array([0.9, 0.5]) * inner.central_potential()
+            R = 2.0 * RVR * ls
+            for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):
+                np.testing.assert_allclose(getattr(halo, name)(E), getattr(inner, name)(E, R), rtol=1e-12)
+            np.testing.assert_allclose(halo.distribution_function(E), inner.distribution_function(E), rtol=1e-12)
+            assert len(halo) == 1 and halo[0] is inner and list(halo) == [inner]
+            star = PlummerPotential(M=1e9, a=0.5, centre=xcen * ls)
+            halo.add_potential(star)
+            assert len(halo) == 2 and halo.potential_model[1] is star
+
+
+class TestCentreOfMass:
+    def test_com_frame_follows_the_components(self):
+        from roadrunner._defaults import precision
+        with precision(math="double"):
+            z, ls = 1.0, 0.5
+            pos, vel = np.array([200.0, -40.0, 10.0]), np.array([100.0, 0.0, -30.0])
+            inner = NFWPotential(M=9e11, Rs=10.0, c=10.0, centre=pos * ls, velocity=vel)
+            halo = HaloModel(inner, pos, vel, RVR, sub_tree_id=1, redshift=z)
+            np.testing.assert_allclose(halo.com_position, pos)
+            np.testing.assert_allclose(halo.com_velocity, vel)
+            # a displaced, moving component: the centre of mass and the energy frame follow it
+            star = PlummerPotential(M=1e11, a=0.5, centre=(pos + np.array([20.0, 0.0, 0.0])) * ls,
+                                    velocity=vel + np.array([0.0, 50.0, 0.0]))
+            halo.add_potential(star)
+            assert halo.total_mass == 1e12 and halo.tree_mass == 9e11
+            np.testing.assert_allclose(halo.com_position, pos + np.array([2.0, 0.0, 0.0]))
+            np.testing.assert_allclose(halo.com_velocity, vel + np.array([0.0, 5.0, 0.0]))
+            np.testing.assert_array_equal(halo.tree_position, pos)
+            np.testing.assert_array_equal(halo.tree_velocity, vel)
+            xyz, v = pos[None] + np.array([[5.0, 0.0, 0.0]]), vel[None] + np.array([[0.0, 5.0, 0.0]])
+            np.testing.assert_allclose(halo.compute_energy(xyz, v), halo.potential(xyz), rtol=1e-12)
+
+    def test_row_gives_the_potential_its_velocity(self):
+        row = pd.Series({
+            "Sub_tree_id": 7, "position_x": 10.0, "position_y": 20.0, "position_z": 30.0,
+            "velocity_x": 1.0, "velocity_y": -2.0, "velocity_z": 3.0,
+            "mass": 5e11, "virial_radius": 80.0, "scale_radius": 8.0, "Redshift": 1.0, "Snapshot": 0,
+        })
+        halo = HaloModel.from_snapshot_row(row, model="nfw")
+        np.testing.assert_allclose(halo.potential_model[0].velocity, [1.0, -2.0, 3.0])
+        np.testing.assert_allclose(halo.com_velocity, [1.0, -2.0, 3.0])

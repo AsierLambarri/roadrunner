@@ -78,7 +78,7 @@ birth_window_factor: 5.0       # Birth scoring window (set ≤ 0 to disable)
 enforce_initial_hosts: true    # Keep particles in initial host galaxy
 
 # ── Output ───────────────────────────────────────────────────────────────────
-output_dir: /home/asier/roadrunner/output_npz/
+output_dir: /home/asier/roadrunner/output_npz_new_new/
 resume: false                  # Resume from checkpoint (true/false)
 # threads: 8                   # Thread budget for numba, BLAS and KDTree queries (default: all cores)
 save_particles: true           # Save particle positions/velocities to HDF5

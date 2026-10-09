@@ -37,7 +37,7 @@ _X = np.array([1.0, 0.0, 0.0])
 
 def _nfw_halo(xcen, vel, M, rvir, c, sid):
     xcen = np.asarray(xcen, float)
-    inner = NFWPotential(M=M, Rs=rvir / c, c=c, centre=xcen)
+    inner = NFWPotential(M=M, Rs=rvir / c, c=c, centre=xcen, velocity=np.asarray(vel, float))
     return HaloModel(inner, xcen, np.asarray(vel, float), rvir,
                      sub_tree_id=sid, redshift=0.0, comoving=False)
 
@@ -92,7 +92,7 @@ class TestEnergyPlausibility:
         for c, ref in [(6.53, 0.0739), (21.31, 0.2023)]:
             h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1)
             r = np.array([KRAVTSOV_RHALF * h.virial_radius])
-            depth = 1.0 - h.potential(h.xcen + r[:, None] * _X)[0] / h.central_potential()
+            depth = 1.0 - h.potential(h.tree_position + r[:, None] * _X)[0] / h.central_potential()
             got = np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es)))
             np.testing.assert_allclose(got, ref, rtol=5e-3)
 
@@ -163,7 +163,7 @@ class TestAssignerWithEnergyPlausibility:
 
 def _kepler_halo(xcen, vel, M, rvir, sid):
     xcen = np.asarray(xcen, float)
-    return HaloModel(KeplerPotential(M=M, centre=xcen), xcen, np.asarray(vel, float), rvir,
+    return HaloModel(KeplerPotential(M=M, centre=xcen, velocity=np.asarray(vel, float)), xcen, np.asarray(vel, float), rvir,
                      sub_tree_id=sid, redshift=0.0, comoving=False)
 
 
@@ -200,7 +200,7 @@ class TestPhaseSpacePlausibility:
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape
             assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
-            t = -h.log_phase_space_fraction(b.astype(float))
+            t = -h.log_phase_space_fraction(-b.astype(float) * h.binding_energy_scale())
             mu, sd, _ = literature_depth(h)
             ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(-0.5 * ((t - mu) / sd) ** 2 + t) / (sd * np.sqrt(2 * np.pi)) + PLAUSIBILITY_FLOOR
             np.testing.assert_allclose(alpha, ref, rtol=1e-6)
@@ -232,7 +232,7 @@ class TestPhaseSpacePlausibility:
         sat = _kepler_halo([50, 0, 0], [0, 0, 0], 1e10, 30.0, 2)
         # E = -G M / r_vir in the host (shallow) and -30 G M / r_vir in the satellite (deep), stored as -E / scale
         for h, depth in ((host, 1.0), (sat, 30.0)):
-            h.inner_position = h.xcen + np.array([0.05, 0.0, 0.0])
+            h.inner_position = h.tree_position + np.array([0.05, 0.0, 0.0])
             E = -depth * h.tree_mass * KeplerPotential(M=1.0).G / h.virial_radius
             h.set_boundness(np.array([0]), np.array([-E / h.binding_energy_scale()]), np.ones(1))
         p = PhaseSpacePlausibility()
@@ -280,9 +280,9 @@ def _kin_floored(u2, m):
 def _members(rng, h, n, r_scale):
     """Isotropic members of halo h: positions ~ N(centre, r_scale), Wolf dispersion at r_1/2."""
     r_half = np.array([KRAVTSOV_RHALF * h.virial_radius])
-    sigma = np.sqrt(literature_speed(h) * -2.0 * h.potential(h.xcen + r_half[:, None] * _X)[0] / 3.0)
-    pos = h.xcen + rng.normal(0.0, r_scale, (n, 3))
-    vel = h.velocity + rng.normal(0.0, sigma, (n, 3))
+    sigma = np.sqrt(literature_speed(h) * -2.0 * h.potential(h.tree_position + r_half[:, None] * _X)[0] / 3.0)
+    pos = h.tree_position + rng.normal(0.0, r_scale, (n, 3))
+    vel = h.tree_velocity + rng.normal(0.0, sigma, (n, 3))
     return np.hstack([pos, vel])
 
 
@@ -309,20 +309,21 @@ class TestKinematicPlausibility:
         rng = np.random.default_rng(4)
         f = 1.0 / (1.0 + z) if comoving else 1.0
         xcen = np.array([100.0, 200.0, 300.0])
-        inner = (KeplerPotential(M=1e11, centre=xcen * f) if model == "kepler"
-                 else NFWPotential(M=1e11, Rs=60.0 * f / 10.0, c=10.0, centre=xcen * f))
+        vbulk = np.array([50.0, -20.0, 10.0])
+        inner = (KeplerPotential(M=1e11, centre=xcen * f, velocity=vbulk) if model == "kepler"
+                 else NFWPotential(M=1e11, Rs=60.0 * f / 10.0, c=10.0, centre=xcen * f, velocity=vbulk))
         h = HaloModel(inner, xcen, np.array([50.0, -20.0, 10.0]), 60.0,
                       sub_tree_id=1, redshift=z, comoving=comoving)
         n, r = 20000, 7.0
-        v_esc = np.sqrt(-2.0 * h.potential(h.xcen + np.array([[r, 0.0, 0.0]]))[0])
-        coords = np.hstack([h.xcen + r * _unit(rng, n),
-                            h.velocity + v_esc * rng.uniform(size=(n, 1)) ** (1 / 3) * _unit(rng, n)])
+        v_esc = np.sqrt(-2.0 * h.potential(h.tree_position + np.array([[r, 0.0, 0.0]]))[0])
+        coords = np.hstack([h.tree_position + r * _unit(rng, n),
+                            h.tree_velocity + v_esc * rng.uniform(size=(n, 1)) ** (1 / 3) * _unit(rng, n)])
         u2 = escape_speed_fraction(h, np.arange(n), coords)
         assert kstest(u2 ** 1.5, "uniform").pvalue > 1e-3
         ens = HaloEnsemble([h])
         compute_halo_bound_particles(ens, coords)
         rows, b, _ = h.get_boundness()
-        e_over_phi = -b.astype(float) * h.binding_energy_scale() / h.potential(h.xcen + np.array([[r, 0.0, 0.0]]))[0]
+        e_over_phi = -b.astype(float) * h.binding_energy_scale() / h.potential(h.tree_position + np.array([[r, 0.0, 0.0]]))[0]
         np.testing.assert_allclose(1.0 - u2[rows], e_over_phi, rtol=1e-4, atol=1e-5)
 
     def test_member_model_normalisation_moment_and_null(self):
@@ -383,7 +384,7 @@ class TestKinematicPlausibility:
     def test_infalling_satellite_stars_go_to_the_satellite(self):
         rng = np.random.default_rng(1)
         host, _ = self._host_sat([0, 0, 0])
-        v_esc = np.sqrt(-2.0 * host.potential(host.xcen + np.array([[3.0, 0.0, 0.0]]))[0])
+        v_esc = np.sqrt(-2.0 * host.potential(host.tree_position + np.array([[3.0, 0.0, 0.0]]))[0])
         host, sat = self._host_sat([-0.9 * v_esc, 0, 0])
         coords = _members(rng, sat, 3000, 0.3)
         a = _alpha_pairs([host, sat], coords)
@@ -394,12 +395,12 @@ class TestKinematicPlausibility:
         rng = np.random.default_rng(2)
         host, _ = self._host_sat([0, 0, 0])
         r = np.array([3.0 * np.exp(-1e-3), 3.0, 3.0 * np.exp(1e-3)])
-        phi = host.potential(host.xcen + r[:, None] * _X)
+        phi = host.potential(host.tree_position + r[:, None] * _X)
         v_circ = np.sqrt((phi[2] - phi[0]) / 2e-3)
         host, sat = self._host_sat([0, v_circ, 0])
         sat_stars = _members(rng, sat, 3000, 0.3)
         sigma_h = v_circ / np.sqrt(3.0)
-        host_stars = np.hstack([sat.xcen + rng.normal(0, 0.3, (3000, 3)), rng.normal(0, sigma_h, (3000, 3))])
+        host_stars = np.hstack([sat.tree_position + rng.normal(0, 0.3, (3000, 3)), rng.normal(0, sigma_h, (3000, 3))])
         a = _alpha_pairs([host, sat], np.vstack([sat_stars, host_stars]))
         both = (a[1] > 0) & (a[2] > 0)
         s, h = both[:3000], both[3000:]
@@ -409,7 +410,7 @@ class TestKinematicPlausibility:
     def test_host_centre_newborn_beats_small_neighbour(self):
         host = _nfw_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 10.0, 1)
         nb = _nfw_halo([5, 0, 0], [0, 0, 0], 1e9, 20.0, 15.0, 2)
-        v_esc_nb = np.sqrt(-2.0 * nb.potential(nb.xcen + np.array([[5.0, 0.0, 0.0]]))[0])
+        v_esc_nb = np.sqrt(-2.0 * nb.potential(nb.tree_position + np.array([[5.0, 0.0, 0.0]]))[0])
         nb = _nfw_halo([5, 0, 0], [0.5 * v_esc_nb, 0, 0], 1e9, 20.0, 15.0, 2)
         coords = np.array([[0.01, 0, 0, 0, 0, 0]], dtype=float)
         a = _alpha_pairs([host, nb], coords)
