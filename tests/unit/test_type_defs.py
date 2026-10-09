@@ -95,6 +95,9 @@ class MockPotentialModel:
     def central_potential(self):
         raise NotImplementedError
 
+    def well_depth(self, r_inner):
+        return 1.0 / r_inner
+
     def distribution_function(self, E):
         raise NotImplementedError
 

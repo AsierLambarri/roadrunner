@@ -225,8 +225,11 @@ class TestPhaseSpacePlausibility:
     def test_deep_satellite_particle_beats_shallow_host_pair(self):
         host = _kepler_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 1)
         sat = _kepler_halo([50, 0, 0], [0, 0, 0], 1e10, 30.0, 2)
-        host.set_boundness(np.array([0]), np.array([1.0]), np.ones(1))    # shallow in the host
-        sat.set_boundness(np.array([0]), np.array([30.0]), np.ones(1))    # deep in the satellite
+        # E = -G M / r_vir in the host (shallow) and -30 G M / r_vir in the satellite (deep), stored as -E / scale
+        for h, depth in ((host, 1.0), (sat, 30.0)):
+            h.inner_radius = 0.05
+            E = -depth * h.tree_mass * KeplerPotential(M=1.0).G / h.virial_radius
+            h.set_boundness(np.array([0]), np.array([-E / h.binding_energy_scale()]), np.ones(1))
         p = PhaseSpacePlausibility()
         p.prepare([host, sat])
         a_host, a_sat = (v[0] for v in p.column_values([1, 2]))

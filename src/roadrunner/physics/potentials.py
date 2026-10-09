@@ -127,6 +127,21 @@ class SphericalPotential(PotentialModel):
         """
         return float(self.potential(np.zeros(1))[0])
 
+    def well_depth(self, r_inner):
+        """Depth ``-Φ₀`` of the potential well, the scale of its binding energies.
+
+        Parameters
+        ----------
+        r_inner : float
+            Innermost resolved radius (physical); unused by a well with a
+            finite centre.
+
+        Returns
+        -------
+        depth : float
+        """
+        return -self.central_potential()
+
     def orbital_time(self, E, r):
         """Orbital timescale: the dynamical time ``2π sqrt(r³ / (G M(<r)))`` at the instantaneous radius.
 
@@ -378,7 +393,8 @@ class KeplerPotential(PlummerPotential):
     """Kepler (point-mass) potential: a Plummer sphere with the fixed softening :const:`SOFTENING_KEPLER`.
 
     Its central value is set by the softening alone, so it has no meaningful
-    ``Φ₀``: that method raises. Its derived quantities are the point mass's:
+    ``Φ₀``: that method raises, and its well depth is taken at the innermost
+    resolved radius. Its derived quantities are the point mass's:
     the orbital timescale is the period of the orbit, the tidal denominator
     ``3 M``, and its phase-space volume has a closed form.
 
@@ -435,6 +451,23 @@ class KeplerPotential(PlummerPotential):
     def central_potential(self):
         """Not defined: the softened central value is not physical."""
         raise NotImplementedError("The Kepler potential has no finite central potential.")
+
+    def well_depth(self, r_inner):
+        """Depth ``-Φ(r_inner)`` of the well at the innermost resolved radius.
+
+        A point mass's ``Φ₀`` is set by the softening alone, so its depth is
+        taken where the data stop resolving it.
+
+        Parameters
+        ----------
+        r_inner : float
+            Innermost resolved radius (physical).
+
+        Returns
+        -------
+        depth : float
+        """
+        return -float(self.potential(np.array([r_inner], dtype=np.float64))[0])
 
     def distribution_function(self, E):
         """Not defined: a point mass has no extended mass distribution, so no energy distribution.

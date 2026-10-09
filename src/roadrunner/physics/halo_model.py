@@ -43,9 +43,13 @@ class HaloModel:
     tree centre when ``None``); the radial summaries (orbital time, tidal
     denominator, central potential) and any 1-D radii treat every
     potential as centred on the tree centre. The energy distributions are the
-    first potential's; the energy scale ``G M_tot / r_vir`` is the halo's.
-    ``tree_mass`` is the first potential's mass, ``total_mass`` all of them.
-    Boundness results are stored as a tuple ``(indices, energies, tdyns)``.
+    first potential's; the energy scale, the depth of the summed well (see
+    :meth:`binding_energy_scale`), is the halo's. ``tree_mass`` is the first
+    potential's mass. Boundness results are stored as a tuple
+    ``(indices, energies, tdyns)``; :func:`compute_halo_bound_particles`
+    also sets ``inner_radius``, the radius (tree units, like
+    ``virial_radius``) of the innermost particle of the search sphere, 0
+    until then.
 
     Parameters
     ----------
@@ -90,6 +94,7 @@ class HaloModel:
         self.redshift = float(redshift)
         self.comoving = comoving
         self.search_factor = float(search_factor)
+        self.inner_radius = 0.0
         self._1plusz  = 1 / (1 + self.redshift) if comoving else 1
         self._boundness: tuple | None = None
 
@@ -137,11 +142,6 @@ class HaloModel:
             Centred on its ``centre`` (the tree centre when ``None``).
         """
         self._potentials.append(potential)
-
-    @property
-    def total_mass(self) -> float:
-        """Sum of the masses of the halo's potentials."""
-        return float(_summed(p.M for p in self._potentials))
 
     def _radius(self, xyz_or_r: np.ndarray) -> np.ndarray:
         """Physical radius from the tree centre (2-D positions) or of 1-D radii."""
@@ -247,17 +247,19 @@ class HaloModel:
         return _summed(p.central_potential() for p in self._potentials)
 
     def binding_energy_scale(self) -> float:
-        """Energy scale that normalises this halo's binding energies: ``v_vir² = G M_tot / r_vir``.
+        """Energy scale that normalises this halo's binding energies: the depth ``|Φ_tot(0)|`` of its well.
 
-        ``M_tot`` sums the masses of the halo's potentials, the dark halo's
-        nearly all of it; ``r_vir`` is physical. Boundness is stored as
-        ``-E / binding_energy_scale()``.
+        The sum of its potentials' :meth:`well_depth` at the physical
+        :attr:`inner_radius`: ``-Φ(0)`` for a well with a finite centre, and
+        ``-Φ(r_inner)`` for a point mass, whose ``Φ(0)`` the softening alone
+        sets. Boundness is stored as ``-E / binding_energy_scale()``.
 
         Returns
         -------
         scale : float
         """
-        return _summed(p.G * p.M for p in self._potentials) / (self.virial_radius * self._1plusz)
+        r_inner = self.inner_radius * self._1plusz
+        return float(_summed(p.well_depth(r_inner) for p in self._potentials))
 
     def _counting_radius(self) -> float:
         """Physical radius of the boundness search sphere, ``search_factor * r_vir``: where the distributions count."""

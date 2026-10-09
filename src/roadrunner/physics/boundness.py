@@ -30,7 +30,9 @@ def compute_halo_bound_particles(
     Uses a KD-tree to efficiently find particles within each halo's search
     sphere (:attr:`HaloModel.search_factor` virial radii), then evaluates
     boundness via the total specific orbital energy ``E = Φ + ½v²``. The
-    stored boundness is ``-E / HaloModel.binding_energy_scale()``.
+    stored boundness is ``-E / HaloModel.binding_energy_scale()``, the depth
+    of the halo's well; each halo's ``inner_radius`` (its innermost particle,
+    where a point mass's depth is taken) is set first.
     Bound particles are stored on each halo via
     :meth:`HaloModel.set_boundness`.
 
@@ -71,6 +73,8 @@ def compute_halo_bound_particles(
         rel_pos = positions[local] - halo.xcen
         rel_vel = velocities[local] - halo.velocity
         dist = np.linalg.norm(rel_pos, axis=1)
+        # Before the scale is formed: a point mass's well depth is taken at the innermost particle.
+        halo.inner_radius = float(dist.min())
 
         E = halo.compute_energy(rel_pos, rel_vel, relative=True)
         # -E over the halo's energy scale (physical virial radius, C08).

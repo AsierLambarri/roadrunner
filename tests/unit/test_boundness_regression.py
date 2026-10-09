@@ -34,6 +34,7 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
         dist = np.linalg.norm(rel_pos, axis=1)
         vel_mags = np.linalg.norm(rel_vel, axis=1)
 
+        halo.inner_radius = float(dist.min())
         v_vir_sq = halo.binding_energy_scale()                   # the halo-owned scale
         phi = halo.potential(dist)
         v_esc = np.sqrt(2 * np.abs(phi))

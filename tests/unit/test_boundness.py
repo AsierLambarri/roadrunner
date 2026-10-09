@@ -67,3 +67,18 @@ class TestFunction:
         assert len(inds) == 0
         assert len(vals) == 0
         assert len(tdyns) == 0
+
+    def test_energy_scale_is_the_well_depth(self):
+        # |Φ(0)| for NFW; for Kepler |Φ| at the innermost particle, set before the scale is formed.
+        # Every particle lies at or outside the innermost one, so the stored boundness is at most 1.
+        rng = np.random.default_rng(3)
+        coords = np.column_stack([rng.uniform(-30, 30, (300, 3)), rng.uniform(-20, 20, (300, 3))])
+        kepler, nfw = _make_halo(VCENTER), _make_halo(VCENTER, model="nfw")
+        compute_halo_bound_particles([kepler, nfw], coords)
+        r_min = np.linalg.norm(coords[:, :3], axis=1).min()
+        assert kepler.inner_radius == r_min
+        np.testing.assert_allclose(kepler.binding_energy_scale(), -kepler.potential(np.array([r_min]))[0])
+        np.testing.assert_allclose(nfw.binding_energy_scale(), -nfw.central_potential())
+        for h in (kepler, nfw):
+            b = h.get_boundness()[1]
+            assert b.size and np.all((b > 0) & (b <= 1))
