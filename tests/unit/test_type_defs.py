@@ -77,26 +77,26 @@ class TestParticleAssignerProtocol:
 
 
 class MockPotentialModel:
-    def potential(self, r):
-        return -1.0 / r
+    def potential(self, xyz):
+        return -1.0 / xyz
 
-    def enclosed_mass(self, r):
-        return r
+    def enclosed_mass(self, xyz):
+        return xyz
 
-    def density(self, r):
-        return 1.0 / r
+    def density(self, xyz):
+        return 1.0 / xyz
 
-    def orbital_time(self, E, r):
-        return r * 2.0
+    def orbital_time(self, E, xyz):
+        return xyz * 2.0
 
-    def tidal_denominator(self, r):
-        return 3.0 * r
+    def tidal_denominator(self, xyz):
+        return 3.0 * xyz
 
     def central_potential(self):
         raise NotImplementedError
 
-    def well_depth(self, r_inner):
-        return 1.0 / r_inner
+    def well_depth(self, xyz):
+        return 1.0
 
     def distribution_function(self, E):
         raise NotImplementedError

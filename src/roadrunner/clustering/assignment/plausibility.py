@@ -158,7 +158,7 @@ def errani_log_ratio(halo, b):
     """
     phi0, s = halo.central_potential(), halo.binding_energy_scale()
     r_half = np.array([KRAVTSOV_RHALF * halo.virial_radius])
-    depth = 1.0 - float(halo.potential(r_half)[0]) / phi0
+    depth = 1.0 - float(_summary_potential(halo, r_half)[0]) / phi0
     cal_half, es_try = _errani_scales()
     es = float(np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es_try))))
     cal = np.clip(1.0 + b * s / phi0, CAL_GRID[0], CAL_GRID[-1])        # calE = 1 - E / Φ₀, E = -b s
@@ -425,6 +425,17 @@ class EnergyPlausibility(_Plausibility):
 
 _LOG_2PI = np.log(2.0 * np.pi)
 _FD_STEP = 1e-3                                   # central difference step in ln r
+_X_HAT = np.array([[1.0, 0.0, 0.0]])            # direction of the radial summaries from the halo centre
+
+
+def _summary_potential(halo, r):
+    """Potential (float64) at snapshot radii ``r`` from the halo centre along x: the radial summaries' input.
+
+    Read from the potential model at physical positions, so finite differences
+    of it keep float64 precision whatever ``math_dtype()`` is.
+    """
+    xyz = np.asarray(halo.xcen, dtype=np.float64) + np.asarray(r, dtype=np.float64).reshape(-1, 1) * _X_HAT
+    return halo.potential_model.potential(xyz * halo.length_scale)
 
 
 def _normal_log_pdf(t, mu, sd):
@@ -458,7 +469,7 @@ def literature_depth(halo):
     s1, s2 = PLAUSIBILITY_LIT_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX
     r = KRAVTSOV_RHALF * halo.virial_radius * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
     steps = np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
-    phi = halo.potential((r[:, None] * steps).ravel()).reshape(r.size, 3)
+    phi = _summary_potential(halo, (r[:, None] * steps).ravel()).reshape(r.size, 3)
     v2 = (phi[:, 2] - phi[:, 0]) / (2.0 * _FD_STEP)
     b = -(phi[:, 1] + 0.5 * v2) / halo.binding_energy_scale()
     t = -halo.log_phase_space_fraction(b)
@@ -601,7 +612,7 @@ def literature_speed(halo):
     m : float
     """
     r = KRAVTSOV_RHALF * halo.virial_radius * np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
-    phi = halo.potential(r)
+    phi = _summary_potential(halo, r)
     return float((phi[2] - phi[0]) / (2.0 * _FD_STEP) / (-2.0 * phi[1]))
 
 

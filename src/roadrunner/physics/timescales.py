@@ -15,6 +15,7 @@
 
 import numpy as np
 
+from roadrunner.mixture._math import row_squared_norms
 from roadrunner.physics.constants import MAX_DYN_TIMESCALE
 from roadrunner._defaults import math_dtype
 
@@ -57,28 +58,31 @@ def compute_particle_dynamical_timescales(particle_df, ensemble, groups, td_fact
     return particle_df
 
 
-def compute_tidal_radius(halo, satellite_mass, distance):
-    """Compute the tidal radius of a satellite in a host halo potential.
+def compute_tidal_radius(potential, satellite_mass, xyz):
+    """Compute the tidal radius of a satellite in a host potential.
 
-    Uses the tidal denominator from :meth:`HaloModel.tidal_denominator`
-    and the formula ``r_t = d * (M_sat / M_denom)^(1/3)``: 0 at ``d = 0``
-    (the main host itself), where an extended host's denominator vanishes.
+    ``r_t = d * (M_sat / M_denom)^(1/3)``, with ``d`` the satellite's distance
+    from the potential's centre and ``M_denom`` the potential's tidal
+    denominator there: 0 at ``d = 0`` (the main host itself), where an
+    extended host's denominator vanishes.
 
     Parameters
     ----------
-    halo : HaloModel
-        The host halo.
+    potential : PotentialModel
+        The host's potential.
     satellite_mass : float
         Mass of the satellite.
-    distance : float
-        Distance from the satellite to the host centre.
+    xyz : ndarray of shape (1, 3)
+        Absolute physical position of the satellite.
 
     Returns
     -------
     rt : float
-        Tidal radius in the same units as ``distance``.
+        Tidal radius (physical).
     """
-    denom = np.asarray(halo.tidal_denominator(np.array([distance]))).flat[0]
+    xyz = np.asarray(xyz, dtype=np.float64)
+    distance = np.sqrt(row_squared_norms(xyz - potential.centre))[0]
+    denom = potential.tidal_denominator(xyz)[0]
     with np.errstate(divide="ignore", invalid="ignore"):
         rt = distance * (satellite_mass / denom) ** (1.0 / 3.0)
     return np.nan_to_num(rt, nan=0.0, posinf=np.inf)

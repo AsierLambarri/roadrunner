@@ -98,14 +98,14 @@ class TestTidalRadius:
         M, Ms = 1e12, 1e10
         D = 100.0
         halo = _make_halo([0.0, 0.0, 0.0], mass=M)
-        rt = compute_tidal_radius(halo, Ms, D)
+        rt = compute_tidal_radius(halo.potential_model, Ms, np.array([[D, 0.0, 0.0]]))
         expected = D * (Ms / (3 * M)) ** (1.0 / 3.0)
         assert np.isclose(rt, expected)
 
     def test_nfw_finite(self):
         inner = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6)
         halo = _make_halo([0.0, 0.0, 0.0], inner=inner)
-        rt = compute_tidal_radius(halo, 1e10, 100.0)
+        rt = compute_tidal_radius(halo.potential_model, 1e10, np.array([[100.0, 0.0, 0.0]]))
         assert np.isfinite(rt)
         assert rt > 0
-        assert compute_tidal_radius(halo, 1e10, 0.0) == 0   # the main host itself: the denominator vanishes at d = 0
+        assert compute_tidal_radius(halo.potential_model, 1e10, np.zeros((1, 3))) == 0   # the main host itself: the denominator vanishes at d = 0

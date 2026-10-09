@@ -564,15 +564,15 @@ def eddington_distribution_function(potential, energy):
     f : ndarray of float64
     """
     r = _EDDINGTON_R
-    psi = -np.asarray(potential.potential(r), dtype=np.float64)
-    dpsi = -potential.G * np.asarray(potential.enclosed_mass(r), dtype=np.float64) / r**2
+    psi = -np.asarray(potential._potential(r), dtype=np.float64)
+    dpsi = -potential.G * np.asarray(potential._enclosed_mass(r), dtype=np.float64) / r**2
     with np.errstate(divide="ignore", invalid="ignore"):
-        drho = np.gradient(np.asarray(potential.density(r), dtype=np.float64), r) / dpsi
+        drho = np.gradient(np.asarray(potential._density(r), dtype=np.float64), r) / dpsi
         d2 = np.gradient(drho, r) / dpsi
     keep = np.isfinite(d2) & np.concatenate(([True], np.diff(psi) < 0))   # ψ strictly decreasing in r
     psi, d2 = psi[keep][::-1], d2[keep][::-1]                              # increasing ψ
     energy = np.asarray(energy, dtype=np.float64)
-    phi0 = float(np.asarray(potential.potential(np.zeros(1)), dtype=np.float64)[0])
+    phi0 = float(np.asarray(potential._potential(np.zeros(1)), dtype=np.float64)[0])
     return _eddington_integral(-energy, energy - phi0, psi, d2)
 
 
@@ -622,7 +622,7 @@ class SphericalDistribution:
         self.potential = potential
         self.r_max = float(r_max)
         self._r = self.r_max * np.concatenate(([0.0], np.geomspace(1e-6, 1.0, _APO_NODES - 1)))
-        self._phi = np.asarray(potential.potential(self._r), dtype=np.float64)
+        self._phi = np.asarray(potential._potential(self._r), dtype=np.float64)
         self._eps = _depth_nodes(self._phi[-1] / self._phi[0], _SHALLOWEST, *_GENERIC_NODES)
         self._energies = self._phi[0] * self._eps                 # physical energies at the nodes
         self._log_w = None
@@ -663,7 +663,7 @@ class SphericalDistribution:
         if self._profile is not None:
             return _q_and_g_kernel(np.ascontiguousarray(energy, dtype=np.float64), x_max, self._profile, _W, _WW)
         x = x_max[:, None] * (1.0 - _W**2)
-        kin2 = np.clip(2.0 * (energy[:, None] - np.asarray(self.potential.potential(x), dtype=np.float64)), 0.0, None)
+        kin2 = np.clip(2.0 * (energy[:, None] - np.asarray(self.potential._potential(x), dtype=np.float64)), 0.0, None)
         w = 16.0 * np.pi**2 * _WW * 2.0 * x_max[:, None] * _W * x**2
         return np.sum(w * kin2**1.5, axis=-1) / 3.0, np.sum(w * np.sqrt(kin2), axis=-1)
 

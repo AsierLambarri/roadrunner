@@ -341,7 +341,7 @@ class TestComputeGalaxyProperties:
         host_c = host_virial_radius / host_scale_radius_comoving
         physical_potential = get_potential("nfw", M=host_mass, Rs=host_Rs_physical, c=host_c)
         expected_rt = compute_tidal_radius(
-            physical_potential, sat_mass, distance_comoving * factor
+            physical_potential, sat_mass, np.array([[distance_comoving * factor, 0.0, 0.0]])
         ) / factor
 
         galaxy_particles = {10: np.arange(50)}

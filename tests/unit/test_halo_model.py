@@ -11,8 +11,8 @@ RVR = 100.0
 
 class TestConstructor:
     def test_basic_attributes(self):
-        inner = KeplerPotential(M=1e12)
         xcen = np.array([1.0, 2.0, 3.0])
+        inner = KeplerPotential(M=1e12, centre=xcen / 1.5)
         vel = np.array([0.0, 0.0, 0.0])
         halo = HaloModel(inner, xcen, vel, RVR, sub_tree_id=42, redshift=0.5)
         assert halo.sub_tree_id == 42
@@ -34,46 +34,35 @@ class TestPotential:
         inner = KeplerPotential(M, G=G)
         halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
         xyz = np.array([[100.0, 0.0, 0.0], [200.0, 0.0, 0.0]])
-        result = halo.potential(xyz)
-        expected = inner.potential(np.array([100.0, 200.0]))
-        assert np.allclose(result, expected)
+        assert np.allclose(halo.potential(xyz), inner._potential(np.array([100.0, 200.0])))
 
-    def test_nfw_comoving(self):
-        inner = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6)
-        halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=3.0)
-        xyz = np.array([[40.0, 0.0, 0.0]])
-        result = halo.potential(xyz)
-        r_phys = 40.0 / 4.0
-        expected = inner.potential(np.array([r_phys]))
-        assert np.allclose(result, expected)
-        # a second potential at its own centre: potential and energy measure each from its centre,
-        # radial summaries share the tree centre, and the scale, mass and distributions are the first's
-        star = PlummerPotential(M=1e9, a=0.5, centre=np.array([4.0, 0.0, 0.0]), G=4.3e-6)
-        halo.add_potential(star)
-        np.testing.assert_allclose(halo.potential(xyz), expected + star.potential(np.array([9.0])), rtol=1e-12)
-        v = np.array([[0.0, 30.0, 0.0]])
-        np.testing.assert_allclose(halo.compute_energy(xyz, v, relative=False),
-                                   expected + star.potential(np.array([9.0])) + 450.0, rtol=1e-12)
-        np.testing.assert_allclose(halo.tidal_denominator(np.array([40.0])),
-                                   inner.tidal_denominator(np.array([r_phys])) + star.tidal_denominator(np.array([r_phys])))
-        menc = inner.enclosed_mass(r_phys) + 1e9 * r_phys**3 / (r_phys**2 + 0.25) ** 1.5
-        np.testing.assert_allclose(halo.orbital_time(np.array([-1.0]), np.array([40.0])),
-                                   2 * np.pi * np.sqrt(r_phys**3 / (4.3e-6 * menc)), rtol=1e-10)
-        assert halo.orbital_time(np.array([-1.0]), np.array([0.0]))[0] == 0   # the NFW cusp's limit at r = 0
-        np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.central_potential())
-        assert halo.tree_mass == 1e12
-        # the scale is the summed well depth: |Φ₀| of both (NFW and Plummer have finite centres)
-        np.testing.assert_allclose(halo.binding_energy_scale(), -inner.central_potential() - star.central_potential())
-        with pytest.raises(NotImplementedError):
-            halo.energy_fraction(np.array([0.5]))
-
-    def test_1d_virial_radius_mode(self):
-        inner = KeplerPotential(M=1e12)
-        halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.5, comoving=True)
-        dist = np.array([10.0, 20.0])
-        result = halo.potential(dist)
-        expected = inner.potential(dist / 1.5)
-        assert np.allclose(result, expected)
+    def test_nfw_comoving_and_offset_components(self):
+        from roadrunner._defaults import precision
+        with precision(math="double"):
+            z, ls = 3.0, 0.25
+            xcen = np.array([100.0, 0.0, 0.0])
+            inner = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6, centre=xcen * ls)
+            halo = HaloModel(inner, xcen, VCENTER, RVR, sub_tree_id=1, redshift=z)
+            xyz = xcen + np.array([[40.0, 0.0, 0.0]])
+            r_phys = 40.0 * ls
+            expected = inner._potential(np.array([r_phys]))
+            np.testing.assert_allclose(halo.potential(xyz), expected, rtol=1e-12)
+            # a second component at its own centre, 36 snapshot units (9 kpc physical) from the particle
+            star = PlummerPotential(M=1e9, a=0.5, centre=(xcen + np.array([4.0, 0.0, 0.0])) * ls, G=4.3e-6)
+            halo.add_potential(star)
+            np.testing.assert_allclose(halo.potential(xyz), expected + star._potential(np.array([9.0])), rtol=1e-12)
+            v = np.array([[0.0, 30.0, 0.0]])
+            np.testing.assert_allclose(halo.compute_energy(xyz, v),
+                                       expected + star._potential(np.array([9.0])) + 450.0, rtol=1e-12)
+            t2 = 4.3e-6 * (inner._enclosed_mass(np.array([r_phys])) / r_phys**3
+                           + star._enclosed_mass(np.array([9.0])) / 9.0**3) / (2 * np.pi) ** 2
+            np.testing.assert_allclose(halo.orbital_time(np.array([-1.0]), xyz), 1.0 / np.sqrt(t2), rtol=1e-10)
+            assert halo.orbital_time(np.array([-1.0]), xcen[None])[0] == 0   # the NFW cusp's limit at its centre
+            np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.central_potential())
+            assert halo.tree_mass == 1e12
+            np.testing.assert_allclose(halo.binding_energy_scale(), -inner.central_potential() - star.central_potential())
+            u = halo.energy_fraction(np.array([0.5]))
+            assert np.all((u > 0) & (u < 1))
 
 
 class TestBoundness:
@@ -111,10 +100,7 @@ class TestBoundness:
 class TestTidalDenominator:
     def test_kepler(self):
         inner = KeplerPotential(M=1e12)
-        halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
-        xyz = np.array([[10.0, 0.0, 0.0]])
-        result = halo.tidal_denominator(xyz)
-        assert result == 3 * 1e12
+        assert inner.tidal_denominator(np.array([[10.0, 0.0, 0.0]]))[0] == 3 * 1e12
 
 
 class TestFromSnapshotRow:
@@ -151,6 +137,8 @@ class TestFromSnapshotRow:
         result = halo.potential(r)
         assert np.isscalar(result) or result.size == 1
         assert np.all(np.isfinite(result))
+        np.testing.assert_allclose(halo.potential_model[0].centre, [5.0, 10.0, 15.0])
+        assert np.isclose(HaloModel.from_snapshot_row(row, model="plummer").potential_model[0].a, 4.0)
 
     def test_nfw_row_rs_respects_comoving_flag(self):
         # C08: comoving=False must not also halve Rs -- same physical Rs
@@ -168,4 +156,4 @@ class TestFromSnapshotRow:
 
         halo_comoving = HaloModel.from_snapshot_row(row_comoving, model="nfw", comoving=True)
         halo_physical = HaloModel.from_snapshot_row(row_physical, model="nfw", comoving=False)
-        assert np.isclose(halo_comoving._potentials[0].Rs, halo_physical._potentials[0].Rs)
+        assert np.isclose(halo_comoving.potential_model[0].Rs, halo_physical.potential_model[0].Rs)

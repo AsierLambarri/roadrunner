@@ -9,8 +9,11 @@ RVR = 100.0
 
 
 def _make_halo(xcen, model="kepler", mass=1e12, rvir=RVR, redshift=0.0, vel=VCENTER):
-    inner = KeplerPotential(M=mass, G=4.3e-6) if model == "kepler" else NFWPotential(M=mass, Rs=10.0, c=10.0, G=4.3e-6)
-    return HaloModel(inner, np.asarray(xcen, dtype=np.float64), vel, rvir, sub_tree_id=1, redshift=redshift)
+    xcen = np.asarray(xcen, dtype=np.float64)
+    centre = xcen / (1 + redshift)
+    inner = (KeplerPotential(M=mass, G=4.3e-6, centre=centre) if model == "kepler"
+             else NFWPotential(M=mass, Rs=10.0, c=10.0, G=4.3e-6, centre=centre))
+    return HaloModel(inner, xcen, vel, rvir, sub_tree_id=1, redshift=redshift)
 
 
 class TestFunction:
@@ -75,9 +78,9 @@ class TestFunction:
         coords = np.column_stack([rng.uniform(-30, 30, (300, 3)), rng.uniform(-20, 20, (300, 3))])
         kepler, nfw = _make_halo(VCENTER), _make_halo(VCENTER, model="nfw")
         compute_halo_bound_particles([kepler, nfw], coords)
-        r_min = np.linalg.norm(coords[:, :3], axis=1).min()
-        assert kepler.inner_radius == r_min
-        np.testing.assert_allclose(kepler.binding_energy_scale(), -kepler.potential(np.array([r_min]))[0])
+        i_min = np.argmin(np.linalg.norm(coords[:, :3], axis=1))
+        np.testing.assert_array_equal(kepler.inner_position, coords[i_min, :3])
+        np.testing.assert_allclose(kepler.binding_energy_scale(), -kepler.potential_model.potential(coords[i_min:i_min + 1, :3])[0])
         np.testing.assert_allclose(nfw.binding_energy_scale(), -nfw.central_potential())
         for h in (kepler, nfw):
             b = h.get_boundness()[1]

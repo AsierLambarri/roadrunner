@@ -10,9 +10,10 @@ RVR = 100.0
 
 
 def _halo(xcen=(0.0, 0.0, 0.0), sid=1, n_bound=0):
-    inner = KeplerPotential(M=1e12, G=4.3e-6)
+    xcen = np.array(xcen, dtype=np.float64)
+    inner = KeplerPotential(M=1e12, G=4.3e-6, centre=xcen)
     h = HaloModel(
-        inner, np.array(xcen, dtype=np.float64),
+        inner, xcen,
         VCENTER, RVR, sub_tree_id=sid, redshift=0.0,
     )
     if n_bound > 0:

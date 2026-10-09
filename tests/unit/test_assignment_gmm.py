@@ -21,9 +21,10 @@ RVR = 100.0
 # ── Helpers ─────────────────────────────────────────────
 
 def _make_halo(xcen, mass=1e12, rvir=RVR, sub_tree_id=1):
-    inner = KeplerPotential(M=mass, G=4.3e-6)
+    xcen = np.asarray(xcen, dtype=np.float64)
+    inner = KeplerPotential(M=mass, G=4.3e-6, centre=xcen)
     return HaloModel(
-        inner, np.asarray(xcen, dtype=np.float64),
+        inner, xcen,
         VCENTER, rvir, sub_tree_id=sub_tree_id, redshift=0.0,
     )
 

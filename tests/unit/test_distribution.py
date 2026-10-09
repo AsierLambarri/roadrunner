@@ -7,6 +7,12 @@ from scipy.optimize import brentq
 
 from roadrunner.physics import distribution as ed
 
+_X = np.array([1.0, 0.0, 0.0])
+
+
+def _xyz(r):
+    return np.asarray(r, dtype=np.float64).reshape(-1, 1) * _X
+
 
 def _g_quad(cal, c):
     """Density of states by adaptive quadrature."""
@@ -124,11 +130,11 @@ class TestSphericalDistribution:
         from roadrunner.physics.potentials import KeplerPotential, PlummerPotential, SphericalPotential
         p, R, rng = PlummerPotential(1e10, 0.5, G=1.0), 5.0, np.random.default_rng(4)
         r_grid = np.linspace(1e-6, R, 200001)                     # uniform in the bound phase space of r <= R
-        pdf = r_grid**2 * (-2.0 * p.potential(r_grid)) ** 1.5
+        pdf = r_grid**2 * (-2.0 * p.potential(_xyz(r_grid))) ** 1.5
         cdf = np.cumsum(pdf); cdf /= cdf[-1]
         r = np.interp(rng.uniform(size=40000), cdf, r_grid)
-        v = np.sqrt(-2.0 * p.potential(r)) * rng.uniform(size=r.size) ** (1.0 / 3.0)
-        w = np.exp(p.log_phase_space_fraction(p.potential(r) + 0.5 * v**2, R))
+        v = np.sqrt(-2.0 * p.potential(_xyz(r))) * rng.uniform(size=r.size) ** (1.0 / 3.0)
+        w = np.exp(p.log_phase_space_fraction(p.potential(_xyz(r)) + 0.5 * v**2, R))
         np.testing.assert_allclose(np.quantile(w, [0.1, 0.5, 0.9]), [0.1, 0.5, 0.9], atol=0.01)
         with pytest.raises(NotImplementedError):
             SphericalPotential.energy_fraction(KeplerPotential(1e10), np.array([-1.0]), 10.0)
@@ -144,7 +150,7 @@ class TestSelfSimilarTables:
         for cls in (PlummerPotential, HernquistPotential):
             for c in (ed.SELF_SIMILAR_C[40], np.sqrt(ed.SELF_SIMILAR_C[40] * ed.SELF_SIMILAR_C[41]), 37.0):
                 p, q = cls(1e10, 0.5), cls(3e8, 0.02)
-                k = p.potential(np.array([c * p.a]))[0] / p.central_potential()
+                k = p.potential(_xyz([c * p.a]))[0] / p.central_potential()
                 eps = np.concatenate([[1 - 1e-6, 0.9, 0.5, 0.1], k * (1 + np.linspace(-0.02, 0.02, 9)), np.geomspace(1e-2, 1e-10, 9)])
                 for name in names:
                     E = eps * p.central_potential()

@@ -344,7 +344,7 @@ def compute_galaxy_properties(
         # they're combined in the tidal-radius denominator (C08 -- this was
         # previously mixing a physical potential with a comoving distance).
         physical_distance = distance * merger_tree_factor
-        rt_physical = compute_tidal_radius(host_potential, sat_mass, physical_distance)
+        rt_physical = compute_tidal_radius(host_potential, sat_mass, np.array([[physical_distance, 0.0, 0.0]]))
         r_t = rt_physical / merger_tree_factor  # back to the catalogue's comoving convention
 
         indices_int = np.asarray(indices, dtype=np.intp)

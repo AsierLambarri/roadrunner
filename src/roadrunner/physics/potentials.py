@@ -9,9 +9,13 @@ potential) are linear in mass, so they add over potentials. Provides
 :class:`PlummerPotential`, :class:`KeplerPotential` (a Plummer sphere with the
 fixed softening :const:`SOFTENING_KEPLER`), :class:`HernquistPotential`,
 :class:`NFWPotential`, :class:`ShellPotential` (the spherical potential of a
-set of particles) and :func:`get_potential` for dispatch by model name.
-Potentials are radial functions of the physical radius; their optional
-``centre`` is read by :class:`~roadrunner.physics.halo_model.HaloModel`.
+set of particles), :class:`CompositeSphericalPotential` (a sum of them) and
+:func:`get_potential` for dispatch by model name. Potentials take absolute
+physical positions ``xyz`` and measure them from their own ``centre`` (an
+absolute physical position; the origin when ``None``); each class implements
+its profile in private methods of the physical radius (``_potential(r)``,
+``_density(r)``, ...), which the distribution machinery uses on radial
+grids.
 Radii may be 0: every method evaluates its formula on the whole array and
 replaces the 0/0 or 0·∞ it meets at the centre by the limit there. The
 energy distribution and the phase-space fraction come from
@@ -29,6 +33,7 @@ from scipy.integrate import cumulative_trapezoid
 from scipy.special import betainc
 
 from roadrunner._mcf_types import PotentialModel
+from roadrunner.mixture._math import row_squared_norms
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 from roadrunner.physics.distribution import (
     PROFILE_HERNQUIST,
@@ -52,7 +57,9 @@ _MASS_GRID_INNER = 1e-8            # innermost node / outermost radius (plus r =
 class SphericalPotential(PotentialModel):
     """Spherical potential: the protocol's methods from a potential and a density.
 
-    A concrete potential implements :meth:`potential` and :meth:`density`. The
+    A concrete potential implements its profile in the physical radius,
+    ``_potential(r)`` and ``_density(r)``; the public methods take absolute
+    physical positions and measure them from :attr:`centre`. The
     enclosed mass and the central potential have generic forms (the
     trapezoid rule over the density; the potential at ``r = 0``),
     which a concrete potential overrides with its exact ones. The orbital time
@@ -69,18 +76,26 @@ class SphericalPotential(PotentialModel):
     G : float, default=G_KM
         Gravitational constant.
     centre : ndarray of shape (3,), optional
-        Centre in the particles' (merger-tree) coordinates, read by
-        :class:`HaloModel`; ``None`` is the halo's own centre.
+        Absolute physical position of the potential's centre; the origin
+        when ``None``.
+
+    Attributes
+    ----------
+    has_distribution : bool
+        Whether :meth:`distribution_function` is defined (class attribute;
+        ``False`` for a point mass and for a particle set).
     """
+
+    has_distribution = True
 
     def __init__(self, M, G=G_KM, centre=None):
         self.M = M
         self.G = G
-        self.centre = centre
+        self.centre = np.zeros(3) if centre is None else np.asarray(centre, dtype=np.float64)
         self._distributions = {}
 
     @abstractmethod
-    def potential(self, r):
+    def _potential(self, r):
         """Potential ``Φ(r)`` at physical radii ``r``.
 
         Parameters
@@ -93,7 +108,7 @@ class SphericalPotential(PotentialModel):
         """
 
     @abstractmethod
-    def density(self, r):
+    def _density(self, r):
         """Density ``ρ(r)`` at physical radii ``r``.
 
         Parameters
@@ -105,7 +120,7 @@ class SphericalPotential(PotentialModel):
         rho : ndarray
         """
 
-    def enclosed_mass(self, r):
+    def _enclosed_mass(self, r):
         """Mass ``M(<r) = ∫_0^r 4π x² ρ(x) dx`` by the trapezoid rule.
 
         Nodes: ``r = 0`` and ``_MASS_GRID_NODES`` log-spaced radii from
@@ -123,7 +138,7 @@ class SphericalPotential(PotentialModel):
         r = np.asarray(r, dtype=np.float64)
         x = r.max(initial=0.0) * np.concatenate(([0.0], np.geomspace(_MASS_GRID_INNER, 1.0, _MASS_GRID_NODES)))
         with np.errstate(divide="ignore", invalid="ignore"):
-            f = np.nan_to_num(4 * np.pi * x**2 * self.density(x), nan=0.0)
+            f = np.nan_to_num(4 * np.pi * x**2 * self._density(x), nan=0.0)
         return np.interp(r, x, cumulative_trapezoid(f, x, initial=0.0))
 
     def central_potential(self):
@@ -133,7 +148,7 @@ class SphericalPotential(PotentialModel):
         -------
         phi0 : float
         """
-        return float(self.potential(np.zeros(1))[0])
+        return float(self._potential(np.zeros(1))[0])
 
     def profile(self):
         """Compiled description for the q and g quadratures: rows ``(kind, k, a)`` summed by :func:`~roadrunner.physics.distribution.profile_phi`.
@@ -147,14 +162,14 @@ class SphericalPotential(PotentialModel):
         """
         return None
 
-    def well_depth(self, r_inner):
+    def well_depth(self, xyz):
         """Depth ``-Φ₀`` of the potential well, the scale of its binding energies.
 
         Parameters
         ----------
-        r_inner : float
-            Innermost resolved radius (physical); unused by a well with a
-            finite centre.
+        xyz : ndarray of shape (1, 3)
+            Absolute physical position of the innermost particle; unused by a
+            well with a finite centre.
 
         Returns
         -------
@@ -162,7 +177,7 @@ class SphericalPotential(PotentialModel):
         """
         return -self.central_potential()
 
-    def orbital_time(self, E, r):
+    def _orbital_time(self, E, r):
         """Orbital timescale: the dynamical time ``2π sqrt(r³ / (G M(<r)))`` at the instantaneous radius.
 
         ``inf`` where no mass is enclosed. At ``r = 0`` it is the limit
@@ -180,11 +195,11 @@ class SphericalPotential(PotentialModel):
         t : ndarray
         """
         with np.errstate(divide="ignore", invalid="ignore"):
-            t = _2PI * np.sqrt(r**3 / (self.G * self.enclosed_mass(r)))
-            t0 = _2PI * np.sqrt(3 / (4 * np.pi * self.G * self.density(np.zeros(1))[0]))
+            t = _2PI * np.sqrt(r**3 / (self.G * self._enclosed_mass(r)))
+            t0 = _2PI * np.sqrt(3 / (4 * np.pi * self.G * self._density(np.zeros(1))[0]))
         return np.nan_to_num(t, nan=t0, posinf=np.inf)
 
-    def tidal_denominator(self, r):
+    def _tidal_denominator(self, r):
         """Tidal denominator ``3 M(<r) - dM/d ln r``, with ``dM/d ln r = 4π r³ ρ(r)`` (0 at ``r = 0``).
 
         Parameters
@@ -196,8 +211,75 @@ class SphericalPotential(PotentialModel):
         denom : ndarray
         """
         with np.errstate(divide="ignore", invalid="ignore"):
-            dm_dlnr = np.nan_to_num(4 * np.pi * r**3 * self.density(r), nan=0.0)
-        return 3 * self.enclosed_mass(r) - dm_dlnr
+            dm_dlnr = np.nan_to_num(4 * np.pi * r**3 * self._density(r), nan=0.0)
+        return 3 * self._enclosed_mass(r) - dm_dlnr
+
+    def potential(self, xyz):
+        """Potential at absolute physical positions, measured from :attr:`centre`.
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        phi : ndarray of shape (n,)
+        """
+        return self._potential(np.sqrt(row_squared_norms(np.asarray(xyz, dtype=np.float64) - self.centre)))
+
+    def density(self, xyz):
+        """Density at absolute physical positions, measured from :attr:`centre`.
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        rho : ndarray of shape (n,)
+        """
+        return self._density(np.sqrt(row_squared_norms(np.asarray(xyz, dtype=np.float64) - self.centre)))
+
+    def enclosed_mass(self, xyz):
+        """Mass inside the sphere about :attr:`centre` through each absolute physical position.
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        menc : ndarray of shape (n,)
+        """
+        return self._enclosed_mass(np.sqrt(row_squared_norms(np.asarray(xyz, dtype=np.float64) - self.centre)))
+
+    def tidal_denominator(self, xyz):
+        """Tidal denominator at absolute physical positions, measured from :attr:`centre`.
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        denom : ndarray of shape (n,)
+        """
+        return self._tidal_denominator(np.sqrt(row_squared_norms(np.asarray(xyz, dtype=np.float64) - self.centre)))
+
+    def orbital_time(self, E, xyz):
+        """Orbital timescale of energies ``E`` at absolute physical positions, measured from :attr:`centre`.
+
+        Parameters
+        ----------
+        E : ndarray
+            Specific orbital energies.
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        t : ndarray of shape (n,)
+        """
+        return self._orbital_time(E, np.sqrt(row_squared_norms(np.asarray(xyz, dtype=np.float64) - self.centre)))
 
     def distribution_function(self, E):
         """Isotropic distribution function ``f(E)`` of the potential's own, untruncated density.
@@ -308,7 +390,7 @@ class SelfSimilarPotential(SphericalPotential):
     def _lookup(self, name, E, r_max, deep=False):
         """Shared-table value ``name`` at physical energies ``E`` inside ``r_max``."""
         phi0 = self.central_potential()
-        eps_kink = float(self.potential(np.array([r_max], dtype=np.float64))[0]) / phi0
+        eps_kink = float(self._potential(np.array([r_max], dtype=np.float64))[0]) / phi0
         return self_similar_lookup(getattr(_self_similar_tables(type(self)), name),
                                    np.asarray(E, dtype=np.float64) / phi0, eps_kink, r_max / self.a, deep)
 
@@ -357,7 +439,7 @@ class PlummerPotential(SelfSimilarPotential):
         super().__init__(M, G=G, centre=centre)
         self.a = a
 
-    def potential(self, r):
+    def _potential(self, r):
         """``-G M / sqrt(r² + a²)``.
 
         Parameters
@@ -372,7 +454,7 @@ class PlummerPotential(SelfSimilarPotential):
         r_safe = np.sqrt(r**2 + self.a**2)
         return -self.G * self.M / r_safe
 
-    def density(self, r):
+    def _density(self, r):
         """``3 M / (4π a³) (1 + r²/a²)^(-5/2)``.
 
         Parameters
@@ -385,7 +467,7 @@ class PlummerPotential(SelfSimilarPotential):
         """
         return 3 * self.M / (4 * np.pi * self.a**3) * (1 + r**2 / self.a**2) ** -2.5
 
-    def enclosed_mass(self, r):
+    def _enclosed_mass(self, r):
         """Exact: ``M r³ / (r² + a²)^(3/2)``.
 
         Parameters
@@ -411,7 +493,7 @@ class PlummerPotential(SelfSimilarPotential):
         """One Plummer row ``(PROFILE_PLUMMER, G M, a)``."""
         return np.array([[PROFILE_PLUMMER, self.G * self.M, self.a]])
 
-    def orbital_time(self, E, r):
+    def _orbital_time(self, E, r):
         """Exact dynamical time ``2π sqrt((r² + a²)^(3/2) / (G M))``, finite at ``r = 0``.
 
         Parameters
@@ -426,7 +508,7 @@ class PlummerPotential(SelfSimilarPotential):
         """
         return _2PI * np.sqrt((r**2 + self.a**2) ** 1.5 / (self.G * self.M))
 
-    def tidal_denominator(self, r):
+    def _tidal_denominator(self, r):
         """Exact: ``3 M(<r) - 4π r³ ρ = 3 M r⁵ / (r² + a²)^(5/2)``, without the generic form's cancellation at small ``r``.
 
         Parameters
@@ -479,10 +561,12 @@ class KeplerPotential(PlummerPotential):
         See :class:`SphericalPotential`.
     """
 
+    has_distribution = False
+
     def __init__(self, M, G=G_KM, centre=None):
         super().__init__(M, SOFTENING_KEPLER, G=G, centre=centre)
 
-    def orbital_time(self, E, r):
+    def _orbital_time(self, E, r):
         """Kepler period ``2π sqrt(s³ / (G M))``, ``s = -G M / (2E)``, of bound particles; 0 when ``E >= 0``.
 
         Unbound particles have no orbit (I03): their ``s <= 0`` makes the
@@ -504,7 +588,7 @@ class KeplerPotential(PlummerPotential):
             t = _2PI * np.sqrt(s**3 / (self.G * self.M))
         return np.nan_to_num(t, nan=0.0, posinf=np.inf)
 
-    def tidal_denominator(self, r):
+    def _tidal_denominator(self, r):
         """Point-mass tidal denominator ``3 M`` at every radius.
 
         The softened (Plummer) form would vanish inside the softening.
@@ -523,22 +607,22 @@ class KeplerPotential(PlummerPotential):
         """Not defined: the softened central value is not physical."""
         raise NotImplementedError("The Kepler potential has no finite central potential.")
 
-    def well_depth(self, r_inner):
-        """Depth ``-Φ(r_inner)`` of the well at the innermost resolved radius.
+    def well_depth(self, xyz):
+        """Depth ``-Φ`` of the well at the innermost particle.
 
         A point mass's ``Φ₀`` is set by the softening alone, so its depth is
         taken where the data stop resolving it.
 
         Parameters
         ----------
-        r_inner : float
-            Innermost resolved radius (physical).
+        xyz : ndarray of shape (1, 3)
+            Absolute physical position of the innermost particle.
 
         Returns
         -------
         depth : float
         """
-        return -float(self.potential(np.array([r_inner], dtype=np.float64))[0])
+        return -float(self.potential(xyz)[0])
 
     def distribution_function(self, E):
         """Not defined: a point mass has no extended mass distribution, so no energy distribution.
@@ -601,7 +685,7 @@ class HernquistPotential(SelfSimilarPotential):
         super().__init__(M, G=G, centre=centre)
         self.a = a
 
-    def potential(self, r):
+    def _potential(self, r):
         """``-G M / (r + a)``.
 
         Parameters
@@ -615,7 +699,7 @@ class HernquistPotential(SelfSimilarPotential):
         """
         return -self.G * self.M / (r + self.a)
 
-    def density(self, r):
+    def _density(self, r):
         """``M a / (2π r (r + a)³)``; infinite at ``r = 0``.
 
         Parameters
@@ -629,7 +713,7 @@ class HernquistPotential(SelfSimilarPotential):
         with np.errstate(divide="ignore"):
             return self.M * self.a / (2 * np.pi * r * (r + self.a) ** 3)
 
-    def enclosed_mass(self, r):
+    def _enclosed_mass(self, r):
         """Exact: ``M r² / (r + a)²``.
 
         Parameters
@@ -655,7 +739,7 @@ class HernquistPotential(SelfSimilarPotential):
         """One Hernquist row ``(PROFILE_HERNQUIST, G M, a)``."""
         return np.array([[PROFILE_HERNQUIST, self.G * self.M, self.a]])
 
-    def orbital_time(self, E, r):
+    def _orbital_time(self, E, r):
         """Exact dynamical time ``2π (r + a) sqrt(r / (G M))``, 0 at ``r = 0``.
 
         Parameters
@@ -725,7 +809,7 @@ class NFWPotential(SphericalPotential):
         self.Rs = Rs
         self.c = c
 
-    def potential(self, r):
+    def _potential(self, r):
         """``Φ₀ ln(1 + x) / x``, ``x = r / Rs``: ``Φ₀`` at ``r = 0`` (the 0/0 limit).
 
         Parameters
@@ -742,7 +826,7 @@ class NFWPotential(SphericalPotential):
             phi = phi0 * np.log1p(x) / x
         return np.nan_to_num(phi, nan=phi0)
 
-    def density(self, r):
+    def _density(self, r):
         """``M / (4π A Rs² r (1 + x)²)``, ``x = r / Rs``; infinite at ``r = 0`` (the cusp).
 
         Parameters
@@ -758,7 +842,7 @@ class NFWPotential(SphericalPotential):
         with np.errstate(divide="ignore"):
             return self.M / (4 * np.pi * A * self.Rs**2 * r * (1 + x) ** 2)
 
-    def enclosed_mass(self, r):
+    def _enclosed_mass(self, r):
         """Exact: ``M A(x) / A(c)``, ``A(x) = ln(1 + x) - x/(1 + x)``, ``x = r / Rs``.
 
         ``ln(1 + x)`` is ``log1p``: ``A(x) ≈ x²/2`` at small ``x`` stays
@@ -777,7 +861,7 @@ class NFWPotential(SphericalPotential):
         B = np.log1p(x) - x / (1 + x)
         return self.M * B / A
 
-    def tidal_denominator(self, r):
+    def _tidal_denominator(self, r):
         """Exact: ``3 M(<r) - 4π r³ ρ = (M / A(c)) (3 A(x) - x² / (1 + x)²)``.
 
         ``A(x) = ln(1 + x) - x/(1 + x)``, ``x = r / Rs``: the untruncated
@@ -1004,8 +1088,9 @@ class ShellPotential(SphericalPotential):
 
     Parameters
     ----------
-    r : ndarray of shape (N,)
-        Physical radii of the particles from the centre.
+    xyz : ndarray of shape (N, 3)
+        Absolute physical positions of the particles; their radii are
+        measured from ``centre``.
     m : float or ndarray of shape (N,)
         Particle masses.
     G : float, default=G_KM
@@ -1021,8 +1106,11 @@ class ShellPotential(SphericalPotential):
         See :class:`SphericalPotential`.
     """
 
-    def __init__(self, r, m, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=4096, tidal_dlnr=0.1, centre=None):
-        r = np.asarray(r, dtype=np.float64)
+    has_distribution = False
+
+    def __init__(self, xyz, m, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=4096, tidal_dlnr=0.1, centre=None):
+        origin = np.zeros(3) if centre is None else np.asarray(centre, dtype=np.float64)
+        r = np.sqrt(row_squared_norms(np.asarray(xyz, dtype=np.float64) - origin))
         m = np.broadcast_to(np.asarray(m, dtype=np.float64), r.shape)
         r_min = max(r.min(), softening)
         d = (np.log(max(r.max(), softening) / r_min) or 1.0) / n_nodes
@@ -1042,7 +1130,7 @@ class ShellPotential(SphericalPotential):
         self._w = max(1, round(tidal_dlnr * self._inv_d))
         super().__init__(float(m_in[-1]), G=G, centre=centre)
 
-    def potential(self, r):
+    def _potential(self, r):
         """Evaluate the potential.
 
         Parameters
@@ -1057,7 +1145,7 @@ class ShellPotential(SphericalPotential):
         r = np.asarray(r)
         return _shell_potential_kernel(r.ravel(), self._coef, self._c, self._inv_d, self._K).reshape(r.shape)
 
-    def density(self, r):
+    def _density(self, r):
         """``ρ = γ M(<r) / (4π r³)``, ``γ = d ln M / d ln r``; 0 where ``M(<r) = 0``.
 
         The log slope is the difference of ``ln M(<r)`` across
@@ -1085,7 +1173,7 @@ class ShellPotential(SphericalPotential):
             rho = gamma * menc[b] / (4 * np.pi * r.ravel() ** 3)
         return np.where(menc[b] > 0, rho, 0.0).reshape(r.shape)
 
-    def enclosed_mass(self, r):
+    def _enclosed_mass(self, r):
         """Exact for the interpolated potential: ``M(<r) = -(dΦ/d(1/r)) / G``, constant in each cell, 0 inside the innermost node.
 
         Parameters
@@ -1116,6 +1204,191 @@ class ShellPotential(SphericalPotential):
         needs only the potential, is the generic one.
         """
         raise NotImplementedError("ShellPotential has no energy distribution yet.")
+
+
+# Methods a single component answers itself, exactly (its closed forms and tables).
+_OWN_METHODS = ("orbital_time", "_orbital_time", "distribution_function", "energy_fraction", "log_energy_density",
+                "log_phase_space_fraction")
+
+
+class CompositeSphericalPotential(SphericalPotential):
+    """Sum of spherical potentials: the total potential of a halo built from several components.
+
+    An immutable, iterable container of its components (``for p in composite``, ``len``,
+    indexing). The primitives and the quantities linear in mass are the sums of the
+    components' own methods (potential, density, enclosed mass, central potential, well
+    depth, tidal denominator), so every component keeps its exact forms; the profile stacks
+    their rows. The public methods take absolute physical positions and measure each
+    component from its own ``centre``; the private profile in ``r`` (which the distribution
+    machinery uses) treats every component as centred on the composite's centre, its first
+    component's.
+
+    The orbital time combines the components' own as ``t^-2 = Σ t_i^-2``, exact for
+    dynamical times (``t_i^-2 ∝ M_i(<r)``). The energy distribution and the phase-space
+    fraction are those of the whole: the generic
+    :class:`~roadrunner.physics.distribution.SphericalDistribution` of the composite, with
+    ``f`` Eddington's inversion of the summed density in the summed potential and the q
+    and g quadratures compiled through the stacked :meth:`profile`. ``f``, and so the
+    energy pair, exists only when every component has one (``has_distribution``); the
+    phase-space fraction exists for any components.
+
+    A single component answers those (``_OWN_METHODS``) itself, chosen once at
+    construction: its own orbital time, tables and closed forms, exactly.
+
+    Parameters
+    ----------
+    *components : SphericalPotential
+        At least one, all with the same ``G`` (the generic route uses one ``G``).
+
+    Raises
+    ------
+    ValueError
+        If the components' ``G`` differ.
+    """
+
+    def __init__(self, *components):
+        if len({p.G for p in components}) > 1:
+            raise ValueError("The components of a composite potential must share G.")
+        self._components = tuple(components)
+        super().__init__(sum(p.M for p in components), G=components[0].G, centre=components[0].centre)
+        self.has_distribution = all(p.has_distribution for p in components)
+        if len(components) == 1:
+            for name in _OWN_METHODS:
+                setattr(self, name, getattr(components[0], name))
+
+    def __iter__(self):
+        return iter(self._components)
+
+    def __len__(self):
+        return len(self._components)
+
+    def __getitem__(self, i):
+        return self._components[i]
+
+    def _sum(self, method, *args):
+        """``Σ method(*args)`` over the components, starting from the first (one component's value as is)."""
+        first, *rest = self._components
+        return sum((getattr(p, method)(*args) for p in rest), getattr(first, method)(*args))
+
+    def _potential(self, r):
+        """Co-centred summed potential ``Σ Φ_i(r)`` (the spherical profile the distributions use)."""
+        return self._sum("_potential", r)
+
+    def _density(self, r):
+        """Co-centred summed density ``Σ ρ_i(r)``."""
+        return self._sum("_density", r)
+
+    def _enclosed_mass(self, r):
+        """Co-centred summed enclosed mass ``Σ M_i(<r)``."""
+        return self._sum("_enclosed_mass", r)
+
+    def _tidal_denominator(self, r):
+        """Co-centred summed tidal denominator, each component's exact one."""
+        return self._sum("_tidal_denominator", r)
+
+    def _orbital_time(self, E, r):
+        """Co-centred orbital timescale ``(Σ t_i^-2)^(-1/2)``."""
+        with np.errstate(divide="ignore"):
+            return 1.0 / np.sqrt(sum(1.0 / p._orbital_time(E, r) ** 2 for p in self._components))
+
+    def potential(self, xyz):
+        """Potential ``Σ Φ_i`` at absolute physical positions, each component from its own centre.
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        phi : ndarray of shape (n,)
+        """
+        return self._sum("potential", xyz)
+
+    def density(self, xyz):
+        """Density ``Σ ρ_i`` at absolute physical positions, each component from its own centre."""
+        return self._sum("density", xyz)
+
+    def enclosed_mass(self, xyz):
+        """``Σ M_i(<r_i)``, each component's mass inside the sphere about its own centre through each position."""
+        return self._sum("enclosed_mass", xyz)
+
+    def tidal_denominator(self, xyz):
+        """Summed tidal denominator at absolute physical positions, each component from its own centre."""
+        return self._sum("tidal_denominator", xyz)
+
+    def orbital_time(self, E, xyz):
+        """Orbital timescale ``t = (Σ t_i^-2)^(-1/2)`` over the components' own, each from its own centre.
+
+        Exact for dynamical times ``t_i = 2π sqrt(r_i³ / (G M_i(<r_i)))``, whose ``t_i^-2`` is
+        linear in the enclosed mass. A component with ``t_i = 0`` (a cusp, or a point mass's
+        unbound particle) gives ``t = 0``; one with ``t_i = ∞`` (no mass enclosed) contributes
+        nothing. A point mass's period, taken at the total energy ``E``, enters the same way;
+        that combination is not exact.
+
+        Parameters
+        ----------
+        E : ndarray
+            Specific orbital energies (in the total potential).
+        xyz : ndarray of shape (n, 3)
+
+        Returns
+        -------
+        t : ndarray of shape (n,)
+        """
+        with np.errstate(divide="ignore"):
+            return 1.0 / np.sqrt(sum(1.0 / p.orbital_time(E, xyz) ** 2 for p in self._components))
+
+    def central_potential(self):
+        """Summed central potential ``Σ Φ_i(0)``; raises if a component has none (Kepler).
+
+        Returns
+        -------
+        phi0 : float
+        """
+        return self._sum("central_potential")
+
+    def well_depth(self, xyz):
+        """Summed well depth, each component's at the innermost particle's absolute physical position.
+
+        Parameters
+        ----------
+        xyz : ndarray of shape (1, 3)
+
+        Returns
+        -------
+        depth : float
+        """
+        return self._sum("well_depth", xyz)
+
+    def profile(self):
+        """The components' profile rows stacked; ``None`` if any component has none (Shell).
+
+        Returns
+        -------
+        profile : ndarray of shape (n, 3) or None
+        """
+        rows = [p.profile() for p in self._components]
+        return None if any(row is None for row in rows) else np.vstack(rows)
+
+    def distribution_function(self, E):
+        """Eddington's ``f`` of the summed density in the summed potential.
+
+        Parameters
+        ----------
+        E : ndarray
+
+        Returns
+        -------
+        f : ndarray
+
+        Raises
+        ------
+        NotImplementedError
+            If a component has no distribution function (Kepler, Shell).
+        """
+        if not self.has_distribution:
+            raise NotImplementedError("A component of this composite potential has no energy distribution.")
+        return super().distribution_function(E)
 
 
 _POTENTIAL_MODELS: dict[str, type[SphericalPotential]] = {

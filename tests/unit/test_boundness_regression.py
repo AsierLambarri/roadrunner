@@ -29,17 +29,16 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
             halo.set_boundness(empty_idx, empty_val, empty_val)
             continue
 
-        rel_pos = positions[local] - halo.xcen
-        rel_vel = velocities[local] - halo.velocity
-        dist = np.linalg.norm(rel_pos, axis=1)
+        pos, vel = positions[local], velocities[local]
+        rel_vel = vel - halo.velocity
         vel_mags = np.linalg.norm(rel_vel, axis=1)
 
-        halo.inner_radius = float(dist.min())
+        halo.inner_position = pos[np.argmin(np.linalg.norm(pos - halo.xcen, axis=1))]
         v_vir_sq = halo.binding_energy_scale()                   # the halo-owned scale
-        phi = halo.potential(dist)
+        phi = halo.potential(pos)
         v_esc = np.sqrt(2 * np.abs(phi))
         boundness = 0.5 * (v_esc**2 - vel_mags**2) / v_vir_sq
-        tdyns = halo.orbital_time(phi + 0.5 * vel_mags**2, dist)
+        tdyns = halo.orbital_time(phi + 0.5 * vel_mags**2, pos)
 
         bound = vel_mags <= v_esc
         valid = local[bound]
@@ -60,6 +59,7 @@ def _make_halo(position, velocity, mass, rvir, rs, hid, redshift=0.1,
     if model == "nfw":
         kwargs["Rs"] = rs / (1 + redshift)
         kwargs["c"] = rvir / rs
+    kwargs["centre"] = np.asarray(position, dtype=np.float64) / (1 + redshift)
     from roadrunner.physics.potentials import get_potential
     inner = get_potential(model, **kwargs)
     return HaloModel(
