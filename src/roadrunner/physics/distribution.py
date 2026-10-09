@@ -37,7 +37,9 @@ the boundness search sphere, ``search_factor`` virial radii):
 and ``q`` count only what lies inside ``R``, the volume the pipeline looks
 at. :class:`SphericalDistribution` computes all of them for any potential
 from its primitives (potential, enclosed mass, density); potentials
-override them where exact forms exist.
+override them where exact forms exist. Self-similar profiles (Plummer,
+Hernquist) share one set of such tables per process, with rows over
+``c = R / a`` (:func:`self_similar_tables`).
 
 The NFW tables below are those exact forms for NFW, in scaled units
 ``G = Rs = 1``, ``phi(x) = -ln(1 + x) / x``. They take ``eps``, their
@@ -50,23 +52,28 @@ Precision: everything here is float64, inputs read as float64 and outputs
 returned in it. Finite differences of ``ρ`` and deep quadratures need it,
 and so do the plausibility models that exponentiate these quantities: a
 float32 cast here shifts their float32 latent prior by tens of ulp. Those
-models cast their own output to ``math_dtype()``.
+models cast their own output to ``math_dtype()``. Table queries
+(:func:`table_query`), the Eddington quadrature and, for potentials with a
+``profile()`` (:func:`profile_phi`), the q and g quadratures are compiled
+with numba and parallel.
 """
 
 import functools
 from typing import NamedTuple
 
 import numpy as np
+from numba import njit, prange
 
 
 C_GRID = np.geomspace(1.0, 100.0, 48)
-_LOG_C = np.log(C_GRID)
 _DEEPEST = 1e-6                                 # deepest node of every table: calE = 1e-6
 _KINK_GAP = 1e-3                                # first node past the kink, as a fraction of the way to E = 0
 _NFW_NODES = 400, 370                           # nodes deeper and shallower than the kink (see _depth_nodes)
 _X = np.geomspace(1e-7, 1e10, 34000)           # radial grid of the inversion
 _NODES, _WEIGHTS = np.polynomial.legendre.leggauss(96)
 _W, _WW = 0.5 * (_NODES + 1.0), 0.5 * _WEIGHTS  # Gauss-Legendre on [0, 1]
+_TINY = 2.2250738585072014e-308                 # smallest normal float64
+PROFILE_PLUMMER, PROFILE_HERNQUIST, PROFILE_NFW = 0.0, 1.0, 2.0   # kinds of profile rows (see profile_phi)
 
 
 def trapezoid_weights(x):
@@ -86,6 +93,132 @@ def trapezoid_weights(x):
     w[:-1] += 0.5 * dx
     w[1:] += 0.5 * dx
     return w
+
+
+@njit(cache=True)
+def _interp1(x, xp, fp):
+    """``np.interp`` at one ``x``: linear between the increasing nodes ``xp``, held at the end nodes (NaN stays NaN)."""
+    n = xp.size
+    if x <= xp[0]:
+        return fp[0]
+    if x >= xp[n - 1]:
+        return fp[n - 1]
+    lo, hi = 0, n - 1
+    while hi - lo > 1:
+        mid = (lo + hi) >> 1
+        if xp[mid] <= x:
+            lo = mid
+        else:
+            hi = mid
+    return fp[lo] + (x - xp[lo]) / (xp[hi] - xp[lo]) * (fp[hi] - fp[lo])
+
+
+@njit(parallel=True, cache=True)
+def _table_query_kernel(eps, nodes, row, slope):
+    """:func:`table_query` on a flat ``eps`` (parallel)."""
+    out = np.empty(eps.size)
+    last = nodes[nodes.size - 1]
+    cal_last = 1.0 - last
+    deep = slope == slope                                   # a finite slope switches the deep extension on
+    for i in prange(eps.size):
+        e = eps[i]
+        if deep and e > last:
+            out[i] = row[row.size - 1] + slope * np.log(max(1.0 - e, _TINY) / cal_last)
+        else:
+            out[i] = _interp1(e, nodes, row)
+    return out
+
+
+def table_query(eps, nodes, row, deep_slope=None):
+    """Values of a table at scaled energies ``eps = E / Φ₀`` (compiled, parallel over ``eps``).
+
+    Linear in ``eps`` between the increasing ``nodes``, held at the end nodes. With
+    ``deep_slope``, energies deeper than the deepest node follow the power law
+    ``row[-1] + deep_slope ln(calE / calE_last)`` instead (``calE = 1 - eps``, floored at the
+    smallest normal float so energies at or below ``Φ₀`` stay finite).
+
+    Parameters
+    ----------
+    eps : ndarray
+    nodes, row : ndarray of shape (n,)
+    deep_slope : float, optional
+
+    Returns
+    -------
+    values : ndarray of float64, shape of ``eps``
+    """
+    eps = np.asarray(eps, dtype=np.float64)
+    slope = np.nan if deep_slope is None else float(deep_slope)
+    out = _table_query_kernel(np.ascontiguousarray(eps).ravel(), np.ascontiguousarray(nodes, dtype=np.float64),
+                              np.ascontiguousarray(row, dtype=np.float64), slope)
+    return out.reshape(eps.shape)
+
+
+def _node_slope(nodes, row):
+    """Slope of ``row`` against ``ln calE`` through the two deepest nodes (``calE = 1 - nodes``)."""
+    cal = 1.0 - nodes[-2:]
+    return (row[-1] - row[-2]) / np.log(cal[1] / cal[0])
+
+
+@njit(cache=True)
+def profile_phi(profile, r):
+    """Potential at radius ``r`` of a profile: the sum of its rows ``(kind, k, a)``.
+
+    ``PROFILE_PLUMMER``: ``-k / sqrt(r² + a²)``; ``PROFILE_HERNQUIST``: ``-k / (r + a)``;
+    ``PROFILE_NFW``: ``-k ln(1 + r/a) / r`` (``-k / a`` at ``r = 0``). ``k`` is ``G M`` (NFW:
+    ``G M / A(c)``) and ``a`` the scale radius. A composite potential stacks its components' rows.
+    """
+    phi = 0.0
+    for j in range(profile.shape[0]):
+        kind, k, a = profile[j, 0], profile[j, 1], profile[j, 2]
+        if kind == PROFILE_PLUMMER:
+            phi -= k / np.sqrt(r * r + a * a)
+        elif kind == PROFILE_HERNQUIST:
+            phi -= k / (r + a)
+        elif r == 0.0:
+            phi -= k / a
+        else:
+            phi -= k * np.log1p(r / a) / r
+    return phi
+
+
+@njit(parallel=True, cache=True)
+def _q_and_g_kernel(energy, x_max, profile, w, ww):
+    """Phase-space volume and density of states of a profile at flat ``energy`` (parallel; see ``SphericalDistribution._q_and_g``)."""
+    q = np.empty(energy.size)
+    g = np.empty(energy.size)
+    for i in prange(energy.size):
+        sq = 0.0
+        sg = 0.0
+        for k in range(w.size):
+            x = x_max[i] * (1.0 - w[k] * w[k])
+            kin2 = max(2.0 * (energy[i] - profile_phi(profile, x)), 0.0)
+            wt = 16.0 * np.pi**2 * ww[k] * 2.0 * x_max[i] * w[k] * x * x
+            root = np.sqrt(kin2)
+            sq += wt * kin2 * root
+            sg += wt * root
+        q[i] = sq / 3.0
+        g[i] = sg
+    return q, g
+
+
+@njit(parallel=True, cache=True)
+def _eddington_kernel(b, depth, psi, d2, w, ww):
+    """:func:`_eddington_integral` on flat ``b`` and ``depth`` (parallel)."""
+    f = np.empty(b.size)
+    norm = np.sqrt(8.0) * np.pi**2
+    for i in prange(b.size):
+        bi = max(b[i], 0.0)
+        di = max(depth[i], _TINY)
+        t_max = np.arcsinh(np.sqrt(bi / di))
+        root = np.sqrt(di)
+        s = 0.0
+        for k in range(w.size):
+            t = t_max * w[k]
+            sh = root * np.sinh(t)
+            s += ww[k] * 2.0 * _interp1(bi - sh * sh, psi, d2) * root * np.cosh(t)
+        f[i] = t_max * s / norm
+    return f
 
 
 def nfw_phi(x):
@@ -182,14 +315,14 @@ def _eddington_integral(b, depth, psi, d2):
     Returns
     -------
     f : ndarray
+
+    Compiled, parallel over ``b``.
     """
-    b = np.clip(b, 0.0, None)
-    depth = np.maximum(depth, np.finfo(np.float64).tiny)
-    t_max = np.arcsinh(np.sqrt(b / depth))
-    t = t_max[..., None] * _W
-    root = np.sqrt(depth)[..., None]
-    d2_at = np.interp(b[..., None] - (root * np.sinh(t)) ** 2, psi, d2)
-    return t_max * np.sum(_WW * 2.0 * d2_at * root * np.cosh(t), axis=-1) / (np.sqrt(8.0) * np.pi**2)
+    b = np.asarray(b, dtype=np.float64)
+    depth = np.broadcast_to(np.asarray(depth, dtype=np.float64), b.shape)
+    f = _eddington_kernel(np.ascontiguousarray(b).ravel(), np.ascontiguousarray(depth).ravel(),
+                          np.ascontiguousarray(psi, dtype=np.float64), np.ascontiguousarray(d2, dtype=np.float64), _W, _WW)
+    return f.reshape(b.shape)
 
 
 def _eddington(b):
@@ -318,22 +451,23 @@ def _deep_tail(n, cal):
     return n[..., 1] * cal[..., 1] / (p + 1.0)
 
 
-def _row(table, c):
-    """Row of ``table`` at concentration ``c``: linear in log c between rows (node by node, kink to kink), clipped to the grid."""
-    lc = np.log(np.clip(c, C_GRID[0], C_GRID[-1]))
-    j = int(np.clip(np.searchsorted(_LOG_C, lc), 1, len(C_GRID) - 1))
-    w = (lc - _LOG_C[j - 1]) / (_LOG_C[j] - _LOG_C[j - 1])
+def _row(table, grid, c):
+    """Row of ``table`` at ``c``: linear in log c between the rows of ``grid`` (node by node, kink to kink), clipped to the grid."""
+    log_grid = np.log(grid)
+    lc = np.log(np.clip(c, grid[0], grid[-1]))
+    j = int(np.clip(np.searchsorted(log_grid, lc), 1, len(grid) - 1))
+    w = (lc - log_grid[j - 1]) / (log_grid[j] - log_grid[j - 1])
     return (1.0 - w) * table[j - 1] + w * table[j]
 
 
 def _lookup(table, eps, c):
     """``table`` at scaled energies ``eps`` and concentration ``c``.
 
-    Linear in ``eps`` between the row's nodes (one ``np.interp``), held
+    Linear in ``eps`` between the row's nodes (:func:`table_query`), held
     at the end nodes beyond them; ``c`` is clipped to the grid.
     """
     c = np.clip(c, C_GRID[0], C_GRID[-1])
-    return np.interp(np.asarray(eps, dtype=np.float64), _nfw_nodes(c), _row(table, c))
+    return table_query(eps, _nfw_nodes(c), _row(table, C_GRID, c))
 
 
 def nfw_energy_fraction(eps, c):
@@ -394,12 +528,9 @@ def nfw_log_phase_space_fraction(eps, c):
     log_w : ndarray
         ``<= 0``.
     """
-    eps = np.atleast_1d(np.asarray(eps, dtype=np.float64))
-    cal = 1.0 - eps
-    log_w = _lookup(nfw_energy_tables().log_volume_fraction, eps, c)
-    deep = cal < _DEEPEST
-    log_w[deep] += _CENTRAL_VOLUME_SLOPE * np.log(np.maximum(cal[deep], 1e-300) / _DEEPEST)
-    return log_w
+    c = np.clip(c, C_GRID[0], C_GRID[-1])
+    return table_query(np.atleast_1d(np.asarray(eps, dtype=np.float64)), _nfw_nodes(c),
+                       _row(nfw_energy_tables().log_volume_fraction, C_GRID, c), deep_slope=_CENTRAL_VOLUME_SLOPE)
 
 
 _SHALLOWEST = 1e-12                            # shallowest node of the generic tables: -E = 1e-12 |Φ(0)|
@@ -480,7 +611,9 @@ class SphericalDistribution:
 
     Parameters
     ----------
-    potential : PotentialModel
+    potential : SphericalPotential
+        A :class:`~roadrunner.physics.potentials.SphericalPotential`; its ``profile()``, when not
+        ``None``, makes the q and g quadratures compiled.
     r_max : float
         Counting radius (physical).
     """
@@ -494,6 +627,7 @@ class SphericalDistribution:
         self._energies = self._phi[0] * self._eps                 # physical energies at the nodes
         self._log_w = None
         self._log_density = self._cdf = None
+        self._profile = potential.profile()
 
     def _scaled(self, energy):
         """``eps = E / Φ(0)``: 0 at ``E = 0``, 1 at the bottom of the well.
@@ -526,6 +660,8 @@ class SphericalDistribution:
         q, g : ndarray of float64, shape (n,)
         """
         x_max = np.interp(energy, self._phi, self._r)       # apocentre, capped at r_max
+        if self._profile is not None:
+            return _q_and_g_kernel(np.ascontiguousarray(energy, dtype=np.float64), x_max, self._profile, _W, _WW)
         x = x_max[:, None] * (1.0 - _W**2)
         kin2 = np.clip(2.0 * (energy[:, None] - np.asarray(self.potential.potential(x), dtype=np.float64)), 0.0, None)
         w = 16.0 * np.pi**2 * _WW * 2.0 * x_max[:, None] * _W * x**2
@@ -583,7 +719,7 @@ class SphericalDistribution:
         -------
         u : ndarray of float64
         """
-        return np.interp(self._scaled(energy), self._eps, self._energy_table()[1])
+        return table_query(self._scaled(energy), self._eps, self._energy_table()[1])
 
     def log_energy_density(self, energy):
         """``ln N(E)``: energy distribution of the mass inside ``r_max``, per unit ``E``.
@@ -599,7 +735,7 @@ class SphericalDistribution:
         -------
         log_n : ndarray of float64
         """
-        return np.interp(self._scaled(energy), self._eps, self._energy_table()[0])
+        return table_query(self._scaled(energy), self._eps, self._energy_table()[0])
 
     def log_phase_space_fraction(self, energy):
         """``ln w = ln q(E) - ln q(0)``: fraction of the bound phase space inside ``r_max`` more bound than ``E``.
@@ -621,11 +757,70 @@ class SphericalDistribution:
         log_w : ndarray of float64
             ``<= 0``.
         """
-        eps = np.atleast_1d(self._scaled(energy))
         row = self._phase_table()
-        log_w = np.interp(eps, self._eps, row)
-        deep = eps > self._eps[-1]
-        cal = 1.0 - self._eps[-2:]                                       # the two deepest nodes
-        slope = (row[-1] - row[-2]) / np.log(cal[1] / cal[0])
-        log_w[deep] = row[-1] + slope * np.log(np.maximum(1.0 - eps[deep], np.finfo(np.float64).tiny) / cal[1])
-        return log_w
+        return table_query(np.atleast_1d(self._scaled(energy)), self._eps, row, deep_slope=_node_slope(self._eps, row))
+
+
+SELF_SIMILAR_C = np.geomspace(0.1, 1e4, 121)   # counting radius / scale radius of the self-similar table rows
+
+
+class SelfSimilarTables(NamedTuple):
+    """Tables of a self-similar profile: one row per ``SELF_SIMILAR_C`` value, on that row's generic nodes.
+
+    ``log_density`` is per unit ``eps = E / Φ₀`` (the reference has ``Φ₀ = -1``).
+    """
+
+    log_density: np.ndarray
+    cdf: np.ndarray
+    log_volume_fraction: np.ndarray
+
+
+def self_similar_tables(reference):
+    """Build the tables of a self-similar profile from a reference instance with ``G = M = a = 1``.
+
+    Each row is the generic :class:`SphericalDistribution` of ``reference`` counted inside
+    ``r_max = c`` (its scale radius is 1), so a halo of the same profile with scale radius ``a``
+    reads them at ``c = r_max / a`` and ``eps = E / Φ₀``. Its ``Φ₀`` must be ``-1``.
+
+    Parameters
+    ----------
+    reference : PotentialModel
+        The profile with ``G = M = a = 1``.
+
+    Returns
+    -------
+    tables : SelfSimilarTables
+        Arrays of shape ``(len(SELF_SIMILAR_C), n)``.
+    """
+    rows = [SphericalDistribution(reference, c) for c in SELF_SIMILAR_C]
+    energy = [d._energy_table() for d in rows]
+    return SelfSimilarTables(np.array([e[0] for e in energy]), np.array([e[1] for e in energy]),
+                             np.array([d._phase_table() for d in rows]))
+
+
+def self_similar_lookup(table, eps, eps_kink, c, deep=False):
+    """``table`` of :func:`self_similar_tables` at scaled energies ``eps`` and ``c = r_max / a``.
+
+    Rows are blended linearly in ``log c`` node by node (kink to kink); the nodes are those of
+    the generic route for the kink ``eps_kink = Φ(r_max) / Φ₀``, and the value is linear in
+    ``eps`` between them (:func:`table_query`), held at the end nodes beyond them. With ``deep``
+    (for ``ln w``) the deepest values follow the power law through the two deepest nodes instead.
+
+    Parameters
+    ----------
+    table : ndarray of shape (len(SELF_SIMILAR_C), n)
+    eps : ndarray
+        Scaled energies ``E / Φ₀``.
+    eps_kink : float
+    c : float
+        Inside ``SELF_SIMILAR_C``.
+    deep : bool, default=False
+
+    Returns
+    -------
+    values : ndarray of float64
+    """
+    nodes = _depth_nodes(eps_kink, _SHALLOWEST, *_GENERIC_NODES)
+    row = _row(table, SELF_SIMILAR_C, c)
+    return table_query(np.atleast_1d(np.asarray(eps, dtype=np.float64)), nodes, row,
+                       deep_slope=_node_slope(nodes, row) if deep else None)

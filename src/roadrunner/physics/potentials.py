@@ -16,9 +16,11 @@ Radii may be 0: every method evaluates its formula on the whole array and
 replaces the 0/0 or 0·∞ it meets at the centre by the limit there. The
 energy distribution and the phase-space fraction come from
 :class:`~roadrunner.physics.distribution.SphericalDistribution` unless a
-potential overrides them.
+potential overrides them. Plummer and Hernquist read one set of tables per
+process shared by all their instances (:class:`SelfSimilarPotential`).
 """
 
+import functools
 from abc import abstractmethod
 
 import numpy as np
@@ -29,11 +31,17 @@ from scipy.special import betainc
 from roadrunner._mcf_types import PotentialModel
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 from roadrunner.physics.distribution import (
+    PROFILE_HERNQUIST,
+    PROFILE_NFW,
+    PROFILE_PLUMMER,
+    SELF_SIMILAR_C,
     SphericalDistribution,
     eddington_distribution_function,
     nfw_energy_fraction,
     nfw_log_energy_density,
     nfw_log_phase_space_fraction,
+    self_similar_lookup,
+    self_similar_tables,
 )
 
 _2PI = 2 * np.pi
@@ -126,6 +134,18 @@ class SphericalPotential(PotentialModel):
         phi0 : float
         """
         return float(self.potential(np.zeros(1))[0])
+
+    def profile(self):
+        """Compiled description for the q and g quadratures: rows ``(kind, k, a)`` summed by :func:`~roadrunner.physics.distribution.profile_phi`.
+
+        ``None`` (the default) when the potential has none: the quadratures then evaluate
+        :meth:`potential`. A composite potential stacks its components' rows.
+
+        Returns
+        -------
+        profile : ndarray of shape (n, 3) or None
+        """
+        return None
 
     def well_depth(self, r_inner):
         """Depth ``-Φ₀`` of the potential well, the scale of its binding energies.
@@ -268,7 +288,54 @@ class SphericalPotential(PotentialModel):
         return self._distribution(r_max).log_phase_space_fraction(E)
 
 
-class PlummerPotential(SphericalPotential):
+@functools.cache
+def _self_similar_tables(cls):
+    """The shared tables of a self-similar profile class (built once per process): see :func:`self_similar_tables`."""
+    return self_similar_tables(cls(1.0, 1.0, G=1.0))
+
+
+class SelfSimilarPotential(SphericalPotential):
+    """A profile fixed up to its mass ``M`` and scale radius ``a``.
+
+    Inside a counting radius ``r_max`` its energy distribution and phase-space fraction depend
+    only on ``c = r_max / a`` once energies are scaled by ``Φ₀``, so one set of tables per
+    process (:func:`_self_similar_tables`, rows over ``SELF_SIMILAR_C``) serves every
+    instance: no per-halo build. Outside that range of ``c`` the generic per-instance route is
+    used. A subclass must have ``Φ₀ = -1`` when ``G = M = a = 1`` and the constructor
+    signature ``(M, a, G=..., centre=None)``.
+    """
+
+    def _lookup(self, name, E, r_max, deep=False):
+        """Shared-table value ``name`` at physical energies ``E`` inside ``r_max``."""
+        phi0 = self.central_potential()
+        eps_kink = float(self.potential(np.array([r_max], dtype=np.float64))[0]) / phi0
+        return self_similar_lookup(getattr(_self_similar_tables(type(self)), name),
+                                   np.asarray(E, dtype=np.float64) / phi0, eps_kink, r_max / self.a, deep)
+
+    def _tabulated(self, r_max):
+        """Whether ``r_max / a`` lies inside the shared tables' rows."""
+        return SELF_SIMILAR_C[0] <= r_max / self.a <= SELF_SIMILAR_C[-1]
+
+    def energy_fraction(self, E, r_max):
+        """Fraction of the mass inside ``r_max`` more bound than ``E``, from the shared tables (see :meth:`SphericalPotential.energy_fraction`)."""
+        if not self._tabulated(r_max):
+            return super().energy_fraction(E, r_max)
+        return self._lookup("cdf", E, r_max)
+
+    def log_energy_density(self, E, r_max):
+        """``ln dN/dE`` inside ``r_max``, per unit physical ``E``, from the shared tables: their density per unit ``eps`` minus ``ln |Φ₀|``."""
+        if not self._tabulated(r_max):
+            return super().log_energy_density(E, r_max)
+        return self._lookup("log_density", E, r_max) - np.log(-self.central_potential())
+
+    def log_phase_space_fraction(self, E, r_max):
+        """``ln w`` inside ``r_max``, from the shared tables (see :meth:`SphericalPotential.log_phase_space_fraction`)."""
+        if not self._tabulated(r_max):
+            return super().log_phase_space_fraction(E, r_max)
+        return self._lookup("log_volume_fraction", E, r_max, deep=True)
+
+
+class PlummerPotential(SelfSimilarPotential):
     """Plummer sphere: ``Φ(r) = -G M / sqrt(r² + a²)``.
 
     ``M(<r) = M r³ / (r² + a²)^(3/2)``, ``ρ(r) = 3 M / (4π a³) (1 + r²/a²)^(-5/2)``
@@ -339,6 +406,10 @@ class PlummerPotential(SphericalPotential):
         phi0 : float
         """
         return -self.G * self.M / self.a
+
+    def profile(self):
+        """One Plummer row ``(PROFILE_PLUMMER, G M, a)``."""
+        return np.array([[PROFILE_PLUMMER, self.G * self.M, self.a]])
 
     def orbital_time(self, E, r):
         """Exact dynamical time ``2π sqrt((r² + a²)^(3/2) / (G M))``, finite at ``r = 0``.
@@ -477,6 +548,14 @@ class KeplerPotential(PlummerPotential):
         """
         raise NotImplementedError("The Kepler potential has no energy distribution.")
 
+    def energy_fraction(self, E, r_max):
+        """Not defined: a point mass has no energy distribution (see :meth:`distribution_function`)."""
+        raise NotImplementedError("The Kepler potential has no energy distribution.")
+
+    def log_energy_density(self, E, r_max):
+        """Not defined: a point mass has no energy distribution (see :meth:`distribution_function`)."""
+        raise NotImplementedError("The Kepler potential has no energy distribution.")
+
     def log_phase_space_fraction(self, E, r_max):
         """Exact ``ln w``: fraction of the bound phase space inside ``r_max`` more bound than ``E``.
 
@@ -500,7 +579,7 @@ class KeplerPotential(PlummerPotential):
         b = -np.asarray(E, dtype=np.float64) * r_max / (self.G * self.M)
         return np.log(3.0 * np.pi / 32.0) - 1.5 * np.log(b) + np.log(betainc(1.5, 2.5, np.minimum(1.0, b)))
 
-class HernquistPotential(SphericalPotential):
+class HernquistPotential(SelfSimilarPotential):
     """Hernquist sphere: ``Φ(r) = -G M / (r + a)``.
 
     ``M(<r) = M r² / (r + a)²``, ``ρ(r) = M a / (2π r (r + a)³)`` and
@@ -571,6 +650,10 @@ class HernquistPotential(SphericalPotential):
         phi0 : float
         """
         return -self.G * self.M / self.a
+
+    def profile(self):
+        """One Hernquist row ``(PROFILE_HERNQUIST, G M, a)``."""
+        return np.array([[PROFILE_HERNQUIST, self.G * self.M, self.a]])
 
     def orbital_time(self, E, r):
         """Exact dynamical time ``2π (r + a) sqrt(r / (G M))``, 0 at ``r = 0``.
@@ -723,6 +806,11 @@ class NFWPotential(SphericalPotential):
         """
         A = np.log(1 + self.c) - self.c / (1 + self.c)
         return -self.G * self.M / (self.Rs * A)
+
+    def profile(self):
+        """One NFW row ``(PROFILE_NFW, G M / A(c), Rs)``."""
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        return np.array([[PROFILE_NFW, self.G * self.M / A, self.Rs]])
 
     def energy_fraction(self, E, r_max):
         """Exact (tabulated) fraction of the NFW mass inside ``r_max`` more bound than ``E``.
