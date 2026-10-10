@@ -71,12 +71,13 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
     # ── STATE MODIFIERS ──────────────────────────────────────
 
     def compute_scale_radii(self):
-        """Compute scale radii for all rows using the Duffy relation.
+        """Fill missing scale radii as ``R_vir / c`` with the active cosmology's :func:`concentration`.
 
         Rows with a non-NaN ``scale_radius`` column are left untouched.
-        Missing values are filled via :func:`nfw_cmz_relation_duffy`.
         """
-        self._df["scale_radius"] = self._df.apply(self._compute_rs_row, axis=1)
+        df = self._df
+        c = concentration(df["mass"].to_numpy(dtype=np.float64), df["Redshift"].to_numpy(dtype=np.float64))
+        df["scale_radius"] = df["scale_radius"].fillna(df["virial_radius"] / c)
 
     def set_constant_column(self, name: str, value):
         """Set a column to a constant value for all rows.
@@ -195,25 +196,6 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         found = sorted_keys[pos] == ids
         result[found] = sorted_vals[pos[found]]
         return result
-
-    @staticmethod
-    def _compute_rs_row(row: pd.Series) -> float:
-        """Compute the scale radius for a single merger-tree row.
-
-        Parameters
-        ----------
-        row : Series
-            Row with ``scale_radius``, ``mass``, ``Redshift``,
-            and ``virial_radius`` columns.
-
-        Returns
-        -------
-        rs : float
-        """
-        if np.isnan(row["scale_radius"]):
-            conc = nfw_cmz_relation_duffy(row["mass"], row["Redshift"])
-            return row["virial_radius"] / conc
-        return row["scale_radius"]
 
     @staticmethod
     def _satellites_impl(

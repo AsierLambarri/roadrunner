@@ -2,10 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from roadrunner.physics.merger_tree import (
-    MergerTreeHandlerCSV,
-    nfw_cmz_relation_duffy,
-)
+from roadrunner.physics.merger_tree import MergerTreeHandlerCSV, concentration
 
 TEST_TREE = "test_data/test_tree.csv"
 
@@ -68,24 +65,6 @@ def three_halo_bound_df():
 
 
 # ── Static helper tests ─────────────────────────────────────
-
-class TestComputeRsRow:
-    def test_nan_scale_radius(self):
-        row = pd.Series({
-            "mass": 1e12, "Redshift": 0.0,
-            "virial_radius": 100.0, "scale_radius": np.nan,
-        })
-        result = MergerTreeHandlerCSV._compute_rs_row(row)
-        expected = 100.0 / nfw_cmz_relation_duffy(1e12, 0.0)
-        assert np.isclose(result, expected)
-
-    def test_valid_scale_radius(self):
-        row = pd.Series({
-            "mass": 1e12, "Redshift": 0.0,
-            "virial_radius": 100.0, "scale_radius": 15.0,
-        })
-        assert MergerTreeHandlerCSV._compute_rs_row(row) == 15.0
-
 
 class TestSatellitesImpl:
     def test_two_halos_one_bound(self, two_halo_df):
@@ -157,7 +136,7 @@ class TestDistanceToHostImpl:
 # ── State-modifying method tests ────────────────────────────
 
 class TestComputeScaleRadii:
-    def test_nan_filled_correct_value(self, scale_radii_df):
+    def test_nan_filled_correct_value(self, scale_radii_df, cosmology_scope):
         handler = MergerTreeHandlerCSV(scale_radii_df)
         original = handler.dataframe.iloc[1]["scale_radius"]
         handler.compute_scale_radii()
@@ -165,7 +144,7 @@ class TestComputeScaleRadii:
             if pd.isna(row["scale_radius"]):
                 pytest.fail("NaN remained after compute_scale_radii")
         row = handler.dataframe.iloc[0]
-        expected = row["virial_radius"] / nfw_cmz_relation_duffy(row["mass"], row["Redshift"])
+        expected = row["virial_radius"] / concentration(row["mass"], row["Redshift"])
         assert np.isclose(row["scale_radius"], expected)
         assert handler.dataframe.iloc[1]["scale_radius"] == original
 

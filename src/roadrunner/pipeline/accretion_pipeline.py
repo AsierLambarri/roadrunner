@@ -510,8 +510,8 @@ class AccretionPipeline:
     def _ensure_merger_columns(self):
         """Ensure merger tree columns (scale radius, host, distance) are computed.
 
-        Calls the merger handler to compute ``scale_radius`` via the Duffy
-        relation, finds the most bound satellite host for each subhalo,
+        Calls the merger handler to fill missing ``scale_radius`` with the
+        Ishiyama et al. (2021) concentration, finds the most bound satellite host for each subhalo,
         and computes distances both to the ``host_id`` and to the
         accretion host (``acc_id``).
         """

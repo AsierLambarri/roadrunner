@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
 import os
 import warnings
 
@@ -77,21 +76,13 @@ def _resolve_cosmology(config, reader, equiv_table):
     return Cosmology(**{f.name: params[f.name] for f in dataclasses.fields(Cosmology)})
 
 
-def _with_run_scope(func):
-    """Run ``func`` inside the cosmology, precision and thread scopes from its ``RunConfig``."""
-    @functools.wraps(func)
-    def wrapper(config, *args, **kwargs):
-        cfg = config if isinstance(config, RunConfig) else RunConfig(**config)
-        equiv_table = EquivalenceTable(cfg.equivalence_path, base_dir=cfg.particle_data_dir)
-        run_cosmology = _resolve_cosmology(cfg, _make_snapshot_reader(cfg, equiv_table), equiv_table)
-        with cosmology(run_cosmology), precision(data=cfg.data_precision, math=cfg.math_precision), threads(cfg.threads):
-            return func(config, *args, **kwargs)
-    return wrapper
-
-
-@_with_run_scope
 def run_accretion_history(config: RunConfig | dict) -> None:
     """Run the full accretion history pipeline from a configuration.
+
+    The equivalence table and the snapshot reader are built once; the
+    reader's last snapshot, completed by ``config.cosmology``, sets the
+    run's cosmology, and the run goes inside the cosmology, precision
+    and thread scopes from the configuration.
 
     Parameters
     ----------
@@ -99,17 +90,18 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         Pipeline configuration.  If a dict is passed it is converted
         to a :class:`RunConfig` instance internally.
     """
-    if isinstance(config, dict):
-        config = RunConfig(**config)
+    config = config if isinstance(config, RunConfig) else RunConfig(**config)
+    equiv_table = EquivalenceTable(config.equivalence_path, base_dir=config.particle_data_dir)
+    snapshot_reader = _make_snapshot_reader(config, equiv_table)
+    with (cosmology(_resolve_cosmology(config, snapshot_reader, equiv_table)),
+          precision(data=config.data_precision, math=config.math_precision), threads(config.threads)):
+        _run(config, equiv_table, snapshot_reader)
 
+
+def _run(config, equiv_table, snapshot_reader):
+    """Body of :func:`run_accretion_history`, inside its scopes."""
     reader = MergerTreeReaderCSV(config.merger_tree_path)
     merger_handler = MergerTreeHandlerCSV(reader.dataframe)
-
-    equiv_table = EquivalenceTable(
-        config.equivalence_path, base_dir=config.particle_data_dir,
-    )
-
-    snapshot_reader = _make_snapshot_reader(config, equiv_table)
 
     if config.selection_snapshot is not None:
         snaps = merger_handler.snapshots

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -67,3 +69,31 @@ class TestOpenDispatch:
                 "ART", "ART-I", "GEAR", "AURIGA", "AREPO",
                 "RAMSES", "VINTERGATAN",
             )
+
+
+class TestReadCosmology:
+    @staticmethod
+    def _reader(monkeypatch, code, **ds):
+        reader = SnapshotReader(code, "star", {"index": "particle_index"})
+        base = dict(cosmological_simulation=1, hubble_constant=0.6727, omega_matter=0.3139,
+                    omega_lambda=0.6861, parameters={})
+        monkeypatch.setattr(reader, "_open", lambda path: SimpleNamespace(**(base | ds)))
+        return reader
+
+    def test_ramses_reads_omega_b(self, monkeypatch):
+        reader = self._reader(monkeypatch, "RAMSES", parameters={"omega_b": 0.045})
+        assert reader.read_cosmology("snap") == {"h": 0.6727, "omega_m": 0.3139, "omega_b": 0.045}
+
+    def test_omega_b_key_per_code(self, monkeypatch):
+        assert self._reader(monkeypatch, "AREPO", parameters={"OmegaBaryon": 0.048}).read_cosmology("snap")["omega_b"] == 0.048
+        assert "omega_b" not in self._reader(monkeypatch, "GEAR", parameters={"omega_b": 0.045}).read_cosmology("snap")
+
+    def test_zero_omega_b_left_to_config(self, monkeypatch):
+        assert "omega_b" not in self._reader(monkeypatch, "AREPO", parameters={"OmegaBaryon": 0.0}).read_cosmology("snap")
+
+    def test_not_cosmological(self, monkeypatch):
+        assert self._reader(monkeypatch, "RAMSES", cosmological_simulation=0).read_cosmology("snap") == {}
+
+    def test_non_flat_warns(self, monkeypatch):
+        with pytest.warns(UserWarning, match="taken as flat"):
+            self._reader(monkeypatch, "RAMSES", omega_lambda=0.6).read_cosmology("snap")
