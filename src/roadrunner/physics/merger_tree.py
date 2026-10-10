@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from roadrunner._defaults import GALAXY_ID, UNBOUND
 
+from roadrunner.cosmology import current_cosmology
 from roadrunner.physics.constants import G_KM, DUFFY_A, DUFFY_B, DUFFY_C, DUFFY_PIVOT_MASS, MIN_DISTANCE
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.threads import tree_workers
@@ -34,6 +35,28 @@ def nfw_cmz_relation_duffy(M: float | np.ndarray, z: float) -> float | np.ndarra
     concentration : float or ndarray
     """
     return DUFFY_A * (M / DUFFY_PIVOT_MASS) ** DUFFY_B * (1 + z) ** DUFFY_C
+
+
+def concentration(m_vir: float | np.ndarray, z: float | np.ndarray) -> float | np.ndarray:
+    """Ishiyama et al. (2021) ``c_vir(M_vir, z)`` of the active cosmology.
+
+    Parameters
+    ----------
+    m_vir : float or ndarray
+        Virial mass (Bryan & Norman 1998), Msun.
+    z : float or ndarray
+        Redshift. Broadcasts against ``m_vir``.
+
+    Returns
+    -------
+    concentration : float or ndarray
+
+    Raises
+    ------
+    ConfigurationError
+        Outside a ``with roadrunner.cosmology.cosmology(...):`` scope.
+    """
+    return current_cosmology().concentration(m_vir, z)
 
 
 class MergerTreeHandlerCSV(MergerTreeReaderCSV):
