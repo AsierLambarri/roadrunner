@@ -4,8 +4,10 @@
 for any spherical density: a concrete potential implements the potential and
 the density, and overrides the enclosed mass and the central potential (whose
 generic forms here are numerical) and any derived quantity only with an exact
-closed form. The primitives (potential, enclosed mass, density, central
-potential) are linear in mass, so they add over potentials. Provides
+closed form. The primitives (potential, enclosed mass, density) are linear in
+mass, so they add over potentials; so does the central potential when the
+potentials are co-centred (otherwise it is the summed potential at the
+composite's own well bottom). Provides
 :class:`PlummerPotential`, :class:`KeplerPotential` (a Plummer sphere with the
 fixed softening :const:`SOFTENING_KEPLER`), :class:`HernquistPotential`,
 :class:`NFWPotential`, :class:`ShellPotential` (the spherical potential of a
@@ -53,6 +55,86 @@ _2PI = 2 * np.pi
 _MASS_GRID_NODES = 1024            # generic M(<r): trapezoid nodes, log-spaced in r
 _MASS_GRID_INNER = 1e-8            # innermost node / outermost radius (plus r = 0)
 
+_RANK_RTOL = 1e-9                  # hull dimension: singular values of the centre offsets above this fraction of the largest
+_ZOOM_HALF_POINTS = (256, 16, 6)   # minimum search: lattice points per half-axis for hull dimension k = 1, 2, 3
+_ZOOM_MARGIN = 2                   # bracket half-width kept around the best point, in lattice spacings
+_ZOOM_RTOL = 1e-3                  # final bracket half-width relative to the hull's extent
+
+
+def _zoom_plan(k, m):
+    """Unit lattice and zoom schedule of the minimum search in a ``k``-dimensional hull.
+
+    Parameters
+    ----------
+    k : int
+        Hull dimension.
+    m : int
+        Lattice points per half-axis.
+
+    Returns
+    -------
+    unit : ndarray of shape ((2m + 1)^k, k)
+        Offsets ``j / m``, ``j = -m..m``, per axis; the zero offset is exact.
+    shrink : float
+        Bracket shrink factor per zoom, ``_ZOOM_MARGIN / m``.
+    n_zoom : int
+        Zooms after the first lattice: the fewest with ``shrink^(n_zoom + 1) <= 2 _ZOOM_RTOL``,
+        a bracket of ``_ZOOM_RTOL`` of the hull extent.
+    """
+    t = np.arange(-m, m + 1) / m
+    unit = np.stack(np.meshgrid(*([t] * k), indexing="ij"), axis=-1).reshape(-1, k)
+    shrink = _ZOOM_MARGIN / m
+    return unit, shrink, int(np.ceil(np.log(2 * _ZOOM_RTOL) / np.log(shrink))) - 1
+
+
+_ZOOM_PLANS = tuple(_zoom_plan(k, m) for k, m in enumerate(_ZOOM_HALF_POINTS, start=1))
+
+
+def _locate_minimum(potential, centres):
+    """Absolute position of the minimum of a sum of spherical wells centred on ``centres``.
+
+    Each well increases with the distance from its centre, so the minimum lies in the convex
+    hull of the centres (outside it every term's gradient points away from the hull); it is
+    searched in their affine hull, of dimension ``k`` the rank of the centre offsets
+    (orthonormal basis by SVD, singular values above ``_RANK_RTOL`` of the largest).
+    Coinciding centres (``k = 0``) are the minimum, returned without evaluating ``potential``.
+    Otherwise the search is derivative-free, since a cusp (NFW, Hernquist) puts a kink at its
+    centre, where the minimum often sits: one vectorised evaluation of a lattice over the
+    hull's bounding box plus the centres themselves (every well's bottom candidate), then
+    ``n_zoom`` evaluations of a lattice around the best point so far, each ``_ZOOM_MARGIN``
+    spacings of the previous one wide, down to ``_ZOOM_RTOL`` of the hull extent. The zoom
+    lattice holds the best point itself (zero offset), so the result is the best point
+    evaluated: a centre at the minimum is returned exactly. numpy around the callable: the
+    potential classes are Python, which numba cannot compile.
+
+    Parameters
+    ----------
+    potential : callable
+        Potential at absolute physical positions, ``(n, 3) -> (n,)``.
+    centres : ndarray of shape (n_c, 3)
+        Absolute physical centres of the wells.
+
+    Returns
+    -------
+    x_min : ndarray of shape (3,)
+    """
+    d = centres - centres[0]
+    if not d.any():
+        return centres[0].copy()
+    _, s, vt = np.linalg.svd(d, full_matrices=False)
+    basis = vt[:np.count_nonzero(s > _RANK_RTOL * s[0])]
+    unit, shrink, n_zoom = _ZOOM_PLANS[len(basis) - 1]
+    u = d @ basis.T
+    lo, hi = u.min(axis=0), u.max(axis=0)
+    x = np.concatenate((centres, centres[0] + (0.5 * (lo + hi) + 0.5 * (hi - lo) * unit) @ basis))
+    best = x[np.argmin(potential(x))]
+    h = 0.5 * shrink * (hi - lo)
+    for _ in range(n_zoom):
+        x = best + (h * unit) @ basis
+        best = x[np.argmin(potential(x))]
+        h = shrink * h
+    return best.copy()
+
 
 class SphericalPotential(PotentialModel):
     """Spherical potential: the protocol's methods from a potential and a density.
@@ -61,7 +143,7 @@ class SphericalPotential(PotentialModel):
     ``_potential(r)`` and ``_density(r)``; the public methods take absolute
     physical positions and measure them from :attr:`centre`. The
     enclosed mass and the central potential have generic forms (the
-    trapezoid rule over the density; the potential at ``r = 0``),
+    trapezoid rule over the density; the potential at :attr:`x_min`, its centre),
     which a concrete potential overrides with its exact ones. The orbital time
     and the tidal denominator follow from them; a concrete potential overrides
     one only with an exact closed form. The energy distribution and the
@@ -87,6 +169,10 @@ class SphericalPotential(PotentialModel):
     has_distribution : bool
         Whether :meth:`distribution_function` is defined (class attribute;
         ``False`` for a point mass and for a particle set).
+    x_min : ndarray of shape (3,)
+        Absolute physical position of the bottom of the well (the minimum of the
+        potential): the centre of a spherical potential; a composite recomputes it as
+        components are added.
     """
 
     has_distribution = True
@@ -97,6 +183,7 @@ class SphericalPotential(PotentialModel):
         self.centre = np.zeros(3) if centre is None else np.asarray(centre, dtype=np.float64)
         self.velocity = np.zeros(3) if velocity is None else np.asarray(velocity, dtype=np.float64)
         self._distributions = {}
+        self.x_min = _locate_minimum(self.potential, self.centre[None])
 
     @abstractmethod
     def _potential(self, r):
@@ -146,13 +233,13 @@ class SphericalPotential(PotentialModel):
         return np.interp(r, x, cumulative_trapezoid(f, x, initial=0.0))
 
     def central_potential(self):
-        """Central potential ``Φ₀``: the potential at ``r = 0``.
+        """Central potential ``Φ₀``: the potential at the bottom of the well, :attr:`x_min`.
 
         Returns
         -------
         phi0 : float
         """
-        return float(self._potential(np.zeros(1))[0])
+        return float(self.potential(self.x_min[None])[0])
 
     def profile(self):
         """Compiled description for the q and g quadratures: rows ``(kind, k, a)`` summed by :func:`~roadrunner.physics.distribution.profile_phi`.
@@ -1230,15 +1317,17 @@ class CompositeSphericalPotential(SphericalPotential):
     """Sum of spherical potentials: the total potential of a halo built from several components.
 
     An iterable container of its components (``for p in composite``, ``len``, indexing);
-    :meth:`add` adds one on the fly. Each component carries its own ``centre`` and
+    :meth:`add` adds more on the fly. Each component carries its own ``centre`` and
     ``velocity``; the composite's own are its first component's, and :attr:`com_centre` and
     :attr:`com_velocity` are the components' mass-weighted ones. The primitives and the quantities linear in mass are the sums of the
-    components' own methods (potential, density, enclosed mass, central potential, well
+    components' own methods (potential, density, enclosed mass, well
     depth, tidal denominator), so every component keeps its exact forms; the profile stacks
     their rows. The public methods take absolute physical positions and measure each
     component from its own ``centre``; the private profile in ``r`` (which the distribution
     machinery uses) treats every component as centred on the composite's centre, its first
-    component's.
+    component's. The central potential is the summed potential at the bottom of the well,
+    :attr:`x_min`, located among the components' centres (each component's own ``Φ₀`` when
+    they coincide).
 
     The orbital time combines the components' own as ``t^-2 = Σ t_i^-2``, exact for
     dynamical times (``t_i^-2 ∝ M_i(<r)``). The energy distribution and the phase-space
@@ -1266,29 +1355,31 @@ class CompositeSphericalPotential(SphericalPotential):
     def __init__(self, *components):
         super().__init__(0.0, G=components[0].G, centre=components[0].centre, velocity=components[0].velocity)
         self._components = ()
-        for p in components:
-            self.add(p)
+        self.add(*components)
 
-    def add(self, potential):
-        """Add a component on the fly (e.g. a halo's stellar counterpart).
+    def add(self, *potentials):
+        """Add components on the fly (e.g. a halo's stellar counterpart).
 
-        The composite's mass, ``has_distribution`` and single-component
-        shortcuts are updated, and its cached distributions are dropped, to be
-        rebuilt on next use. Its centre stays its first component's.
+        The composite's mass, ``has_distribution``, single-component shortcuts and
+        :attr:`x_min` are updated, and its cached distributions are dropped, to be rebuilt on
+        next use. Its centre stays its first component's. A point mass (Kepler) has no finite
+        central potential, so neither has the composite: its :meth:`central_potential` raises
+        as the component's does.
 
         Parameters
         ----------
-        potential : SphericalPotential
+        *potentials : SphericalPotential
             With the composite's ``G``.
 
         Raises
         ------
         ValueError
-            If its ``G`` differs from the composite's (the generic route uses one ``G``).
+            If one's ``G`` differs from the composite's (the generic route uses one ``G``);
+            none is then added.
         """
-        if potential.G != self.G:
+        if any(p.G != self.G for p in potentials):
             raise ValueError("The components of a composite potential must share G.")
-        self._components += (potential,)
+        self._components += potentials
         self.M = sum(p.M for p in self._components)
         self.has_distribution = all(p.has_distribution for p in self._components)
         self._distributions = {}
@@ -1296,7 +1387,12 @@ class CompositeSphericalPotential(SphericalPotential):
             self.__dict__.pop(name, None)
         if len(self._components) == 1:
             for name in _OWN_METHODS:
-                setattr(self, name, getattr(potential, name))
+                setattr(self, name, getattr(self._components[0], name))
+        # only the new components: a Kepler found earlier already bound central_potential, which add() never pops
+        points = [p for p in potentials if isinstance(p, KeplerPotential)]
+        if points:
+            self.central_potential = points[0].central_potential
+        self.x_min = _locate_minimum(self.potential, np.array([p.centre for p in self._components]))
 
     def __iter__(self):
         return iter(self._components)
@@ -1389,15 +1485,6 @@ class CompositeSphericalPotential(SphericalPotential):
         """
         with np.errstate(divide="ignore"):
             return 1.0 / np.sqrt(sum(1.0 / p.orbital_time(E, xyz) ** 2 for p in self._components))
-
-    def central_potential(self):
-        """Summed central potential ``Σ Φ_i(0)``; raises if a component has none (Kepler).
-
-        Returns
-        -------
-        phi0 : float
-        """
-        return self._sum("central_potential")
 
     def well_depth(self, xyz):
         """Summed well depth, each component's at the innermost particle's absolute physical position.

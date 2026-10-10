@@ -369,3 +369,102 @@ class TestCompositeAdd:
         assert not c.has_distribution
         with pytest.raises(ValueError):
             c.add(PlummerPotential(1e10, 0.5, G=1.0))
+
+
+_C0 = np.array([1e3, 2e3, 3e3])
+
+
+def _segment(c, p, q, n=200001):
+    """Minimum of ``c`` sampled on the straight segment between ``p`` and ``q``'s centres."""
+    seg = p.centre + np.linspace(0.0, 1.0, n)[:, None] * (q.centre - p.centre)
+    phi = c.potential(seg)
+    return seg[phi.argmin()], phi.min()
+
+
+class TestWellMinimum:
+    def test_coincident_centres_need_no_search(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential, _locate_minimum
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        pl = PlummerPotential(1e10, 0.5, centre=_C0)
+        c = CompositeSphericalPotential(nfw, pl)
+        np.testing.assert_array_equal(nfw.x_min, _C0)
+        np.testing.assert_array_equal(c.x_min, _C0)
+        np.testing.assert_array_equal(_locate_minimum(None, np.array([_C0, _C0])), _C0)
+        assert c.central_potential() == nfw.central_potential() + pl.central_potential()
+
+    def test_two_offset_plummers(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        p1 = PlummerPotential(1e10, 1.0, centre=_C0)
+        p2 = PlummerPotential(5e9, 0.8, centre=_C0 + np.array([1.5, 0.5, 0.0]))
+        c = CompositeSphericalPotential(p1, p2)
+        xb, pb = _segment(c, p1, p2)
+        L = np.linalg.norm(p2.centre - p1.centre)
+        np.testing.assert_allclose(c.x_min, xb, rtol=0, atol=2e-5 * L)
+        phi0 = c.central_potential()
+        assert phi0 <= pb + 1e-9 * abs(pb)
+        assert phi0 == c.potential(c.x_min[None])[0]
+        pts = _C0 + np.random.default_rng(1).uniform(-3.0, 4.0, (10000, 3))
+        assert np.all(c.potential(pts) >= phi0)
+
+    def test_cusp_holds_the_minimum(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        # light Plummer's largest pull 0.385 G M/a^2 = 1.2e8 G is below the NFW gradient on the
+        # whole segment, >= G M(<1 kpc) = 4.5e8 G; cone slope |Phi0|/(2 Rs) = 5.25e8 G
+        light = PlummerPotential(5e9, 4.0, centre=_C0 + np.array([0.6, 0.8, 0.0]))
+        c = CompositeSphericalPotential(nfw, light)
+        np.testing.assert_array_equal(c.x_min, _C0)
+        assert c.central_potential() == nfw.central_potential() + light.potential(_C0[None])[0]
+        # heavy Plummer's pull at the cusp, 1.43e9 G, exceeds the slope: the minimum moves off
+        heavy = PlummerPotential(1e11, 4.0, centre=_C0 + np.array([0.6, 0.8, 0.0]))
+        c = CompositeSphericalPotential(nfw, heavy)
+        xb, pb = _segment(c, nfw, heavy)
+        np.testing.assert_allclose(c.x_min, xb, rtol=0, atol=2e-5)
+        assert np.linalg.norm(c.x_min - _C0) > 0.1
+
+    def test_deeper_of_two_wells(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        p1 = PlummerPotential(1e10, 0.5, centre=_C0)
+        p2 = PlummerPotential(1e10, 0.3, centre=_C0 + np.array([20.0, 0.0, 0.0]))
+        c = CompositeSphericalPotential(p1, p2)
+        np.testing.assert_allclose(c.x_min, p2.centre, rtol=0, atol=1e-3)
+        assert c.central_potential() <= c.potential(p2.centre[None])[0] < c.potential(p1.centre[None])[0]
+
+    def test_three_centres_span_a_plane(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        p1 = PlummerPotential(1e10, 1.5, centre=_C0)
+        p2 = PlummerPotential(8e9, 1.2, centre=_C0 + np.array([2.0, 0.0, 0.0]))
+        p3 = PlummerPotential(6e9, 1.0, centre=_C0 + np.array([0.8, 1.8, 0.5]))
+        c = CompositeSphericalPotential(p1, p2, p3)
+        a = np.linspace(0.0, 1.0, 1001)
+        A, B = (g.reshape(-1, 1) for g in np.meshgrid(a, a, indexing="ij"))
+        plane = _C0 + A * (p2.centre - _C0) + B * (p3.centre - _C0)
+        phi = c.potential(plane)
+        np.testing.assert_allclose(c.x_min, plane[phi.argmin()], rtol=0, atol=3e-3)
+        assert c.central_potential() <= phi.min() + 1e-9 * abs(phi.min())
+
+    def test_kepler_component(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        for k in (KeplerPotential(1e9, centre=_C0), KeplerPotential(1e9, centre=_C0 + np.array([1.0, 0.0, 0.0]))):
+            c = CompositeSphericalPotential(nfw, k)
+            assert np.all(np.isfinite(c.x_min))
+            with pytest.raises(NotImplementedError):
+                c.central_potential()
+            c.add(PlummerPotential(1e9, 0.5, centre=_C0 + np.array([0.0, 1.0, 0.0])))
+            with pytest.raises(NotImplementedError):
+                c.central_potential()
+
+    def test_add_updates_the_minimum(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        p1 = PlummerPotential(1e10, 1.0, centre=_C0)
+        p2 = PlummerPotential(5e9, 0.8, centre=_C0 + np.array([1.5, 0.5, 0.0]))
+        p3 = HernquistPotential(3e9, 0.6, centre=_C0 + np.array([0.3, 1.2, -0.4]))
+        c = CompositeSphericalPotential(p1)
+        np.testing.assert_array_equal(c.x_min, _C0)
+        c.add(p2)
+        np.testing.assert_array_equal(c.x_min, CompositeSphericalPotential(p1, p2).x_min)
+        assert not np.array_equal(c.x_min, _C0)
+        d = CompositeSphericalPotential(p1)
+        d.add(p2, p3)
+        np.testing.assert_array_equal(d.x_min, CompositeSphericalPotential(p1, p2, p3).x_min)

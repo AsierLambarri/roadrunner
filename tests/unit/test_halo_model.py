@@ -58,7 +58,7 @@ class TestPotential:
                            + star._enclosed_mass(np.array([9.0])) / 9.0**3) / (2 * np.pi) ** 2
             np.testing.assert_allclose(halo.orbital_time(np.array([-1.0]), xyz), 1.0 / np.sqrt(t2), rtol=1e-10)
             assert halo.orbital_time(np.array([-1.0]), xcen[None])[0] == 0   # the NFW cusp's limit at its centre
-            np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.central_potential())
+            np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.potential(inner.centre[None])[0])
             assert halo.tree_mass == 1e12
             np.testing.assert_allclose(halo.binding_energy_scale(), -inner.central_potential() - star.central_potential())
             u = halo.energy_fraction(np.array([-0.5]) * halo.binding_energy_scale())
