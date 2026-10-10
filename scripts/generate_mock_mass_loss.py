@@ -15,13 +15,18 @@ Usage:
       --n-snap 9 --n-newborn 1000
       --v-sys 1000 1000 1000 --dt0 0.3 --dt1 0.3
       --t-end 13.82 --H0 70.2 --omega-m 0.272
+      --omega-b 0.045 --sigma8 0.807 --n-s 0.961
 """
 import argparse
 import os
+import sys
 
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
+
+sys.path.insert(0, "src")
+from roadrunner._defaults import COSMOLOGY_NPZ_PREFIX
 
 # ── Mass loss tracks (9 snapshots) ─────────────────────────────
 PATTERN_I  = np.array([1.0, 0.5, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
@@ -53,6 +58,9 @@ def main():
     parser.add_argument("--t-end", type=float, default=13.82)
     parser.add_argument("--H0", type=float, default=70.2)
     parser.add_argument("--omega-m", type=float, default=0.272)
+    parser.add_argument("--omega-b", type=float, default=0.045)
+    parser.add_argument("--sigma8", type=float, default=0.807)
+    parser.add_argument("--n-s", type=float, default=0.961)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -69,6 +77,8 @@ def main():
     omega_m = args.omega_m
     omega_lambda = 1.0 - omega_m
     H0_Gyr = H0_km * 1.0227e-3
+    cosmology_keys = {f"{COSMOLOGY_NPZ_PREFIX}{k}": v for k, v in dict(
+        h=H0_km / 100.0, omega_m=omega_m, omega_b=args.omega_b, sigma8=args.sigma8, n_s=args.n_s).items()}
     os.makedirs(output_dir, exist_ok=True)
 
     # ── Load base data ─────────────────────────────────────────
@@ -131,6 +141,7 @@ def main():
         indices=np.arange(len(save_coords), dtype=np.uint64),
         masses=cum_masses, coords=save_coords,
         galaxy_id=cum_galaxy_id, born_snap=cum_born,
+        **cosmology_keys,
     )
     print(f"  Snap 0: {len(save_coords)} particles")
 
@@ -198,6 +209,7 @@ def main():
             indices=np.arange(len(snap_coords), dtype=np.uint64),
             masses=snap_masses, coords=snap_coords,
             galaxy_id=snap_gid, born_snap=snap_born,
+            **cosmology_keys,
         )
         n_alive = alive_mask.sum()
         newborn_this = n_newborn

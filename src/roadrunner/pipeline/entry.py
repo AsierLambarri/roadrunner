@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import os
 import warnings
 
+import numpy as np
+
 from roadrunner._defaults import precision
+from roadrunner._exceptions import ConfigurationError
+from roadrunner.cosmology import Cosmology, cosmology
 from roadrunner.threads import threads
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.readers.snapshot import SnapshotReader
@@ -28,12 +33,58 @@ from roadrunner.postprocessing.tracking.birth import BirthTracker
 from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
 
 
+def _make_snapshot_reader(config, equiv_table):
+    """The snapshot reader named by ``config.reader_type``."""
+    if config.reader_type == "yt":
+        return SnapshotReader(config.code, config.ptype, config.fields, config.unit_base,
+                              assign_fields=config.assign_fields)
+    if config.reader_type == "npz":
+        return NPZSnapshotReader(equiv_table, base_dir=config.particle_data_dir,
+                                 mock_sim=config.npz_mock_sim, assign_fields=config.assign_fields)
+    _required = {"index", "mass", "position", "velocity"}
+    return ParticleDataSnapshotReader(equiv_table, base_dir=config.particle_data_dir,
+                                      assign_fields=config.assign_fields,
+                                      extra_fields=[k for k in config.fields if k not in _required])
+
+
+def _resolve_cosmology(config, reader, equiv_table):
+    """The run's Cosmology: the last snapshot's parameters, completed and overridden by ``config.cosmology``.
+
+    Parameters
+    ----------
+    config : RunConfig
+    reader : SnapshotReader, NPZSnapshotReader, or ParticleDataSnapshotReader
+    equiv_table : EquivalenceTable
+
+    Returns
+    -------
+    cosmology : Cosmology
+
+    Raises
+    ------
+    ConfigurationError
+        If a :class:`Cosmology` parameter is in neither the snapshot nor
+        ``config.cosmology``.
+    """
+    from_file = reader.read_cosmology(equiv_table.snapshot_path(equiv_table.max_snapshot))
+    clash = {k: (from_file[k], v) for k, v in config.cosmology.items() if k in from_file and not np.isclose(from_file[k], v)}
+    if clash:
+        warnings.warn(f"config cosmology overrides the snapshot's: {clash} (snapshot, config)")
+    params = from_file | config.cosmology
+    missing = [f.name for f in dataclasses.fields(Cosmology) if f.name not in params]
+    if missing:
+        raise ConfigurationError(f"cosmology parameters {missing} are not in the snapshots: set them under `cosmology:` in the config")
+    return Cosmology(**{f.name: params[f.name] for f in dataclasses.fields(Cosmology)})
+
+
 def _with_run_scope(func):
-    """Run ``func`` inside the precision and thread scopes from its ``RunConfig``."""
+    """Run ``func`` inside the cosmology, precision and thread scopes from its ``RunConfig``."""
     @functools.wraps(func)
     def wrapper(config, *args, **kwargs):
         cfg = config if isinstance(config, RunConfig) else RunConfig(**config)
-        with precision(data=cfg.data_precision, math=cfg.math_precision), threads(cfg.threads):
+        equiv_table = EquivalenceTable(cfg.equivalence_path, base_dir=cfg.particle_data_dir)
+        run_cosmology = _resolve_cosmology(cfg, _make_snapshot_reader(cfg, equiv_table), equiv_table)
+        with cosmology(run_cosmology), precision(data=cfg.data_precision, math=cfg.math_precision), threads(cfg.threads):
             return func(config, *args, **kwargs)
     return wrapper
 
@@ -58,27 +109,7 @@ def run_accretion_history(config: RunConfig | dict) -> None:
         config.equivalence_path, base_dir=config.particle_data_dir,
     )
 
-    if config.reader_type == "yt":
-        snapshot_reader = SnapshotReader(
-            config.code, config.ptype, config.fields, config.unit_base,
-            assign_fields=config.assign_fields,
-        )
-    elif config.reader_type == "npz":
-        snapshot_reader = NPZSnapshotReader(
-            equiv_table, base_dir=config.particle_data_dir,
-            mock_sim=config.npz_mock_sim,
-            assign_fields=config.assign_fields,
-        )
-    elif config.reader_type == "pdata":
-        _required = {"index", "mass", "position", "velocity"}
-        _extra_field_names = [k for k in config.fields if k not in _required]
-        snapshot_reader = ParticleDataSnapshotReader(
-            equiv_table, base_dir=config.particle_data_dir,
-            assign_fields=config.assign_fields,
-            extra_fields=_extra_field_names,
-        )
-    else:
-        raise ValueError(f"Unknown reader_type: {config.reader_type}")
+    snapshot_reader = _make_snapshot_reader(config, equiv_table)
 
     if config.selection_snapshot is not None:
         snaps = merger_handler.snapshots

@@ -5,6 +5,8 @@ import pytest
 
 from roadrunner._mcf_types import SnapshotData
 
+pytestmark = pytest.mark.usefixtures("cosmology_scope")
+
 
 class TestSnapshotDataRegistries:
     def test_fields_default(self):

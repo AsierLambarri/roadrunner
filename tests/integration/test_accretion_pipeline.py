@@ -25,6 +25,8 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+pytestmark = pytest.mark.usefixtures("cosmology_scope")
+
 DATA_DIR = "test_data/mock_snap_tight"
 
 

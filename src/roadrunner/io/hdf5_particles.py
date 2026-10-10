@@ -19,12 +19,15 @@ velocities are stored in scaled coordinates using :class:`StandardScaler`.
 """
 
 import os
+from dataclasses import asdict
 
 import h5py
 import numpy as np
 
 from roadrunner.helpers import select_float_dtype, select_uint_dtype
 from roadrunner.physics.scaler import StandardScaler
+from roadrunner._defaults import COSMOLOGY_GROUP
+from roadrunner.cosmology import current_cosmology
 
 
 class HDF5ParticleWriter:
@@ -66,7 +69,9 @@ class HDF5ParticleWriter:
         with the :class:`StandardScaler` mean/scale used to recover the
         unscaled values. Masses, indices, and any fields of
         ``snapshot_data`` other than ``index``, ``mass``, ``position``,
-        and ``velocity`` are stored unscaled under their own names.
+        and ``velocity`` are stored unscaled under their own names. The
+        run's cosmology is written as the ``header/cosmology`` group's
+        attributes.
 
         Parameters
         ----------
@@ -86,6 +91,7 @@ class HDF5ParticleWriter:
             header.attrs["snapshot"] = int(snapshot_id)
             header.attrs["time"] = float(time)
             header.attrs["redshift"] = float(redshift)
+            hf.create_group(COSMOLOGY_GROUP).attrs.update(asdict(current_cosmology()))
 
             data = hf.create_group("data")
 

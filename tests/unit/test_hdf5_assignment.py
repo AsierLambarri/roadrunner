@@ -9,6 +9,8 @@ from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner._mcf_types import AssignmentResult
 from roadrunner.clustering.sparse import SparseCSC
 
+pytestmark = pytest.mark.usefixtures("cosmology_scope")
+
 
 def _make_assignment_result(n_particles=100, n_galaxies=5):
     rng = np.random.default_rng(42)

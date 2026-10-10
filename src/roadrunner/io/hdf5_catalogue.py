@@ -15,18 +15,21 @@
 
 Writes per-snapshot galaxy properties, dynamical-state data, satellite
 relations, and final birth/assembly tables into a single ``catalogue.hdf5``
-file with a header containing the merger tree and equivalence table.
+file with a header containing the merger tree, equivalence table, and
+the run's cosmology (``header/cosmology`` group attributes).
 """
 
 import json
 import os
+from dataclasses import asdict
 
 import h5py
 import numpy as np
 import pandas as pd
 
 from roadrunner.helpers import select_uint_dtype
-from roadrunner._defaults import GALAXY_ID, SNAP_ID
+from roadrunner._defaults import COSMOLOGY_GROUP, GALAXY_ID, SNAP_ID
+from roadrunner.cosmology import current_cosmology
 
 
 class HDF5CatalogueWriter:
@@ -74,6 +77,7 @@ class HDF5CatalogueWriter:
             hdr = hf.require_group("header")
             self._del_existing(hdr, "accretion_id")
             hdr.create_dataset("accretion_id", data=accretion_id)
+            hf.require_group(COSMOLOGY_GROUP).attrs.update(asdict(current_cosmology()))
             self._del_existing(hdr, "snapshots")
             snap_arr = np.asarray(
                 snapshots, dtype=select_uint_dtype(max(snapshots), "(snapshot ids)"))

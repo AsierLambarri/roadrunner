@@ -16,14 +16,19 @@ Usage:
       --n-snap 11 --n-newborn 1000
       --v-sys 1000 1000 1000 --dt0 0.3 --dt1 0.3
       --t-end 13.82 --H0 70.2 --omega-m 0.272
+      --omega-b 0.045 --sigma8 0.807 --n-s 0.961
 """
 
 import argparse
 import os
+import sys
 
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
+
+sys.path.insert(0, "src")
+from roadrunner._defaults import COSMOLOGY_NPZ_PREFIX
 
 
 def _age_to_redshift(t, H0_Gyr, omega_m, omega_lambda):
@@ -54,6 +59,12 @@ def main():
                         help="Hubble constant (km/s/Mpc)")
     parser.add_argument("--omega-m", type=float, default=0.272,
                         help="Matter density parameter")
+    parser.add_argument("--omega-b", type=float, default=0.045,
+                        help="Baryon density parameter")
+    parser.add_argument("--sigma8", type=float, default=0.807,
+                        help="RMS matter fluctuation in 8 Mpc/h spheres")
+    parser.add_argument("--n-s", type=float, default=0.961,
+                        help="Scalar spectral index")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
     args = parser.parse_args()
@@ -71,6 +82,8 @@ def main():
     omega_m = args.omega_m
     omega_lambda = 1.0 - omega_m
     H0_Gyr = H0_km * 1.0227e-3  # km/s/Mpc → Gyr^{-1}
+    cosmology_keys = {f"{COSMOLOGY_NPZ_PREFIX}{k}": v for k, v in dict(
+        h=H0_km / 100.0, omega_m=omega_m, omega_b=args.omega_b, sigma8=args.sigma8, n_s=args.n_s).items()}
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -178,6 +191,7 @@ def main():
             coords=save_coords,
             galaxy_id=cum_galaxy_id,
             born_snap=cum_born,
+            **cosmology_keys,
         )
 
         print(f"  Snap {snap_k}: t_cosmic={cosmic_time[snap_k]:.3f} Gyr, z={z[snap_k]:.4f}, "

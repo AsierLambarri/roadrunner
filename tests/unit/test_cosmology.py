@@ -4,6 +4,7 @@ import csv
 import os
 import warnings
 from collections import defaultdict
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -11,6 +12,8 @@ import pytest
 from roadrunner._exceptions import ConfigurationError
 from roadrunner.cosmology import Cosmology, cosmology, current_cosmology
 from roadrunner.physics import merger_tree
+from roadrunner.pipeline.config import RunConfig
+from roadrunner.pipeline.entry import _resolve_cosmology
 
 _TOLERANCE = 6e-3   # measured overall max |c/c_col - 1| (5.209e-3, VINTERGATAN-GM), rounded up to 1 sig fig
 
@@ -111,3 +114,40 @@ class TestMergerTreeDropIn:
             c_merger_tree = merger_tree.concentration(m_vir, z)
         c_cosmology = planck18.concentration(m_vir, z)
         np.testing.assert_array_equal(c_merger_tree, c_cosmology)
+
+
+def _equiv(max_snapshot=0):
+    eq = MagicMock()
+    eq.max_snapshot = max_snapshot
+    eq.snapshot_path = lambda sid: f"/snap/{sid}"
+    return eq
+
+
+def _reader(params):
+    reader = MagicMock()
+    reader.read_cosmology.return_value = params
+    return reader
+
+
+class TestResolveCosmology:
+    def test_file_and_config_merge(self):
+        config = RunConfig(cosmology=dict(omega_b=0.0490, sigma8=0.8102, n_s=0.9665))
+        cosmo = _resolve_cosmology(config, _reader({"h": 0.6766, "omega_m": 0.3111}), _equiv())
+        assert cosmo == Cosmology(0.6766, 0.3111, 0.0490, 0.8102, 0.9665)
+
+    def test_clash_warns_and_config_wins(self):
+        config = RunConfig(cosmology=dict(h=0.7, omega_b=0.0490, sigma8=0.8102, n_s=0.9665))
+        with pytest.warns(UserWarning, match="overrides the snapshot's"):
+            cosmo = _resolve_cosmology(config, _reader({"h": 0.6766, "omega_m": 0.3111}), _equiv())
+        assert cosmo.h == 0.7
+
+    def test_missing_parameter_raises(self):
+        config = RunConfig()
+        with pytest.raises(ConfigurationError, match="sigma8"):
+            _resolve_cosmology(config, _reader({"h": 0.6766, "omega_m": 0.3111}), _equiv())
+
+
+class TestRunConfigCosmologyKeys:
+    def test_unknown_key_raises(self):
+        with pytest.raises(ValueError, match="unknown keys"):
+            RunConfig(cosmology={"Omega_m": 0.3})

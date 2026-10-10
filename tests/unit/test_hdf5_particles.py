@@ -8,6 +8,8 @@ from roadrunner.io.hdf5_particles import HDF5ParticleWriter
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.physics.scaler import StandardScaler
 
+pytestmark = pytest.mark.usefixtures("cosmology_scope")
+
 
 class TestHDF5ParticleWriter:
     @pytest.fixture

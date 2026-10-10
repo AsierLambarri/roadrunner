@@ -1,12 +1,17 @@
 """Particle selection tests for NPZ and particle-data readers."""
 
 import os
+from dataclasses import asdict
 from unittest.mock import MagicMock
 
 import h5py
 import numpy as np
 import pytest
 
+from roadrunner._defaults import COSMOLOGY_NPZ_PREFIX
+from roadrunner._mcf_types import SnapshotData
+from roadrunner.cosmology import Cosmology, cosmology
+from roadrunner.io.hdf5_particles import HDF5ParticleWriter
 from roadrunner.pipeline.config import RunConfig
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.readers.npz_reader import NPZSnapshotReader
@@ -181,6 +186,7 @@ class TestEntrySelection:
         mh.snapshots = [0, 50, 100]
         eq = MagicMock()
         eq.snapshot_path = lambda sid: f"/p/{sid}"
+        eq.max_snapshot = 100
 
         monkeypatch.setattr(entry, "MergerTreeReaderCSV", MagicMock())
         monkeypatch.setattr(entry, "MergerTreeHandlerCSV",
@@ -202,12 +208,14 @@ class TestEntrySelection:
     def test_non_yt_selection(self, monkeypatch):
         reader = MagicMock()
         reader.select_indices.return_value = np.array([11, 22])
+        reader.read_cosmology.return_value = {"h": 0.6766, "omega_m": 0.3111}
         self._patch(monkeypatch, reader)
         import roadrunner.pipeline.entry as entry
 
         entry.run_accretion_history(RunConfig(
             accretion_id=1, reader_type="npz", selection_snapshot=100,
-            selection_sphere=[[0.0, 0.0, 0.0], 1.0]))
+            selection_sphere=[[0.0, 0.0, 0.0], 1.0],
+            cosmology=dict(omega_b=0.049, sigma8=0.8102, n_s=0.9665)))
 
         reader.select_indices.assert_called_once_with(
             "/p/100", sphere=[[0.0, 0.0, 0.0], 1.0], bbox=None)
@@ -215,6 +223,7 @@ class TestEntrySelection:
 
     def test_selection_precedes_range_warns(self, monkeypatch):
         reader = MagicMock()
+        reader.read_cosmology.return_value = {"h": 0.6766, "omega_m": 0.3111}
         reader.select_indices.return_value = np.array([11])
         self._patch(monkeypatch, reader)
         import roadrunner.pipeline.entry as entry
@@ -223,4 +232,30 @@ class TestEntrySelection:
             entry.run_accretion_history(RunConfig(
                 accretion_id=1, reader_type="npz", selection_snapshot=50,
                 end_snapshot=100,
-                selection_bbox=[[-1, -1, -1], [1, 1, 1]]))
+                selection_bbox=[[-1, -1, -1], [1, 1, 1]],
+                cosmology=dict(omega_b=0.049, sigma8=0.8102, n_s=0.9665)))
+
+
+class TestCosmologyRoundtrip:
+    def test_particle_data_reader_reads_written_cosmology(self, tmp_path):
+        cosmo = Cosmology(0.6766, 0.3111, 0.0490, 0.8102, 0.9665)
+        snap = SnapshotData(
+            index=IDS, mass=MASSES, position=POSITIONS, velocity=VELOCITIES,
+            redshift=REDSHIFT, time=TIME,
+        )
+        with cosmology(cosmo):
+            HDF5ParticleWriter(str(tmp_path)).write_snapshot(0, TIME, REDSHIFT, snap)
+
+        path = os.path.join(str(tmp_path), "particle_data", "snapshot0000.hdf5")
+        reader = ParticleDataSnapshotReader(_equiv("unused.hdf5"))
+        assert reader.read_cosmology(path) == asdict(cosmo)
+
+    def test_npz_reader_reads_cosmology_keys(self, tmp_path):
+        path = os.path.join(str(tmp_path), "cosmo.npz")
+        np.savez(
+            path, indices=IDS, masses=MASSES,
+            coords=np.column_stack([POSITIONS, VELOCITIES]),
+            **{f"{COSMOLOGY_NPZ_PREFIX}h": 0.6766, f"{COSMOLOGY_NPZ_PREFIX}omega_m": 0.3111},
+        )
+        reader = NPZSnapshotReader(_equiv("cosmo.npz"), base_dir=str(tmp_path), mock_sim=True)
+        assert reader.read_cosmology(path) == {"h": 0.6766, "omega_m": 0.3111}

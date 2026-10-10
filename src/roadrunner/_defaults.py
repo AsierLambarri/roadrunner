@@ -127,6 +127,13 @@ def math_dtype():
     return _resolve_precision(_math_var.get())
 
 
+# ── Cosmology ──────────────────────────────────────────────────────
+# Where files carry the run's cosmology (the fields of roadrunner.cosmology.Cosmology):
+# the attributes of this HDF5 group (catalogue, particle and assignment outputs; pdata input),
+# and 0-d NPZ members named with this prefix (cosmology_h, cosmology_omega_m, ...).
+COSMOLOGY_GROUP = "header/cosmology"
+COSMOLOGY_NPZ_PREFIX = "cosmology_"
+
 # ── Integer IDs ──────────────────────────────────────────────────
 # SIM_ID: particle IDs from simulations (uint64, never narrowed/signed).
 # LOCAL_IDX: local array positions (signed: -1 == missing).
@@ -165,6 +172,8 @@ __all__ = [
     "COL_WIDTH_RUNTIME",
     "COL_WIDTH_INT",
     "COL_WIDTH_FLOAT",
+    "COSMOLOGY_GROUP",
+    "COSMOLOGY_NPZ_PREFIX",
     "precision",
     "data_dtype",
     "math_dtype",

@@ -18,11 +18,14 @@ boundness values, and particle timescales to per-snapshot HDF5 files.
 """
 
 import os
+from dataclasses import asdict
 
 import h5py
 import numpy as np
 
 from roadrunner.helpers import select_float_dtype, select_float_dtype_relative, select_uint_dtype
+from roadrunner._defaults import COSMOLOGY_GROUP
+from roadrunner.cosmology import current_cosmology
 
 
 def _aligned_boundness(resp_rows, bound_rows, bound_values, dtype):
@@ -135,6 +138,9 @@ class HDF5AssignmentWriter:
                        assignment_result, boundness_csc, energy_scales=None):
         """Write a snapshot's assignment data to an HDF5 file.
 
+        The run's cosmology is written as the ``header/cosmology`` group's
+        attributes.
+
         Parameters
         ----------
         snapshot_id : int
@@ -153,6 +159,7 @@ class HDF5AssignmentWriter:
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:
             hf.attrs["time"] = float(time)
+            hf.create_group(COSMOLOGY_GROUP).attrs.update(asdict(current_cosmology()))
 
             galaxies_grp = hf.require_group("galaxies")
 

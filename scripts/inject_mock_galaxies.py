@@ -53,17 +53,24 @@ Scenario (YAML), see ``scripts/inject_mock_galaxies.yaml.example``:
 """
 
 import argparse
+import dataclasses
 import os
 import shutil
+import sys
 
 import limepy
 import numpy as np
 import pandas as pd
 import yaml
 
+sys.path.insert(0, "src")
+from roadrunner._defaults import COSMOLOGY_NPZ_PREFIX
+from roadrunner.cosmology import Cosmology
+
 _PC_TO_KPC = 1.0 / 1000.0
 _DEFAULTS = dict(phi0=0.01, g=2.0, mass=1.0e10, rh_pc=3000.0, star_mass=1.0e4)
-_KNOWN_KEYS = {"indices", "masses", "coords", "galaxy_id", "born_snap", "metallicity"}
+_KNOWN_KEYS = ({"indices", "masses", "coords", "galaxy_id", "born_snap", "metallicity"}
+              | {f"{COSMOLOGY_NPZ_PREFIX}{f.name}" for f in dataclasses.fields(Cosmology)})
 _SIM_ONLY = ("birth_snapshot", "end_snapshot", "n_new_per_snapshot", "merge_into")
 
 

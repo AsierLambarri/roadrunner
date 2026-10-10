@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
+
+from roadrunner.cosmology import Cosmology
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,8 @@ class RunConfig:
     save_assignment: bool = True
     float_atol: float = 1e-4
 
+    cosmology: dict = field(default_factory=dict)
+
     def __post_init__(self):
         """Validate and coerce configuration values.
 
@@ -89,6 +94,10 @@ class RunConfig:
 
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")
+
+        unknown = set(self.cosmology) - {f.name for f in dataclasses.fields(Cosmology)}
+        if unknown:
+            raise ValueError(f"cosmology has unknown keys {sorted(unknown)}; allowed: h, omega_m, omega_b, sigma8, n_s")
 
         for name in ("data_precision", "math_precision"):
             if getattr(self, name) not in ("single", "double"):

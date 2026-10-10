@@ -1,5 +1,7 @@
 """YT-based snapshot reader for cosmological simulations."""
 
+import warnings
+
 import numpy as np
 import yt
 
@@ -9,6 +11,9 @@ from roadrunner._defaults import SIM_ID, data_dtype
 
 
 _TRACK_FILTER_NAME = "_rr_track"
+# ds.parameters key holding Omega_b, per code (codes not listed take it from the config)
+_OMEGA_B_KEYS = {"RAMSES": "omega_b", "VINTERGATAN": "omega_b", "AREPO": "OmegaBaryon", "AURIGA": "OmegaBaryon"}
+_FLAT_ATOL = 1e-3
 
 
 class SnapshotReader:
@@ -44,6 +49,39 @@ class SnapshotReader:
     def particle_filter(self) -> np.ndarray | None:
         """Currently configured persistent particle-ID filter (or None)."""
         return self._particle_filter
+
+    def read_cosmology(self, file_path: str) -> dict:
+        """Cosmology carried by a snapshot file.
+
+        Reads ``h`` and ``omega_m`` from the dataset, and ``omega_b`` from
+        the code-specific parameter in ``_OMEGA_B_KEYS`` (codes not listed
+        there don't carry it, so it must come from the config). ``sigma8``
+        and ``n_s`` are never in a snapshot and must come from the config.
+
+        Parameters
+        ----------
+        file_path : str
+            Path to the snapshot file.
+
+        Returns
+        -------
+        params : dict
+            Empty for a non-cosmological dataset.
+
+        Warns
+        -----
+        UserWarning
+            If the dataset's cosmology is not flat.
+        """
+        ds = self._open(file_path)
+        if not ds.cosmological_simulation:
+            return {}
+        if abs(ds.omega_matter + ds.omega_lambda - 1.0) > _FLAT_ATOL:
+            warnings.warn(f"{file_path}: Omega_m + Omega_Lambda = {ds.omega_matter + ds.omega_lambda:.4f}; "
+                          "the cosmology is taken as flat")
+        omega_b = ds.parameters.get(_OMEGA_B_KEYS.get(self.code), 0.0)
+        return ({"h": float(ds.hubble_constant), "omega_m": float(ds.omega_matter)}
+                | ({"omega_b": float(omega_b)} if omega_b > 0 else {}))
 
     def load(self, file_path: str,
              particle_indices: np.ndarray | None = None) -> SnapshotData:

@@ -5,6 +5,10 @@ The HDF5 file must contain:
   ``data/velocities``, ``data/scaler/mean``, ``data/scaler/scale``
 - ``header/redshift`` and ``header/time`` attributes
 
+An optional ``header/cosmology`` group, with the fields of
+:class:`roadrunner.cosmology.Cosmology` as attributes, carries the run's
+cosmology.
+
 Extra datasets (e.g. ``data/metallicity``) are optional and are
 loaded as-is (stored in raw physical units).
 
@@ -21,7 +25,7 @@ import numpy as np
 
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers.equivalence import EquivalenceTable
-from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
+from roadrunner._defaults import COSMOLOGY_GROUP, SIM_ID, data_dtype, math_dtype
 
 READ_BLOCK_ROWS = 1 << 20   # rows per block for masked reads
 
@@ -144,6 +148,23 @@ class ParticleDataSnapshotReader:
                 pos = (ds[start:start + block] * inv_s[:3] + mean[:3]).astype(dt)
                 inside[start:start + block] = self._region_mask(pos, sphere=sphere, bbox=bbox)
         return indices[inside]
+
+    def read_cosmology(self, file_path: str) -> dict:
+        """Cosmology carried by the file's ``header/cosmology`` group.
+
+        Parameters
+        ----------
+        file_path : str
+            Path to the ``.hdf5`` file.
+
+        Returns
+        -------
+        params : dict
+            Empty if the file has no ``header/cosmology`` group.
+        """
+        with h5py.File(file_path, "r") as hf:
+            group = hf.get(COSMOLOGY_GROUP)
+            return {} if group is None else {k: float(v) for k, v in group.attrs.items()}
 
     def load(self, file_path: str, particle_indices=None) -> SnapshotData:
         """Load a snapshot from an HDF5 file.

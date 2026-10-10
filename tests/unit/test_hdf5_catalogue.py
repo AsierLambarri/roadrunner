@@ -8,6 +8,8 @@ import pytest
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_reader import HDF5CatalogueReader
 
+pytestmark = pytest.mark.usefixtures("cosmology_scope")
+
 
 class TestHDF5CatalogueWriter:
     @pytest.fixture

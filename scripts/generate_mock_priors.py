@@ -11,13 +11,18 @@ import os, sys, argparse
 import numpy as np, pandas as pd
 
 sys.path.insert(0, "src")
-from roadrunner._defaults import KMEANS_PP_MAX_ITER
+from roadrunner._defaults import COSMOLOGY_NPZ_PREFIX, KMEANS_PP_MAX_ITER
 
 # Cosmology
 H0 = 70.2
 OM = 0.272
 OL = 0.728
+OB = 0.045
+S8 = 0.807
+NS = 0.961
 H0_Gyr = H0 / 1000.0 / 0.9778  # km/s/Mpc → 1/Gyr
+cosmology_keys = {f"{COSMOLOGY_NPZ_PREFIX}{k}": v for k, v in dict(
+    h=H0 / 100.0, omega_m=OM, omega_b=OB, sigma8=S8, n_s=NS).items()}
 
 def age_to_z(t):
     arg = np.sinh(1.5 * H0_Gyr * np.sqrt(OL) * t)
@@ -127,6 +132,7 @@ def main():
             os.path.join(out, f"particles_{snap_k:03d}.npz"),
             indices=indices, masses=masses, coords=X,
             galaxy_id=galaxy_id, born_snap=born_snap,
+            **cosmology_keys,
         )
         print(f"Snap {snap_k}: {len(X)} particles, {n_gal} galaxies")
 

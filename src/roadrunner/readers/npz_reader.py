@@ -21,7 +21,7 @@ import numpy as np
 
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.readers.equivalence import EquivalenceTable
-from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
+from roadrunner._defaults import COSMOLOGY_NPZ_PREFIX, SIM_ID, data_dtype, math_dtype
 
 
 class NPZSnapshotReader:
@@ -106,6 +106,23 @@ class NPZSnapshotReader:
             self._particle_filter = saved
         mask = self._region_mask(snap.position, sphere=sphere, bbox=bbox)
         return snap.index[mask]
+
+    def read_cosmology(self, file_path: str) -> dict:
+        """Cosmology carried by an NPZ file's ``cosmology_*`` members.
+
+        Parameters
+        ----------
+        file_path : str
+            Path to the ``.npz`` file.
+
+        Returns
+        -------
+        params : dict
+            Empty if the file carries no ``cosmology_*`` member.
+        """
+        with np.load(file_path, allow_pickle=False) as raw:
+            return {k.removeprefix(COSMOLOGY_NPZ_PREFIX): float(raw[k])
+                    for k in raw.files if k.startswith(COSMOLOGY_NPZ_PREFIX)}
 
     def load(self, file_path: str, particle_indices=None) -> SnapshotData:
         """Load a snapshot from an NPZ file.
