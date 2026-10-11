@@ -2,18 +2,24 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.integrate import quad, trapezoid
 
+from roadrunner._defaults import CONCENTRIC_OFFSET
 from roadrunner._mcf_types import PotentialModel
-from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
+from roadrunner.physics.distribution import profile_phi
 from roadrunner.physics.potentials import (
     get_potential,
+    CompositeSphericalPotential,
     KeplerPotential,
     NFWPotential,
     PlummerPotential,
     HernquistPotential,
     ShellPotential,
     SphericalPotential,
+    _shell_mean,
+    _shell_mass,
 )
+from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 
 _X = np.array([1.0, 0.0, 0.0])
 
@@ -337,7 +343,8 @@ class TestPositions:
         np.testing.assert_allclose(comp.com_velocity, np.zeros(3), atol=0)
         np.testing.assert_allclose(comp.potential(xyz), nfw._potential(r1) + pl._potential(r2), rtol=1e-12)
         np.testing.assert_allclose(comp.enclosed_mass(xyz), nfw._enclosed_mass(r1) + pl._enclosed_mass(r2), rtol=1e-12)
-        np.testing.assert_allclose(comp._potential(r1), nfw._potential(r1) + pl._potential(r1), rtol=1e-12)
+        # the radial profile is about x_min (both components off it here: monopole), so Φ̄(0) is the potential there
+        np.testing.assert_allclose(comp._potential(np.zeros(1))[0], comp.central_potential(), rtol=1e-6)
         k = KeplerPotential(1e10, centre=c1)
         np.testing.assert_allclose(k.well_depth(c1 + np.array([[0.2, 0.0, 0.0]])), -k._potential(np.array([0.2]))[0], rtol=1e-9)
 
@@ -485,3 +492,76 @@ class TestWellMinimum:
         d = CompositeSphericalPotential(stars=p1)
         d.add("stars", p2, p3)
         np.testing.assert_array_equal(d.x_min, CompositeSphericalPotential(stars=[p1, p2, p3]).x_min)
+
+
+class TestCompositePathways:
+    def test_concentric_components_keep_their_profiles(self):
+        nfw, pl = NFWPotential(1e11, 8.0, 10.0, centre=_C0), PlummerPotential(1e9, 0.5, centre=_C0)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
+        r = np.array([0.0, 0.3, 5.0, 80.0])
+        np.testing.assert_array_equal(c._offsets, [0.0, 0.0])
+        np.testing.assert_array_equal(c.profile()[:, 3], [0.0, 0.0])
+        for name in ("_potential", "_density", "_enclosed_mass"):
+            np.testing.assert_array_equal(getattr(c, name)(r), getattr(nfw, name)(r) + getattr(pl, name)(r))
+        near = PlummerPotential(1e9, 0.5, centre=_C0 + np.array([0.4 * CONCENTRIC_OFFSET * 0.5, 0.0, 0.0]))
+        np.testing.assert_array_equal(CompositeSphericalPotential(dark_matter=nfw, stars=near)._offsets, [0.0, 0.0])
+        for p in (nfw, pl):                                      # no jump across the threshold: d -> 0 is the profile
+            np.testing.assert_allclose(_shell_mean(p._potential, r[1:], 1e-9), p._potential(r[1:]), rtol=1e-12)
+            np.testing.assert_allclose(_shell_mean(p._density, r[1:], 1e-9), p._density(r[1:]), rtol=1e-8)
+            np.testing.assert_allclose(_shell_mass(p, r[1:], 1e-9), p._enclosed_mass(r[1:]), rtol=1e-8)
+
+    def test_monopole_kernels(self):
+        k, d = KeplerPotential(1e10), 2.0                       # Newton: -G M / max(r, d), M inside only once r > d
+        r = np.array([0.0, 0.5, 3.0, 10.0])
+        np.testing.assert_allclose(_shell_mean(k._potential, r, d), -k.G * k.M / np.maximum(r, d), rtol=1e-6)
+        np.testing.assert_allclose(_shell_mass(k, r, d), k.M * (r > d), rtol=1e-5, atol=1e-6 * k.M)
+
+        def mean_quad(f, ri, d):                                 # ½ ∫ F(|x - c|) dμ, adaptive
+            g = lambda mu: f(np.array([np.sqrt(max(ri * ri + d * d - 2.0 * ri * d * mu, 0.0))]))[0]
+            return 0.5 * quad(g, -1.0, 1.0, limit=200)[0]
+
+        for p in (NFWPotential(1e11, 8.0, 10.0), PlummerPotential(1e9, 0.5), HernquistPotential(5e9, 0.5)):
+            for d in (0.3, 4.0):
+                r = d * np.array([0.0, 0.5, 1.0, 2.0, 10.0])      # through the cusp at r = d
+                for f in (p._potential, p._density):
+                    np.testing.assert_allclose(_shell_mean(f, r, d), [mean_quad(f, x, d) for x in r], rtol=1e-6)
+                rr, h = d * np.array([0.5, 2.0, 10.0]), 1e-5       # Gauss: G M(<r) = r² dΦ̄/dr
+                dphi = (_shell_mean(p._potential, rr * (1 + h), d) - _shell_mean(p._potential, rr * (1 - h), d)) / (2 * h * rr)
+                np.testing.assert_allclose(p.G * _shell_mass(p, rr, d), rr**2 * dphi, rtol=1e-6)
+
+    def test_offset_component_pathway(self):
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        pl = PlummerPotential(1e8, 0.5, centre=_C0 + np.array([4.0, 0.0, 0.0]))   # light: the NFW cusp holds the minimum
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
+        np.testing.assert_array_equal(c.x_min, _C0)
+        np.testing.assert_array_equal(c._offsets, [0.0, 4.0])
+        r = np.array([0.0, 0.5, 3.9, 4.0, 4.1, 20.0])
+        np.testing.assert_allclose(c._potential(r), nfw._potential(r) + _shell_mean(pl._potential, r, 4.0), rtol=1e-14)
+        np.testing.assert_allclose(c._potential(np.zeros(1))[0], c.central_potential(), rtol=1e-12)
+        prof = c.profile()
+        np.testing.assert_array_equal(prof[:, 3], c._offsets)
+        np.testing.assert_allclose([profile_phi(prof, x) for x in r], c._potential(r), rtol=1e-12)
+
+
+class TestGroupDensity:
+    def test_dark_matter_in_the_whole_potential(self):
+        nfw, star = NFWPotential(1e11, 8.0, 10.0), HernquistPotential(5e9, 0.5)
+        c, R = CompositeSphericalPotential(dark_matter=nfw, stars=star), 80.0
+        E = np.array([0.9, 0.5, 0.1]) * c.central_potential()
+        t = np.linspace(0.0, 1.0, 4001)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message="Eddington", category=RuntimeWarning)   # no clipping for the DM
+            for r in (0.1, 1.0, 10.0):          # f gives back ρ_DM: ρ = 4π √2 |Φ|^(3/2) ∫_0^1 2 t² f(Φ (1 - t²)) dt
+                phi = c._potential(np.array([r]))[0]
+                f = c.distribution_function(phi * (1.0 - t**2), density="dark_matter")
+                rho = 4 * np.pi * np.sqrt(2.0) * (-phi) ** 1.5 * trapezoid(2 * t**2 * f, t)
+                np.testing.assert_allclose(rho, nfw._density(np.array([r]))[0], rtol=2e-3)
+            u = c.energy_fraction(E, R, density="dark_matter")
+        assert np.all((u > 0) & (u < 1)) and np.all(np.diff(u) > 0)
+        assert not np.allclose(u, c.energy_fraction(E, R))
+        for whole in (CompositeSphericalPotential(dark_matter=nfw), CompositeSphericalPotential(dark_matter=[nfw, star])):
+            for name in ("energy_fraction", "log_energy_density"):
+                np.testing.assert_array_equal(getattr(whole, name)(E, R, density="dark_matter"), getattr(whole, name)(E, R))
+            np.testing.assert_array_equal(whole.distribution_function(E, density="dark_matter"), whole.distribution_function(E))
+        np.testing.assert_array_equal(CompositeSphericalPotential(dark_matter=nfw).energy_fraction(E, R, density="dark_matter"),
+                                      nfw.energy_fraction(E, R))

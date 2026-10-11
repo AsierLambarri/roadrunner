@@ -34,10 +34,13 @@ from numba import get_num_threads, njit, prange
 from scipy.integrate import cumulative_trapezoid
 from scipy.special import betainc
 
+from roadrunner._defaults import CONCENTRIC_OFFSET
 from roadrunner._mcf_types import PotentialModel
 from roadrunner.mixture._math import row_squared_norms
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 from roadrunner.physics.distribution import (
+    GL_NODES,
+    GL_WEIGHTS,
     PROFILE_HERNQUIST,
     PROFILE_NFW,
     PROFILE_PLUMMER,
@@ -185,6 +188,9 @@ class SphericalPotential(PotentialModel):
         self._distributions = {}
         self.x_min = _locate_minimum(self.potential, self.centre[None])
 
+    def __repr__(self):
+        return f"{type(self).__name__}(M={self.M:.3g})"
+
     @abstractmethod
     def _potential(self, r):
         """Potential ``Φ(r)`` at physical radii ``r``.
@@ -242,14 +248,15 @@ class SphericalPotential(PotentialModel):
         return float(self.potential(self.x_min[None])[0])
 
     def profile(self):
-        """Compiled description for the q and g quadratures: rows ``(kind, k, a)`` summed by :func:`~roadrunner.physics.distribution.profile_phi`.
+        """Compiled description for the q and g quadratures: rows ``(kind, k, a, d)`` summed by :func:`~roadrunner.physics.distribution.profile_phi`.
 
         ``None`` (the default) when the potential has none: the quadratures then evaluate
-        :meth:`potential`. A composite potential stacks its components' rows.
+        :meth:`potential`. A composite potential stacks its components' rows; ``d`` is the row's
+        offset from the profile's centre (0 for a plain potential).
 
         Returns
         -------
-        profile : ndarray of shape (n, 3) or None
+        profile : ndarray of shape (n, 4) or None
         """
         return None
 
@@ -478,6 +485,11 @@ class SelfSimilarPotential(SphericalPotential):
     signature ``(M, a, G=..., centre=None)``.
     """
 
+    @property
+    def _scale_radius(self):
+        """The length a composite compares this component's offset with (`CONCENTRIC_OFFSET`)."""
+        return self.a
+
     def _lookup(self, name, E, r_max, deep=False):
         """Shared-table value ``name`` at physical energies ``E`` inside ``r_max``."""
         phi0 = self.central_potential()
@@ -583,8 +595,8 @@ class PlummerPotential(SelfSimilarPotential):
         return -self.G * self.M / self.a
 
     def profile(self):
-        """One Plummer row ``(PROFILE_PLUMMER, G M, a)``."""
-        return np.array([[PROFILE_PLUMMER, self.G * self.M, self.a]])
+        """One Plummer row ``(PROFILE_PLUMMER, G M, a, 0)``."""
+        return np.array([[PROFILE_PLUMMER, self.G * self.M, self.a, 0.0]])
 
     def _orbital_time(self, E, r):
         """Exact dynamical time ``2π sqrt((r² + a²)^(3/2) / (G M))``, finite at ``r = 0``.
@@ -833,8 +845,8 @@ class HernquistPotential(SelfSimilarPotential):
         return -self.G * self.M / self.a
 
     def profile(self):
-        """One Hernquist row ``(PROFILE_HERNQUIST, G M, a)``."""
-        return np.array([[PROFILE_HERNQUIST, self.G * self.M, self.a]])
+        """One Hernquist row ``(PROFILE_HERNQUIST, G M, a, 0)``."""
+        return np.array([[PROFILE_HERNQUIST, self.G * self.M, self.a, 0.0]])
 
     def _orbital_time(self, E, r):
         """Exact dynamical time ``2π (r + a) sqrt(r / (G M))``, 0 at ``r = 0``.
@@ -907,6 +919,11 @@ class NFWPotential(SphericalPotential):
         super().__init__(M, G=G, centre=centre, velocity=velocity)
         self.Rs = Rs
         self.c = c
+
+    @property
+    def _scale_radius(self):
+        """The length a composite compares this component's offset with (`CONCENTRIC_OFFSET`)."""
+        return self.Rs
 
     def _potential(self, r):
         """``Φ₀ ln(1 + x) / x``, ``x = r / Rs``: ``Φ₀`` at ``r = 0`` (the 0/0 limit).
@@ -991,9 +1008,9 @@ class NFWPotential(SphericalPotential):
         return -self.G * self.M / (self.Rs * A)
 
     def profile(self):
-        """One NFW row ``(PROFILE_NFW, G M / A(c), Rs)``."""
+        """One NFW row ``(PROFILE_NFW, G M / A(c), Rs, 0)``."""
         A = np.log(1 + self.c) - self.c / (1 + self.c)
-        return np.array([[PROFILE_NFW, self.G * self.M / A, self.Rs]])
+        return np.array([[PROFILE_NFW, self.G * self.M / A, self.Rs, 0.0]])
 
     def energy_fraction(self, E, r_max):
         """Exact (tabulated) fraction of the NFW mass inside ``r_max`` more bound than ``E``.
@@ -1232,6 +1249,11 @@ class ShellPotential(SphericalPotential):
         self._w = max(1, round(tidal_dlnr * self._inv_d))
         super().__init__(float(m_in[-1]), G=G, centre=centre, velocity=velocity)
 
+    @property
+    def _scale_radius(self):
+        """The length a composite compares this component's offset with (`CONCENTRIC_OFFSET`): its innermost node radius, inside which its potential is flat."""
+        return float(np.exp(self._c))
+
     def _potential(self, r):
         """Evaluate the potential.
 
@@ -1308,9 +1330,138 @@ class ShellPotential(SphericalPotential):
         raise NotImplementedError("ShellPotential has no energy distribution yet.")
 
 
-# Methods a single component answers itself, exactly (its closed forms and tables).
-_OWN_METHODS = ("orbital_time", "_orbital_time", "distribution_function", "energy_fraction", "log_energy_density",
-                "log_phase_space_fraction")
+def _shell_mean(f, r, d):
+    """Mean of a radial profile ``f`` over the sphere of radius ``r`` about a point ``d > 0`` from its centre.
+
+    ``½ ∫ f(sqrt(r² + d² - 2 r d μ)) dμ = (1 / (2 r d)) ∫_{|r-d|}^{r+d} s f(s) ds``; with
+    ``s = max(r, d) + min(r, d) x`` it is ``Σ_k w_k s_k f(s_k) / (2 max(r, d))`` (Gauss–Legendre on
+    [-1, 1]). ``s f(s)`` is finite at a ``1/s`` cusp (``s -> 0`` when ``r = d``); at ``r = 0`` it is
+    ``f(d)``; a point mass's potential gives Newton's ``-G M / max(r, d)``; it tends to ``f(r)`` as
+    ``d -> 0``.
+
+    Parameters
+    ----------
+    f : callable
+        Radial profile (``_potential`` or ``_density`` of a component).
+    r : ndarray
+    d : float
+
+    Returns
+    -------
+    mean : ndarray of float64, shape of ``r``
+    """
+    r = np.asarray(r, dtype=np.float64)
+    mid = np.maximum(r, d)
+    s = mid[..., None] + np.minimum(r, d)[..., None] * GL_NODES
+    return (s * f(s)) @ GL_WEIGHTS / (2.0 * mid)
+
+
+def _shell_mass(p, r, d):
+    """Mass of ``p`` inside the sphere of radius ``r`` about a point ``d > 0`` from its centre.
+
+    The monopole's enclosed mass, so ``G M = r² dΦ̄/dr`` with ``Φ̄ = _shell_mean(p._potential, r, d)``.
+    Shells ``s <= r - d`` lie inside (``p``'s own ``M(<max(r - d, 0))``); one with ``|r - d| < s < r + d``
+    has the fraction ``(r + d - s)(r - d + s) / (4 s d)`` inside, so the rest is
+    ``(π / d) ∫ s ρ(s) (r + d - s)(r - d + s) ds`` on the nodes of :func:`_shell_mean`, the product
+    written without cancellation as ``half (1 - x) (r + max(r - d, 0) + half x)``,
+    ``half = min(r, d)``. Both terms are positive; it tends to ``M(<r)`` as ``d -> 0`` and is 0 at ``r = 0``.
+
+    Parameters
+    ----------
+    p : SphericalPotential
+    r : ndarray
+    d : float
+
+    Returns
+    -------
+    menc : ndarray of float64, shape of ``r``
+    """
+    r = np.asarray(r, dtype=np.float64)
+    half = np.minimum(r, d)[..., None]
+    inner = np.maximum(r - d, 0.0)
+    s = np.maximum(r, d)[..., None] + half * GL_NODES
+    chord = half * (1.0 - GL_NODES) * (r[..., None] + inner[..., None] + half * GL_NODES)
+    return p._enclosed_mass(inner) + np.pi / d * half[..., 0] * ((s * p._density(s) * chord) @ GL_WEIGHTS)
+
+
+# a component's radial method about a reference centre d > 0 from its own: its shell average (monopole pathway)
+_MONOPOLE = {"_potential": lambda p, r, d: _shell_mean(p._potential, r, d),
+             "_density": lambda p, r, d: _shell_mean(p._density, r, d),
+             "_enclosed_mass": _shell_mass}
+
+
+def _about(p, method, r, d):
+    """Component ``p``'s radial ``method`` at radii ``r`` about a reference centre ``d`` from its own.
+
+    Its own profile when ``d = 0`` (concentric pathway, today's exact values), its shell average
+    otherwise (monopole pathway): the master kernel of the composite's radial profile, like the
+    per-row dispatch of :func:`~roadrunner.physics.distribution.profile_phi`.
+    """
+    return getattr(p, method)(r) if d == 0.0 else _MONOPOLE[method](p, r, d)
+
+
+# Methods without `density` a single component answers itself, exactly (its closed forms and tables);
+# the energy methods go through the group densities (`_densities`).
+_OWN_METHODS = ("orbital_time", "log_phase_space_fraction")
+
+
+class _GroupDensity:
+    """Some groups of a composite: their density in the composite's whole potential (the two-model route).
+
+    Its radial density is the sum of its components' along the composite's pathways, about
+    ``x_min``; :meth:`distribution_function` is Eddington's inversion of it in the composite's
+    potential, and the energy pair counts ``N = f g`` (``g`` of the composite) inside ``r_max``,
+    normalised to these groups' mass there (a :class:`SphericalDistribution` per ``r_max``, cached).
+    Holding every component, it is the composite's own, self-consistent distribution.
+
+    Parameters
+    ----------
+    composite : CompositeSphericalPotential
+    names : tuple of str
+        The groups it holds.
+    index : tuple of int
+        Their components' positions in the composite.
+    """
+
+    def __init__(self, composite, names, index):
+        self._composite, self._names, self._index = composite, names, index
+        self.has_distribution = all(composite[i].has_distribution for i in index)
+        # holding every component, its tables are the composite's own (the ones the phase-space fraction reads)
+        self._distributions = composite._distributions if len(index) == len(composite) else {}
+
+    def __repr__(self):
+        return f"group {'+'.join(self._names)} of {self._composite!r}"
+
+    def _density(self, r):
+        """Radial density of its components about the composite's ``x_min``, each along its pathway."""
+        return self._composite._pathway_sum("_density", r, self._index)
+
+    def distribution_function(self, E):
+        """Eddington's ``f`` of its density in the composite's potential (negative values clipped to 0, with a warning).
+
+        Raises
+        ------
+        NotImplementedError
+            If one of its components has no distribution function (Kepler, Shell).
+        """
+        if not self.has_distribution:
+            raise NotImplementedError(f"A component of the {self!r} has no energy distribution.")
+        return eddington_distribution_function(self._composite, E, density=self)
+
+    def _distribution(self, r_max):
+        """The cached :class:`SphericalDistribution` of its ``N = f g`` inside ``r_max``."""
+        d = self._distributions.get(r_max)
+        if d is None:
+            d = self._distributions[r_max] = SphericalDistribution(self._composite, r_max, self.distribution_function)
+        return d
+
+    def energy_fraction(self, E, r_max):
+        """Fraction of its mass inside ``r_max`` more bound than ``E``."""
+        return self._distribution(r_max).energy_fraction(E)
+
+    def log_energy_density(self, E, r_max):
+        """``ln dN/dE`` of its mass inside ``r_max``, per unit physical ``E``."""
+        return self._distribution(r_max).log_energy_density(E)
 
 
 class CompositeSphericalPotential(SphericalPotential):
@@ -1325,26 +1476,34 @@ class CompositeSphericalPotential(SphericalPotential):
     components' own methods (potential, density, enclosed mass, well
     depth, tidal denominator), so every component keeps its exact forms; the profile stacks
     their rows. The public methods take absolute physical positions and measure each
-    component from its own ``centre``; the private profile in ``r`` (which the distribution
-    machinery uses) treats every component as centred on one common centre. The central potential is the summed potential at the bottom of the well,
-    :attr:`x_min`, located among the components' centres (each component's own ``Φ₀`` when
-    they coincide).
+    component from its own ``centre``; the private radial profile (``_potential``, ``_density``,
+    ``_enclosed_mass``, :meth:`profile`'s rows) is measured from :attr:`x_min`, each component
+    along one pathway fixed in :meth:`add`: concentric (its own profile) when its offset from
+    ``x_min`` is below :data:`~roadrunner._defaults.CONCENTRIC_OFFSET` of its own scale radius,
+    monopole (its shell average about ``x_min``, :func:`_shell_mean`/:func:`_shell_mass`)
+    otherwise. Its value at ``r = 0`` is therefore :meth:`central_potential`, and the energy
+    tables share the halo's zero point. The central potential is the summed potential at the
+    bottom of the well, :attr:`x_min`, located among the components' centres (each component's
+    own ``Φ₀`` when they coincide).
 
     The orbital time combines the components' own as ``t^-2 = Σ t_i^-2``, exact for
-    dynamical times (``t_i^-2 ∝ M_i(<r)``). The energy distribution and the phase-space
-    fraction are those of the whole: the generic
-    :class:`~roadrunner.physics.distribution.SphericalDistribution` of the composite, with
-    ``f`` Eddington's inversion of the summed density in the summed potential and the q
-    and g quadratures compiled through the stacked :meth:`profile`. ``f``, and so the
-    energy pair, exists only when every component has one (``has_distribution``); the
-    phase-space fraction exists for any components.
+    dynamical times (``t_i^-2 ∝ M_i(<r)``). :meth:`distribution_function`,
+    :meth:`energy_fraction` and :meth:`log_energy_density` take a ``density`` (a group's name):
+    that group's density in the whole potential (the two-model Eddington inversion,
+    :class:`_GroupDensity`); the whole composite's when
+    ``None`` or when the group holds every component (then its own, self-consistent
+    distribution: a single component's exact closed forms and tables, several components the
+    generic :class:`~roadrunner.physics.distribution.SphericalDistribution` of the summed
+    density in the summed potential). :meth:`log_phase_space_fraction` is always the whole
+    composite's (it needs only the potential).
 
-    A single component answers those (``_OWN_METHODS``) itself, chosen when components are
-    added: its own orbital time, tables and closed forms, exactly.
+    A single component answers the methods without a ``density`` (``_OWN_METHODS``) itself,
+    chosen when components are added: its own orbital time and phase-space fraction, exactly.
 
     :attr:`groups` maps each group's name to its components, in the order they joined; a
     group accessed as an attribute (``comp.stars``) is a composite of its own, built fresh
-    from that group's components on each access.
+    from that group's components on each access (its own ``x_min`` and pathways, unlike
+    ``density="stars"``, which reads this composite's).
 
     Parameters
     ----------
@@ -1360,7 +1519,7 @@ class CompositeSphericalPotential(SphericalPotential):
     def __init__(self, **groups):
         groups = {name: (m,) if isinstance(m, SphericalPotential) else tuple(m) for name, m in groups.items()}
         self.G = next(iter(groups.values()))[0].G
-        self._components, self.groups = (), {}
+        self._components, self.groups, self._index = (), {}, {}
         for name, members in groups.items():
             self.add(name, *members)
 
@@ -1368,10 +1527,11 @@ class CompositeSphericalPotential(SphericalPotential):
         """Add components on the fly to a group, existing or new (e.g. a halo's stellar counterpart).
 
         The composite's mass, :attr:`com_centre`, :attr:`com_velocity`, ``has_distribution``,
-        single-component shortcuts and :attr:`x_min` are updated, and its cached distributions
-        are dropped, to be rebuilt on next use. A point mass (Kepler) has no finite
-        central potential, so neither has the composite: its :meth:`central_potential` raises
-        as the component's does.
+        single-component shortcuts, :attr:`x_min`, the pathways (:attr:`_offsets`) and the
+        group densities (:attr:`_densities`) are updated, and its cached distributions are
+        dropped, to be rebuilt on next use. A point mass (Kepler) has no finite central
+        potential, so neither has the composite: its :meth:`central_potential` raises as the
+        component's does.
 
         Parameters
         ----------
@@ -1388,23 +1548,37 @@ class CompositeSphericalPotential(SphericalPotential):
         """
         if any(p.G != self.G for p in potentials):
             raise ValueError("The components of a composite potential must share G.")
+        n = len(self._components)
         self._components += potentials
         self.groups[group] = self.groups.get(group, ()) + potentials
+        self._index[group] = self._index.get(group, ()) + tuple(range(n, len(self._components)))
+        every = tuple(range(len(self._components)))
         self.M = sum(p.M for p in self._components)
         self.com_centre = sum((p.M / self.M) * p.centre for p in self._components)
         self.com_velocity = sum((p.M / self.M) * p.velocity for p in self._components)
         self.has_distribution = all(p.has_distribution for p in self._components)
         self._distributions = {}
+        whole = _GroupDensity(self, tuple(self.groups), every)
         for name in _OWN_METHODS:
             self.__dict__.pop(name, None)
         if len(self._components) == 1:
             for name in _OWN_METHODS:
                 setattr(self, name, getattr(self._components[0], name))
+            whole = self._components[0]
         # only the new components: a Kepler found earlier already bound central_potential, which add() never pops
         points = [p for p in potentials if isinstance(p, KeplerPotential)]
         if points:
             self.central_potential = points[0].central_potential
-        self.x_min = _locate_minimum(self.potential, np.array([p.centre for p in self._components]))
+        centres = np.array([p.centre for p in self._components])
+        self.x_min = _locate_minimum(self.potential, centres)
+        # one pathway per component, read by every radial kernel: concentric (offset 0) or monopole about x_min
+        offset = np.sqrt(row_squared_norms(centres - self.x_min))
+        self._offsets = offset * (offset > CONCENTRIC_OFFSET * np.array([p._scale_radius for p in self._components]))
+        self._densities = {None: whole} | {name: whole if len(index) == len(every) else _GroupDensity(self, (name,), index)
+                                           for name, index in self._index.items()}
+
+    def __repr__(self):
+        return f"{type(self).__name__}({', '.join(f'{name}={list(members)!r}' for name, members in self.groups.items())})"
 
     def __iter__(self):
         return iter(self._components)
@@ -1441,26 +1615,23 @@ class CompositeSphericalPotential(SphericalPotential):
         first, *rest = self._components
         return sum((getattr(p, method)(*args) for p in rest), getattr(first, method)(*args))
 
+    def _pathway_sum(self, method, r, index):
+        """``Σ`` over the components at ``index`` of their radial ``method`` about :attr:`x_min`, each along its pathway (:func:`_about`); one component's value as is."""
+        first, *rest = index
+        return sum((_about(self._components[i], method, r, self._offsets[i]) for i in rest),
+                   _about(self._components[first], method, r, self._offsets[first]))
+
     def _potential(self, r):
-        """Co-centred summed potential ``Σ Φ_i(r)`` (the spherical profile the distributions use)."""
-        return self._sum("_potential", r)
+        """Summed potential at radii about :attr:`x_min`, each component along its pathway: the spherical profile the distributions use."""
+        return self._pathway_sum("_potential", r, range(len(self._components)))
 
     def _density(self, r):
-        """Co-centred summed density ``Σ ρ_i(r)``."""
-        return self._sum("_density", r)
+        """Summed density at radii about :attr:`x_min`, each component along its pathway: the spherical profile the distributions use."""
+        return self._pathway_sum("_density", r, range(len(self._components)))
 
     def _enclosed_mass(self, r):
-        """Co-centred summed enclosed mass ``Σ M_i(<r)``."""
-        return self._sum("_enclosed_mass", r)
-
-    def _tidal_denominator(self, r):
-        """Co-centred summed tidal denominator, each component's exact one."""
-        return self._sum("_tidal_denominator", r)
-
-    def _orbital_time(self, E, r):
-        """Co-centred orbital timescale ``(Σ t_i^-2)^(-1/2)``."""
-        with np.errstate(divide="ignore"):
-            return 1.0 / np.sqrt(sum(1.0 / p._orbital_time(E, r) ** 2 for p in self._components))
+        """Summed enclosed mass at radii about :attr:`x_min`, each component along its pathway: the spherical profile the distributions use."""
+        return self._pathway_sum("_enclosed_mass", r, range(len(self._components)))
 
     def potential(self, xyz):
         """Potential ``Σ Φ_i`` at absolute physical positions, each component from its own centre.
@@ -1523,21 +1694,29 @@ class CompositeSphericalPotential(SphericalPotential):
         return self._sum("well_depth", xyz)
 
     def profile(self):
-        """The components' profile rows stacked; ``None`` if any component has none (Shell).
+        """The components' profile rows stacked, with their pathway offsets; ``None`` if any component has none (Shell).
 
         Returns
         -------
-        profile : ndarray of shape (n, 3) or None
+        profile : ndarray of shape (n, 4) or None
+            Rows ``(kind, k, a, d)``; ``d`` is the component's pathway offset from
+            :attr:`x_min` (0: concentric, its own profile; otherwise its shell average).
         """
         rows = [p.profile() for p in self._components]
-        return None if any(row is None for row in rows) else np.vstack(rows)
+        return None if any(row is None for row in rows) else np.column_stack((np.vstack(rows)[:, :3], self._offsets))
 
-    def distribution_function(self, E):
-        """Eddington's ``f`` of the summed density in the summed potential.
+    def distribution_function(self, E, density=None):
+        """Eddington's ``f`` of a density in the whole potential.
 
         Parameters
         ----------
         E : ndarray
+        density : str, optional
+            A group's name: that group's density in the whole potential (Eddington's
+            inversion of its radial density). The whole composite's when ``None`` or when
+            the group holds every component (a single component's own closed forms and
+            tables; several, the generic tables of the summed density in the summed
+            potential).
 
         Returns
         -------
@@ -1546,11 +1725,61 @@ class CompositeSphericalPotential(SphericalPotential):
         Raises
         ------
         NotImplementedError
-            If a component has no distribution function (Kepler, Shell).
+            If a component of that group has no distribution function (Kepler, Shell).
+        KeyError
+            If ``density`` names no group of this composite.
         """
-        if not self.has_distribution:
-            raise NotImplementedError("A component of this composite potential has no energy distribution.")
-        return super().distribution_function(E)
+        return self._densities[density].distribution_function(E)
+
+    def energy_fraction(self, E, r_max, density=None):
+        """Fraction of a density's mass inside ``r_max`` more bound than ``E``.
+
+        Parameters
+        ----------
+        E : ndarray
+        r_max : float
+        density : str, optional
+            A group's name: that group's density in the whole potential, normalised to its
+            own mass inside ``r_max``. The whole composite's when ``None`` or when the group
+            holds every component.
+
+        Returns
+        -------
+        u : ndarray of float64
+
+        Raises
+        ------
+        NotImplementedError
+            If a component of that group has no distribution function (Kepler, Shell).
+        KeyError
+            If ``density`` names no group of this composite.
+        """
+        return self._densities[density].energy_fraction(E, r_max)
+
+    def log_energy_density(self, E, r_max, density=None):
+        """``ln dN/dE`` of a density's mass inside ``r_max``, per unit physical ``E``.
+
+        Parameters
+        ----------
+        E : ndarray
+        r_max : float
+        density : str, optional
+            A group's name: that group's density in the whole potential, normalised to its
+            own mass inside ``r_max``. The whole composite's when ``None`` or when the group
+            holds every component.
+
+        Returns
+        -------
+        log_n : ndarray of float64
+
+        Raises
+        ------
+        NotImplementedError
+            If a component of that group has no distribution function (Kepler, Shell).
+        KeyError
+            If ``density`` names no group of this composite.
+        """
+        return self._densities[density].log_energy_density(E, r_max)
 
 
 POTENTIAL_MODELS: dict[str, type[SphericalPotential]] = {

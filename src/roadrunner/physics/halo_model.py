@@ -40,7 +40,8 @@ class HaloModel:
     potential model's methods as one-line wrappers at catalogue coordinates:
     positions ``xyz`` are made physical (``length_scale``, float64), energies
     ``E`` are physical and pass as they are, and the energy distributions are
-    counted inside the halo's search sphere (``search_factor`` virial radii).
+    counted inside the halo's search sphere (``search_factor`` virial radii) —
+    of the whole halo or, with ``density``, of one group in the whole potential.
     Particle-level results are returned in ``math_dtype()``, the energy
     distributions in float64.
 
@@ -295,44 +296,53 @@ class HaloModel:
         """
         return self.well_depth(self.inner_position[None])
 
-    def distribution_function(self, E: np.ndarray) -> np.ndarray:
+    def distribution_function(self, E: np.ndarray, density: str = None) -> np.ndarray:
         """Isotropic distribution function ``f(E)`` of the potential model at physical energies.
 
         Parameters
         ----------
         E : ndarray
+        density : str, optional
+            A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
+            potential. The whole halo when ``None``.
 
         Returns
         -------
         f : ndarray of float64
         """
-        return self.potential_model.distribution_function(np.asarray(E, dtype=np.float64))
+        return self.potential_model.distribution_function(np.asarray(E, dtype=np.float64), density=density)
 
-    def energy_fraction(self, E: np.ndarray) -> np.ndarray:
+    def energy_fraction(self, E: np.ndarray, density: str = None) -> np.ndarray:
         """Fraction of the halo's mass inside the search sphere more bound than the physical energy ``E``.
 
         Parameters
         ----------
         E : ndarray
+        density : str, optional
+            A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
+            potential. The whole halo when ``None``.
 
         Returns
         -------
         u : ndarray of float64
         """
-        return self.potential_model.energy_fraction(np.asarray(E, dtype=np.float64), self._counting_radius())
+        return self.potential_model.energy_fraction(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
 
-    def log_energy_density(self, E: np.ndarray) -> np.ndarray:
+    def log_energy_density(self, E: np.ndarray, density: str = None) -> np.ndarray:
         """``ln dN/dE``: energy distribution of the halo's mass inside the search sphere, per unit physical ``E``.
 
         Parameters
         ----------
         E : ndarray
+        density : str, optional
+            A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
+            potential. The whole halo when ``None``.
 
         Returns
         -------
         log_n : ndarray of float64
         """
-        return self.potential_model.log_energy_density(np.asarray(E, dtype=np.float64), self._counting_radius())
+        return self.potential_model.log_energy_density(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
 
     def log_phase_space_fraction(self, E: np.ndarray) -> np.ndarray:
         """``ln w``: fraction of the search sphere's bound phase space more bound than the physical energy ``E``.

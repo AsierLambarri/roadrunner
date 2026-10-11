@@ -30,8 +30,9 @@ Models:
 - ``"energy"`` (any potential with a distribution function; its Errani
   prior is NFW-calibrated, so ``halo_models = ("nfw",)``): the likelihood
   ratio ``p*(u)`` of member stars over the halo's dark matter, on the
-  dark-matter energy rank ``u = F_c(calE)`` (uniform for the dark matter
-  itself). ``p*`` is a histogram of the previous snapshot's members in
+  dark-matter energy rank ``u = F_c(calE)`` (the ``dark_matter`` group's
+  energy distribution in the halo's whole potential; uniform for the dark
+  matter itself). ``p*`` is a histogram of the previous snapshot's members in
   ``t = -ln u``, mixed with Errani et al. (2022)'s tagging ratio
   (exponential galaxies, with ``r_1/2 = 0.015 R_vir``, Kravtsov 2013) and
   floored: ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
@@ -171,12 +172,13 @@ def errani_log_ratio(halo, E, es):
     """Log Errani tagging ratio ``log P* = log n*(calE; es) - log n_DM(calE)`` at physical energies ``E``.
 
     ``P* = n*(calE; calE_s) / n_DM(calE)`` at ``calE = 1 - E / Φ₀``, both normalised on
-    ``[0, 1]``; the halo's ``ln dN/dE`` becomes ``ln dN/dcalE`` with ``|dE / dcalE| = |Φ₀|``.
+    ``[0, 1]``; ``n_DM`` is the halo's dark matter (group ``dark_matter``) in its whole
+    potential, and its ``ln dN/dE`` becomes ``ln dN/dcalE`` with ``|dE / dcalE| = |Φ₀|``.
 
     Parameters
     ----------
     halo : HaloModel
-        Halo whose potential defines ``central_potential`` and ``log_energy_density``.
+        Halo whose potential defines ``central_potential`` and the dark matter's ``log_energy_density``.
     E : ndarray
         Physical specific orbital energies (float64).
     es : float
@@ -191,7 +193,7 @@ def errani_log_ratio(halo, E, es):
     log_norm = np.log(trapezoid_weights(CAL_GRID) @ _errani_unnormalised(CAL_GRID, es))
     log_star = ERRANI_SLOPE * np.log(cal) - (cal / es) ** ERRANI_SHARPNESS - log_norm
     # n_DM per unit calE = per unit E times |dE / dcalE| = |Φ₀|
-    return log_star - (halo.log_energy_density(E) + np.log(-phi0))
+    return log_star - (halo.log_energy_density(E, density="dark_matter") + np.log(-phi0))
 
 
 class _Plausibility:
@@ -379,7 +381,7 @@ class EnergyPlausibility(_Plausibility):
 
     def _log_ratios(self, halo, rows, E, coords):
         """``t = -ln u``; literature: Errani's ratio; empirical: the member histogram's."""
-        t = -np.log(np.clip(halo.energy_fraction(E), _U_MIN, 1.0))
+        t = -np.log(np.clip(halo.energy_fraction(E, density="dark_matter"), _U_MIN, 1.0))
         log_emp = None if self._edges is None else self._log_pstar(t)
         return t, errani_log_ratio(halo, E, errani_scale(halo)), log_emp
 

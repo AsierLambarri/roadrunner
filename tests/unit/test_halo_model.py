@@ -195,6 +195,9 @@ class TestWrappers:
             for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):
                 np.testing.assert_allclose(getattr(halo, name)(E), getattr(inner, name)(E, R), rtol=1e-12)
             np.testing.assert_allclose(halo.distribution_function(E), inner.distribution_function(E), rtol=1e-12)
+            for name in ("energy_fraction", "log_energy_density"):
+                np.testing.assert_array_equal(getattr(halo, name)(E, density="dark_matter"), getattr(inner, name)(E, R))
+            np.testing.assert_array_equal(halo.distribution_function(E, density="dark_matter"), inner.distribution_function(E))
             assert len(halo) == 1 and halo[0] is inner and list(halo) == [inner]
             star = PlummerPotential(M=1e9, a=0.5, centre=xcen * ls)
             halo = HaloModel(CompositeSphericalPotential(dark_matter=inner, stars=star), xcen, VCENTER, RVR,

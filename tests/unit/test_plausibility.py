@@ -22,7 +22,7 @@ from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.physics.halo_model import HaloModel
-from roadrunner.physics.potentials import KeplerPotential, NFWPotential
+from roadrunner.physics.potentials import CompositeSphericalPotential, HernquistPotential, KeplerPotential, NFWPotential
 from roadrunner.physics.scaler import StandardScaler
 
 
@@ -139,6 +139,18 @@ class TestEnergyPlausibility:
         np.testing.assert_array_equal(q._log_pstar(t), p._log_pstar(t))
         q.set_state(None)
         assert q.state is None
+
+    def test_energy_model_reads_the_dark_matter(self):
+        h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, 10.0, 1)
+        E = np.array([0.9, 0.5, 0.1]) * h.central_potential()
+        for name in ("energy_fraction", "log_energy_density"):    # DM-only: today's numbers, bit for bit
+            np.testing.assert_array_equal(getattr(h, name)(E, density="dark_matter"), getattr(h, name)(E))
+        hs = HaloModel(CompositeSphericalPotential(dark_matter=h.potential_model[0], stars=HernquistPotential(5e9, 0.5)),
+                       np.zeros(3), np.zeros(3), 60.0, sub_tree_id=2, redshift=0.0, comoving=False)
+        t, _, _ = EnergyPlausibility()._log_ratios(hs, np.arange(3), E, None)
+        u_dm = hs.energy_fraction(E, density="dark_matter")
+        np.testing.assert_array_equal(t, -np.log(np.clip(u_dm, 1e-12, 1.0)))     # 1e-12 = _U_MIN
+        assert not np.allclose(u_dm, hs.energy_fraction(E))
 
 
 class TestAssignerWithEnergyPlausibility:

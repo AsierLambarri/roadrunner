@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from scipy.integrate import quad
 from scipy.optimize import brentq
+from scipy.special import beta
 
 from roadrunner.physics import distribution as ed
 
@@ -138,6 +139,29 @@ class TestSphericalDistribution:
         np.testing.assert_allclose(np.quantile(w, [0.1, 0.5, 0.9]), [0.1, 0.5, 0.9], atol=0.01)
         with pytest.raises(NotImplementedError):
             SphericalPotential.energy_fraction(KeplerPotential(1e10), np.array([-1.0]), 10.0)
+
+
+class TestTwoModelInversion:
+    def test_tracer_in_another_potential_matches_the_power_law_closed_form(self):
+        from roadrunner.physics.potentials import PlummerPotential
+        bg, n = PlummerPotential(1e10, 0.5), 7.0
+
+        class Tracer:                                            # ρ = ψ^n of the background's ψ = -Φ
+            def _density(self, r):
+                return (-bg._potential(r)) ** n
+
+        E = np.array([1 - 1e-6, 0.8, 0.5, 0.2, 1e-6]) * bg.central_potential()
+        ref = n * (n - 1) * beta(n - 1, 0.5) * (-E) ** (n - 1.5) / (np.sqrt(8.0) * np.pi**2)
+        np.testing.assert_allclose(ed.eddington_distribution_function(bg, E, density=Tracer()), ref, rtol=1e-3)
+        np.testing.assert_array_equal(ed.eddington_distribution_function(bg, E, density=bg), ed.eddington_distribution_function(bg, E))
+
+    def test_negative_f_is_clipped_with_a_warning(self):
+        from roadrunner.physics.potentials import NFWPotential, PlummerPotential
+        nfw = NFWPotential(1e11, 8.0, 10.0)
+        E = nfw.central_potential() * (1.0 - np.geomspace(1e-6, 1e-1, 30))
+        with pytest.warns(RuntimeWarning, match="negative"):
+            f = ed.eddington_distribution_function(nfw, E, density=PlummerPotential(1e9, 0.5))
+        assert np.all(f >= 0.0) and f[0] == 0.0
 
 
 class TestSelfSimilarTables:

@@ -48,6 +48,14 @@ one row per ``c`` of a grid. Each row has its own depth nodes, with the
 depth where the radial apocentre reaches ``c`` as a node: ``g`` and ``q``
 have a kink there, and rows are blended kink to kink.
 
+Two-model inversion: :func:`eddington_distribution_function` takes a
+``background`` (its ψ and dψ/dr set the equilibrium) and, optionally, a
+``density`` in another potential's units (its own when ``density`` is
+``None``, the self-consistent case above). The resulting ``f`` need not be
+non-negative — a density without an isotropic equilibrium in that
+background can want negative phase-space density at some energies; those
+values are clipped to 0 with a warning, since no such orbit exists.
+
 Precision: everything here is float64, inputs read as float64 and outputs
 returned in it. Finite differences of ``ρ`` and deep quadratures need it,
 and so do the plausibility models that exponentiate these quantities: a
@@ -59,6 +67,7 @@ with numba and parallel.
 """
 
 import functools
+import warnings
 from typing import NamedTuple
 
 import numpy as np
@@ -70,8 +79,8 @@ _DEEPEST = 1e-6                                 # deepest node of every table: c
 _KINK_GAP = 1e-3                                # first node past the kink, as a fraction of the way to E = 0
 _NFW_NODES = 400, 370                           # nodes deeper and shallower than the kink (see _depth_nodes)
 _X = np.geomspace(1e-7, 1e10, 34000)           # radial grid of the inversion
-_NODES, _WEIGHTS = np.polynomial.legendre.leggauss(96)
-_W, _WW = 0.5 * (_NODES + 1.0), 0.5 * _WEIGHTS  # Gauss-Legendre on [0, 1]
+GL_NODES, GL_WEIGHTS = np.polynomial.legendre.leggauss(96)   # Gauss–Legendre on [-1, 1]: the quadratures here and composite shell averages
+_W, _WW = 0.5 * (GL_NODES + 1.0), 0.5 * GL_WEIGHTS  # Gauss-Legendre on [0, 1]
 _TINY = 2.2250738585072014e-308                 # smallest normal float64
 PROFILE_PLUMMER, PROFILE_HERNQUIST, PROFILE_NFW = 0.0, 1.0, 2.0   # kinds of profile rows (see profile_phi)
 
@@ -161,17 +170,36 @@ def _node_slope(nodes, row):
 
 
 @njit(cache=True)
+def _row_s_phi(kind, k, a, s):
+    """``s Φ(s)`` of one profile row, finite at ``s = 0`` for every kind: the integrand of a row's shell average."""
+    if kind == PROFILE_PLUMMER:
+        return -k * s / np.sqrt(s * s + a * a)
+    if kind == PROFILE_HERNQUIST:
+        return -k * s / (s + a)
+    return -k * np.log1p(s / a)
+
+
+@njit(cache=True)
 def profile_phi(profile, r):
-    """Potential at radius ``r`` of a profile: the sum of its rows ``(kind, k, a)``.
+    """Potential at radius ``r`` of a profile: the sum of its rows ``(kind, k, a, d)``.
 
     ``PROFILE_PLUMMER``: ``-k / sqrt(r² + a²)``; ``PROFILE_HERNQUIST``: ``-k / (r + a)``;
     ``PROFILE_NFW``: ``-k ln(1 + r/a) / r`` (``-k / a`` at ``r = 0``). ``k`` is ``G M`` (NFW:
-    ``G M / A(c)``) and ``a`` the scale radius. A composite potential stacks its components' rows.
+    ``G M / A(c)``), ``a`` the scale radius and ``d`` the row's offset from the profile's centre:
+    0 evaluates the row's own formula; ``d > 0`` its shell average about the centre,
+    ``Σ_k w_k s_k Φ(s_k) / (2 max(r, d))``, ``s_k = max(r, d) + min(r, d) x_k`` (Gauss–Legendre
+    on [-1, 1]; the composite's monopole pathway). A composite potential stacks its components' rows.
     """
     phi = 0.0
     for j in range(profile.shape[0]):
-        kind, k, a = profile[j, 0], profile[j, 1], profile[j, 2]
-        if kind == PROFILE_PLUMMER:
+        kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
+        if d > 0.0:
+            mid, half = max(r, d), min(r, d)
+            acc = 0.0
+            for m in range(GL_NODES.size):
+                acc += GL_WEIGHTS[m] * _row_s_phi(kind, k, a, mid + half * GL_NODES[m])
+            phi += acc / (2.0 * mid)
+        elif kind == PROFILE_PLUMMER:
             phi -= k / np.sqrt(r * r + a * a)
         elif kind == PROFILE_HERNQUIST:
             phi -= k / (r + a)
@@ -435,7 +463,7 @@ def _deep_tail(n, cal):
     """Mass deeper than the deepest node, ``∫_0^{cal_0} n dcal = n_0 cal_0 / (p + 1)``.
 
     ``n`` is a power law ``cal^p`` there; ``p`` comes from the two deepest
-    nodes.
+    nodes. 0 when both nodes hold nothing (f clipped to 0 there: the 0/0 limit).
 
     Parameters
     ----------
@@ -447,8 +475,9 @@ def _deep_tail(n, cal):
     -------
     tail : ndarray of shape (...)
     """
-    p = np.log(n[..., 1] / n[..., 0]) / np.log(cal[..., 1] / cal[..., 0])
-    return n[..., 1] * cal[..., 1] / (p + 1.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p = np.log(n[..., 1] / n[..., 0]) / np.log(cal[..., 1] / cal[..., 0])
+        return np.nan_to_num(n[..., 1] * cal[..., 1] / (p + 1.0), nan=0.0, posinf=np.inf, neginf=-np.inf)
 
 
 def _row(table, grid, c):
@@ -539,41 +568,60 @@ _APO_NODES = 4000                              # radial nodes (0, then log-space
 _EDDINGTON_R = np.geomspace(1e-7, 1e16, 46000)  # physical radii (kpc) of the generic Eddington inversion: f to -E ~ 1e-12 |Φ(0)|
 
 
-def eddington_distribution_function(potential, energy):
-    """Isotropic distribution function ``f(E)`` of a potential's own, untruncated density.
+def eddington_distribution_function(background, energy, density=None):
+    """Isotropic distribution function ``f(E)`` of a density in a potential's equilibrium.
 
     Eddington's inversion for an isotropic system,
     ``f(E) = (1 / (√8 π²)) ∫_0^{ψ_E} (d²ρ/dψ²) dψ / sqrt(ψ_E - ψ)`` with
     ``ψ = -Φ`` and ``ψ_E = -E``, without the boundary term (``ρ -> 0`` as
     ``ψ -> 0``), taken by :func:`_eddington_integral`, resolved at any
-    depth below ``ψ(0) = -Φ(0)``. ``ρ(ψ)`` is tabulated on
-    :data:`_EDDINGTON_R`, and its derivatives go through the radius,
-    ``dψ/dr = -G M(<r) / r²``, which stays finite in cores where ``ψ``
-    barely changes. ``f`` is the phase-space density whose velocity
-    integral gives the potential's mass density.
+    depth below ``ψ(0) = -Φ(0)``. ``background`` provides ``ψ = -_potential``,
+    ``dψ/dr = -G _enclosed_mass / r²``, ``Φ(0)`` and ``G``; ``density``
+    provides ``_density(r)`` (``background``'s own when ``None``: the
+    self-consistent ``f``). ``ρ(ψ)`` is tabulated on :data:`_EDDINGTON_R`,
+    and its derivatives go through the radius, ``dψ/dr``, which stays
+    finite in cores where ``ψ`` barely changes. ``f`` is the phase-space
+    density whose velocity integral gives ``density``'s mass density.
+
+    ``f`` may be negative for a density in another potential (no isotropic
+    equilibrium there, e.g. a cored density in a cusp); it is clipped to 0
+    with a ``RuntimeWarning``.
 
     Parameters
     ----------
-    potential : PotentialModel
-        Provides ``potential``, ``enclosed_mass``, ``density`` and ``G``.
+    background : PotentialModel
+        Provides ``potential``, ``enclosed_mass`` and ``G``: the equilibrium ``f`` is built in.
     energy : ndarray
         Physical specific energies; ``f = 0`` for ``energy >= 0``.
+    density : optional
+        Provides ``_density(r)``; ``background``'s own when ``None``.
 
     Returns
     -------
     f : ndarray of float64
     """
+    density = background if density is None else density
     r = _EDDINGTON_R
-    psi = -np.asarray(potential._potential(r), dtype=np.float64)
-    dpsi = -potential.G * np.asarray(potential._enclosed_mass(r), dtype=np.float64) / r**2
+    psi = -np.asarray(background._potential(r), dtype=np.float64)
+    dpsi = -background.G * np.asarray(background._enclosed_mass(r), dtype=np.float64) / r**2
     with np.errstate(divide="ignore", invalid="ignore"):
-        drho = np.gradient(np.asarray(potential._density(r), dtype=np.float64), r) / dpsi
+        drho = np.gradient(np.asarray(density._density(r), dtype=np.float64), r) / dpsi
         d2 = np.gradient(drho, r) / dpsi
     keep = np.isfinite(d2) & np.concatenate(([True], np.diff(psi) < 0))   # ψ strictly decreasing in r
     psi, d2 = psi[keep][::-1], d2[keep][::-1]                              # increasing ψ
     energy = np.asarray(energy, dtype=np.float64)
-    phi0 = float(np.asarray(potential._potential(np.zeros(1)), dtype=np.float64)[0])
-    return _eddington_integral(-energy, energy - phi0, psi, d2)
+    phi0 = float(np.asarray(background._potential(np.zeros(1)), dtype=np.float64)[0])
+    f = _eddington_integral(-energy, energy - phi0, psi, d2)
+    negative = f < 0.0
+    if negative.any():
+        eps = energy / phi0
+        warnings.warn(
+            f"Eddington's f of {density!r} in the potential of {background!r} is negative at "
+            f"{np.count_nonzero(negative)} of {f.size} energies (E / Φ(0) from "
+            f"{np.min(eps, where=negative, initial=np.inf):.3g} to {np.max(eps, where=negative, initial=-np.inf):.3g}, "
+            f"min f / max |f| = {f.min() / np.abs(f).max():.2g}): this density has no isotropic equilibrium in this "
+            "potential there; f is clipped to 0.", RuntimeWarning, stacklevel=2)
+    return np.maximum(f, 0.0)
 
 
 class SphericalDistribution:
@@ -606,8 +654,9 @@ class SphericalDistribution:
       one) and ``g``.
 
     Instances are cached per potential and ``r_max`` by
-    :class:`~roadrunner.physics.potentials.SphericalPotential`. Physical
-    energies in; float64 out.
+    :class:`~roadrunner.physics.potentials.SphericalPotential`, and per
+    group by the composite's group densities. Physical energies in;
+    float64 out.
 
     Parameters
     ----------
@@ -616,11 +665,17 @@ class SphericalDistribution:
         ``None``, makes the q and g quadratures compiled.
     r_max : float
         Counting radius (physical).
+    distribution_function : callable, optional
+        The f(E) whose N = f g is tabulated; the potential's own
+        ``distribution_function`` when None. A composite's group passes
+        Eddington's f of its density in the composite's potential, so N
+        counts that group's mass inside r_max.
     """
 
-    def __init__(self, potential, r_max):
+    def __init__(self, potential, r_max, distribution_function=None):
         self.potential = potential
         self.r_max = float(r_max)
+        self._distribution_function = potential.distribution_function if distribution_function is None else distribution_function
         self._r = self.r_max * np.concatenate(([0.0], np.geomspace(1e-6, 1.0, _APO_NODES - 1)))
         self._phi = np.asarray(potential._potential(self._r), dtype=np.float64)
         self._eps = _depth_nodes(self._phi[-1] / self._phi[0], _SHALLOWEST, *_GENERIC_NODES)
@@ -692,7 +747,7 @@ class SphericalDistribution:
         log_n, cdf : ndarray of float64
         """
         if self._log_density is None:
-            f = np.asarray(self.potential.distribution_function(self._energies), dtype=np.float64)
+            f = np.asarray(self._distribution_function(self._energies), dtype=np.float64)
             _, g = self._q_and_g(self._energies)
             n = f * g
             seg = -self._phi[0] * 0.5 * (n[1:] + n[:-1]) * np.diff(self._eps)

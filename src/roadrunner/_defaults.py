@@ -60,6 +60,10 @@ PLAUSIBILITY_LIT_SCATTER_DEX = 0.4 # "phase": member radii around r_1/2: exp. di
 PLAUSIBILITY_MIN_SCATTER_DEX = 0.2 # "phase": sigma* floor, Kravtsov's galaxy-size scatter (mapped per halo)
 PLAUSIBILITY_SHRINK_COUNT = 100    # "kinematic": prior count shrinking each halo's member <u^2> to the pooled one
 
+# ── Potentials ─────────────────────────────────────────────────────
+CONCENTRIC_OFFSET = 1e-3           # composite potentials: a component closer to the reference centre (x_min) than this
+                                   # many of its scale radii is taken as centred on it; farther ones are shell-averaged
+
 # ── Coresets ───────────────────────────────────────────────────────
 CORESET_ALPHA_BASE = 16
 CORESET_ALPHA_OFFSET = 2
