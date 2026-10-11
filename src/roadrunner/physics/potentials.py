@@ -50,6 +50,7 @@ from roadrunner.physics.distribution import (
     nfw_energy_fraction,
     nfw_log_energy_density,
     nfw_log_phase_space_fraction,
+    profile_density,
     self_similar_lookup,
     self_similar_tables,
 )
@@ -1439,8 +1440,16 @@ class _GroupDensity:
         return f"group {'+'.join(self._names)} of {self._composite!r}"
 
     def _density(self, r):
-        """Radial density of its components about the composite's ``x_min``, each along its pathway."""
-        return self._composite._pathway_sum("_density", r, self._index)
+        """Radial density of its components about the composite's ``x_min``, each along its pathway (compiled, U1).
+
+        Reached only when :attr:`has_distribution` holds: every component then has a ``profile()``
+        (Plummer, Hernquist, NFW), so :func:`~roadrunner.physics.distribution.profile_density`
+        covers every row.
+        """
+        comp = self._composite
+        rows = np.column_stack((np.vstack([comp[i].profile() for i in self._index])[:, :3],
+                                comp._offsets[list(self._index)]))
+        return profile_density(rows, np.ascontiguousarray(r, dtype=np.float64)) / comp.G
 
     def distribution_function(self, E):
         """Eddington's ``f`` of its density in the composite's potential (negative values clipped to 0, with a warning).
@@ -1709,6 +1718,18 @@ class CompositeSphericalPotential(SphericalPotential):
         """
         rows = [p.profile() for p in self._components]
         return None if any(row is None for row in rows) else np.column_stack((np.vstack(rows)[:, :3], self._offsets))
+
+    def release(self):
+        """Drop every cached :class:`~roadrunner.physics.distribution.SphericalDistribution` (U6).
+
+        Clears :attr:`_distributions` on the composite and on every group density (:attr:`_densities`):
+        memory held per ``r_max`` since the last table was read, rebuilt on next use. A single
+        component answers for its own group (:attr:`_densities`'s entry is itself, e.g. a bare
+        ``NFWPotential``); clearing a potential with no generic tables (the per-process NFW route)
+        is a no-op.
+        """
+        for holder in (self, *self._densities.values()):
+            holder._distributions.clear()
 
     def distribution_function(self, E, density=None):
         """Eddington's ``f`` of a density in the whole potential.

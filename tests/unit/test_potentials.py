@@ -6,7 +6,7 @@ from scipy.integrate import quad, trapezoid
 
 from roadrunner._defaults import CONCENTRIC_OFFSET
 from roadrunner._mcf_types import PotentialModel
-from roadrunner.physics.distribution import profile_phi
+from roadrunner.physics.distribution import profile_phi, profile_potential, profile_mass, profile_density
 from roadrunner.physics.potentials import (
     get_potential,
     CompositeSphericalPotential,
@@ -546,8 +546,28 @@ class TestCompositePathways:
         np.testing.assert_array_equal(prof[:, 3], c._offsets)
         np.testing.assert_allclose([profile_phi(prof, x) for x in r], c._potential(r), rtol=1e-12)
 
+    def test_compiled_profile_matches_numpy(self):
+        # U1: profile_potential/profile_mass against the numpy pathway sum, aligned and offset
+        r = np.geomspace(1e-7, 1e16, 2000)
+        for d in (0.0, 0.3):
+            nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+            pl = PlummerPotential(1e8, 0.5, centre=_C0 + np.array([d, 0.0, 0.0]))
+            c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
+            np.testing.assert_allclose(profile_potential(c.profile(), r), c._potential(r), rtol=1e-13)
+            np.testing.assert_allclose(profile_mass(c.profile(), r) / c.G, c._enclosed_mass(r), rtol=1e-13)
+
 
 class TestGroupDensity:
+    def test_density_matches_numpy_pathway_sum(self):
+        # U1: the compiled _GroupDensity._density against the old numpy _pathway_sum route
+        r = np.geomspace(1e-7, 1e16, 2000)
+        for d in (0.0, 0.3):
+            nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+            pl = PlummerPotential(1e8, 0.5, centre=_C0 + np.array([d, 0.0, 0.0]))
+            c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
+            ref = c._pathway_sum("_density", r, c._index["dark_matter"])
+            np.testing.assert_allclose(c._densities["dark_matter"]._density(r), ref, rtol=1e-13)
+
     def test_dark_matter_in_the_whole_potential(self):
         nfw, star = NFWPotential(1e11, 8.0, 10.0), HernquistPotential(5e9, 0.5)
         c, R = CompositeSphericalPotential(dark_matter=nfw, stars=star), 80.0
@@ -569,3 +589,19 @@ class TestGroupDensity:
             np.testing.assert_array_equal(whole.distribution_function(E, density="dark_matter"), whole.distribution_function(E))
         np.testing.assert_array_equal(CompositeSphericalPotential(dark_matter=nfw).energy_fraction(E, R, density="dark_matter"),
                                       nfw.energy_fraction(E, R))
+
+
+class TestRelease:
+    def test_release_clears_and_rebuilds(self):
+        # U6: release() empties every cached table; the rebuilt values match what was there before
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        pl = PlummerPotential(1e8, 0.5, centre=_C0 + np.array([0.3, 0.0, 0.0]))
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
+        E, R = np.array([0.9, 0.5, 0.1]) * c.central_potential(), 80.0
+        before_w = c.log_phase_space_fraction(E, R)
+        before_u = c.energy_fraction(E, R, density="dark_matter")
+        assert c._distributions and c._densities["dark_matter"]._distributions
+        c.release()
+        assert not c._distributions and not c._densities["dark_matter"]._distributions
+        np.testing.assert_array_equal(c.log_phase_space_fraction(E, R), before_w)
+        np.testing.assert_array_equal(c.energy_fraction(E, R, density="dark_matter"), before_u)

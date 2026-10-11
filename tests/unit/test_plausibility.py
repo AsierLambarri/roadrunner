@@ -5,7 +5,14 @@ import pytest
 from scipy.integrate import cumulative_trapezoid
 from scipy.stats import rankdata
 
-from roadrunner._defaults import PLAUSIBILITY_FLOOR, PLAUSIBILITY_MIN_MEMBERS, math_dtype, precision
+from roadrunner._defaults import (
+    PLAUSIBILITY_FLOOR,
+    PLAUSIBILITY_LIT_SCATTER_DEX,
+    PLAUSIBILITY_MIN_MEMBERS,
+    PLAUSIBILITY_MIN_SCATTER_DEX,
+    math_dtype,
+    precision,
+)
 from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.clustering.assignment.plausibility import (
     CAL_GRID,
@@ -476,3 +483,26 @@ class TestKinematicPlausibility:
         r2 = a.assign(halos, coords, [[0, 1]], seed=1, previous_resp=r1.responsibilities)
         assert (r2.particle_df["Sub_tree_id"] > 0).sum() == np.union1d(*csc_b.column_indices).size
         assert isinstance(make_plausibility("kinematic"), KinematicPlausibility)
+
+
+def test_literature_summaries_read_the_spherical_profile_about_x_min():
+    # offset stars: the summaries are the composite's spherical profile about x_min, with
+    # v_c^2 = G M(<r) / r (Gauss on the sphere about x_min; FD error ~2e-7), whatever the offset's
+    # direction (the true potential along x from the tree centre differed by ~15% between directions)
+    s1, s2 = PLAUSIBILITY_LIT_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX
+    got = []
+    for d in ([0.3, 0.0, 0.0], [0.0, -0.3, 0.0], [0.3 / np.sqrt(3.0)] * 3):
+        comp = CompositeSphericalPotential(dark_matter=NFWPotential(1e10, 3.0, 10.0),
+                                           stars=PlummerPotential(2e8, 0.4, centre=np.array(d)))
+        # comoving at z = 1: r_1/2 is physical (catalogue R_vir times length_scale = 1/2)
+        h = HaloModel(comp, np.zeros(3), np.zeros(3), 30.0, sub_tree_id=1, redshift=1.0, comoving=True)
+        pm = h.potential_model
+        r = KRAVTSOV_RHALF * h.virial_radius * h.length_scale * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
+        phi, vc2 = pm._potential(r), pm.G * pm._enclosed_mass(r) / r
+        t = -h.log_phase_space_fraction(phi + 0.5 * vc2)
+        depth, speed = literature_depth(h), literature_speed(h)
+        np.testing.assert_allclose(depth, [t[0], 0.5 * abs(t[1] - t[2]), 0.5 * abs(t[3] - t[4])], rtol=1e-6)
+        np.testing.assert_allclose(speed, vc2[0] / (-2.0 * phi[0]), rtol=1e-6)
+        got.append((*depth, speed))
+    # x_min sits exactly on the NFW cusp (it beats the Plummer pull), so only |d| matters and the directions agree to rounding
+    np.testing.assert_allclose(got[1:], [got[0]] * 2, rtol=1e-12)

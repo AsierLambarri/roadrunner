@@ -332,6 +332,15 @@ class HaloModel:
         """
         return self.potential_model.log_energy_density(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
 
+    def release_tables(self) -> None:
+        """Drop every cached energy/phase-space table of :attr:`potential_model` (U6).
+
+        Memory only: the next call to :meth:`energy_fraction`, :meth:`log_energy_density` or
+        :meth:`log_phase_space_fraction` rebuilds what it needs. A no-op for a single NFW
+        (the per-process tables carry no per-halo state).
+        """
+        self.potential_model.release()
+
     def log_phase_space_fraction(self, E: np.ndarray) -> np.ndarray:
         """``ln w``: fraction of the search sphere's bound phase space more bound than the physical energy ``E``.
 

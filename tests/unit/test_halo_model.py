@@ -69,6 +69,19 @@ class TestPotential:
             comp.add("gas", PlummerPotential(M=1e7, a=0.2, centre=xcen * ls, G=4.3e-6))
             assert len(halo) == 2
 
+    def test_release_tables_forwards_to_the_potential_model(self):
+        # U6: a composite (not a single NFW, which reads the per-process tables and never caches)
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        inner = NFWPotential(M=1e12, Rs=10.0, c=10.0)
+        star = PlummerPotential(M=1e9, a=0.5, centre=np.array([4.0, 0.0, 0.0]))
+        comp = CompositeSphericalPotential(dark_matter=inner, stars=star)
+        halo = HaloModel(comp, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
+        before = halo.log_phase_space_fraction(np.array([-0.5]) * halo.binding_energy_scale())
+        assert halo.potential_model._distributions
+        halo.release_tables()
+        assert not halo.potential_model._distributions
+        np.testing.assert_array_equal(halo.log_phase_space_fraction(np.array([-0.5]) * halo.binding_energy_scale()), before)
+
 
 class TestBoundness:
     def test_no_bound_by_default(self):

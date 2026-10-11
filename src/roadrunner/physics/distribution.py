@@ -180,6 +180,27 @@ def _row_s_phi(kind, k, a, s):
 
 
 @njit(cache=True)
+def _row_mass(kind, k, a, r):
+    """``G M(<r)`` of one profile row, own formula (no offset): ``k`` is ``G M`` (NFW: ``G M / A(c)``)."""
+    if kind == PROFILE_PLUMMER:
+        return k * r**3 / (r * r + a * a) ** 1.5
+    if kind == PROFILE_HERNQUIST:
+        return k * r * r / ((r + a) * (r + a))
+    x = r / a
+    return k * (np.log1p(x) - x / (1.0 + x))
+
+
+@njit(cache=True)
+def _row_rho(kind, k, a, r):
+    """``G ρ`` of one profile row, own formula (no offset); infinite at ``r = 0`` in a cusp (Hernquist, NFW)."""
+    if kind == PROFILE_PLUMMER:
+        return 0.75 / np.pi * k / a**3 * (1.0 + (r / a) ** 2) ** -2.5
+    if kind == PROFILE_HERNQUIST:
+        return k * a / (2.0 * np.pi * r * (r + a) ** 3)
+    return k / (4.0 * np.pi * a * a * r * (1.0 + r / a) ** 2)   # NFW: k = G M / A(c)
+
+
+@njit(cache=True)
 def profile_phi(profile, r):
     """Potential at radius ``r`` of a profile: the sum of its rows ``(kind, k, a, d)``.
 
@@ -211,8 +232,173 @@ def profile_phi(profile, r):
 
 
 @njit(parallel=True, cache=True)
-def _q_and_g_kernel(energy, x_max, profile, w, ww):
-    """Phase-space volume and density of states of a profile at flat ``energy`` (parallel; see :func:`q_and_g`)."""
+def profile_potential(profile, r):
+    """``profile_phi`` at every radius of ``r`` (compiled, parallel).
+
+    Parameters
+    ----------
+    profile : ndarray of shape (k, 4)
+    r : ndarray of shape (n,)
+
+    Returns
+    -------
+    phi : ndarray of float64, shape (n,)
+    """
+    phi = np.empty(r.size)
+    for i in prange(r.size):
+        phi[i] = profile_phi(profile, r[i])
+    return phi
+
+
+@njit(parallel=True, cache=True)
+def profile_mass(profile, r):
+    """``G M(<r)`` of a profile at every radius of ``r`` (compiled, parallel): the sum of its rows.
+
+    A concentric row (``d = 0``) adds its own :func:`_row_mass`; an offset row (``d > 0``) adds
+    the monopole's enclosed mass, :func:`~roadrunner.physics.potentials._shell_mass` on the same
+    Gauss–Legendre nodes as :func:`profile_phi`'s shell average.
+
+    Parameters
+    ----------
+    profile : ndarray of shape (k, 4)
+    r : ndarray of shape (n,)
+
+    Returns
+    -------
+    gm : ndarray of float64, shape (n,)
+    """
+    gm = np.zeros(r.size)
+    for i in prange(r.size):
+        ri = r[i]
+        for j in range(profile.shape[0]):
+            kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
+            if d > 0.0:
+                mid, half, inner = max(ri, d), min(ri, d), max(ri - d, 0.0)
+                acc = 0.0
+                for m in range(GL_NODES.size):
+                    x = GL_NODES[m]
+                    s = mid + half * x
+                    acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s) * half * (1.0 - x) * (ri + inner + half * x)
+                gm[i] += _row_mass(kind, k, a, inner) + np.pi / d * half * acc
+            else:
+                gm[i] += _row_mass(kind, k, a, ri)
+    return gm
+
+
+@njit(parallel=True, cache=True)
+def profile_density(profile, r):
+    """``G ρ(r)`` of a profile at every radius of ``r`` (compiled, parallel): the sum of its rows.
+
+    A concentric row (``d = 0``) adds its own :func:`_row_rho`; an offset row (``d > 0``) adds its
+    shell average, :func:`~roadrunner.physics.potentials._shell_mean` on the same nodes.
+
+    Parameters
+    ----------
+    profile : ndarray of shape (k, 4)
+    r : ndarray of shape (n,)
+
+    Returns
+    -------
+    rho : ndarray of float64, shape (n,)
+    """
+    rho = np.zeros(r.size)
+    for i in prange(r.size):
+        ri = r[i]
+        for j in range(profile.shape[0]):
+            kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
+            if d > 0.0:
+                mid, half = max(ri, d), min(ri, d)
+                acc = 0.0
+                for m in range(GL_NODES.size):
+                    x = GL_NODES[m]
+                    s = mid + half * x
+                    acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s)
+                rho[i] += acc / (2.0 * mid)
+            else:
+                rho[i] += _row_rho(kind, k, a, ri)
+    return rho
+
+
+def _radial_potential(p, r):
+    """``Φ(r)`` of a potential's radial profile: compiled (:func:`profile_potential`) when it has one, else :meth:`~roadrunner.physics.potentials.SphericalPotential._potential`.
+
+    Parameters
+    ----------
+    p : SphericalPotential
+    r : ndarray of shape (n,)
+        Physical radii (float64, contiguous).
+
+    Returns
+    -------
+    phi : ndarray of float64, shape (n,)
+    """
+    rows = p.profile()
+    return np.asarray(p._potential(r), dtype=np.float64) if rows is None else profile_potential(rows, r)
+
+
+def _radial_mass(p, r):
+    """``G M(<r)`` of a potential's radial profile: compiled (:func:`profile_mass`) when it has one, else ``G`` times :meth:`~roadrunner.physics.potentials.SphericalPotential._enclosed_mass`.
+
+    Parameters
+    ----------
+    p : SphericalPotential
+    r : ndarray of shape (n,)
+        Physical radii (float64, contiguous).
+
+    Returns
+    -------
+    gm : ndarray of float64, shape (n,)
+    """
+    rows = p.profile()
+    return p.G * np.asarray(p._enclosed_mass(r), dtype=np.float64) if rows is None else profile_mass(rows, r)
+
+
+@njit(cache=True)
+def _offset_phi(x, ln_r1, inv_h, phi, dphi):
+    """Φ̄ of a potential's offset rows at ``x``, tabulated on their ``ln r`` nodes (U2): a Hermite spline, slopes by finite difference.
+
+    ``phi``/``dphi`` are the offset rows' shell-averaged potential and its ``d/d ln r`` at the
+    nodes (:class:`SphericalDistribution`'s ``_r``, geometric from node 1 on); 0 with no offset
+    rows (``phi`` empty). Below the first node, ``Φ̄`` is quadratic in ``r`` (it is even about
+    ``r = 0``: the shell average of a point off-centre is unchanged by ``r -> -r``, so it has no
+    linear term there, consistent with ``dphi[0] = 0``); beyond the last, the Hermite spline is
+    held at the last segment (``j`` clipped).
+
+    Parameters
+    ----------
+    x : float
+    ln_r1 : float
+        ``ln`` of the first (smallest) node.
+    inv_h : float
+        Inverse node spacing in ``ln r``.
+    phi, dphi : ndarray of shape (n,)
+
+    Returns
+    -------
+    phi_x : float
+    """
+    n = phi.size
+    if n == 0:
+        return 0.0
+    t = (np.log(x) - ln_r1) * inv_h if x > 0.0 else -1.0
+    if t < 0.0:
+        return phi[0] + (phi[1] - phi[0]) * (x * np.exp(-ln_r1)) ** 2   # centre to first log node: even in r
+    j = min(int(t), n - 3)
+    u = t - j
+    h = 1.0 / inv_h
+    u2 = u * u
+    u3 = u2 * u
+    return ((2 * u3 - 3 * u2 + 1) * phi[j + 1] + (u3 - 2 * u2 + u) * h * dphi[j + 1]
+            + (3 * u2 - 2 * u3) * phi[j + 2] + (u3 - u2) * h * dphi[j + 2])
+
+
+@njit(parallel=True, cache=True)
+def _q_and_g_kernel(energy, x_max, profile, w, ww, ln_r1, inv_h, phi_off, dphi_off):
+    """Phase-space volume and density of states of a profile at flat ``energy`` (parallel; see :func:`q_and_g`).
+
+    ``profile``'s concentric rows only (U2): the offset rows' Φ̄ comes from the tabulated
+    :func:`_offset_phi` instead of a Gauss–Legendre sum per node.
+    """
     q = np.empty(energy.size)
     g = np.empty(energy.size)
     for i in prange(energy.size):
@@ -220,7 +406,8 @@ def _q_and_g_kernel(energy, x_max, profile, w, ww):
         sg = 0.0
         for k in range(w.size):
             x = x_max[i] * (1.0 - w[k] * w[k])
-            kin2 = max(2.0 * (energy[i] - profile_phi(profile, x)), 0.0)
+            phi = profile_phi(profile, x) + _offset_phi(x, ln_r1, inv_h, phi_off, dphi_off)
+            kin2 = max(2.0 * (energy[i] - phi), 0.0)
             wt = 16.0 * np.pi**2 * ww[k] * 2.0 * x_max[i] * w[k] * x * x
             root = np.sqrt(kin2)
             sq += wt * kin2 * root
@@ -435,9 +622,19 @@ class NFWEnergyTables(NamedTuple):
     log_volume_fraction: np.ndarray  # log w = log q(calE | c) - log q(1 | c)
 
 
+_NFW_CHUNK = 2     # C_GRID rows per chunk (U8): caps the (chunk, n, 96) Eddington/g intermediates
+
+
 @functools.cache
 def nfw_energy_tables():
-    """Build the NFW energy-distribution tables (once per process).
+    """Build the NFW energy-distribution tables (once per process), in chunks over ``C_GRID`` rows (U8).
+
+    Every step is row-wise (no sum or normalisation crosses rows: the node grid, the Eddington
+    and density-of-states quadratures, the cumulative mass and its per-row normalisation are all
+    taken one ``c`` at a time), so a :data:`_NFW_CHUNK`-row chunk goes through exactly the same
+    floating-point operations as the whole grid at once; the result is bit-identical to building
+    all of :data:`C_GRID` in one pass. Chunking only caps the size of the transient
+    ``(chunk, n, 96)`` Eddington/density-of-states arrays that otherwise peak at the whole grid's.
 
     Returns
     -------
@@ -445,18 +642,26 @@ def nfw_energy_tables():
         Arrays of shape ``(len(C_GRID), n)``, on the nodes
         ``_nfw_nodes(C_GRID)``.
     """
-    eps = _nfw_nodes(C_GRID)
-    cal = 1.0 - eps
-    n = _eddington(eps) * nfw_density_of_states(cal, C_GRID[:, None])
-    seg = 0.5 * (n[:, 1:] + n[:, :-1]) * np.diff(eps, axis=1)
-    # mass more bound than each node: summed from the deepest, plus the power-law tail below it
-    tail = _deep_tail(n[:, -2:], cal[:, -2:])
-    cdf = np.concatenate([np.cumsum(seg[:, ::-1], axis=1)[:, ::-1], np.zeros((len(C_GRID), 1))], axis=1) + tail[:, None]
-    n /= cdf[:, :1]
-    cdf /= cdf[:, :1]
-    log_q = np.log(nfw_phase_volume(cal, C_GRID[:, None]))
-    log_q_zero = np.log(nfw_phase_volume(np.ones(1), C_GRID[:, None]))     # E = 0
-    return NFWEnergyTables(np.log(n), cdf, log_q - log_q_zero)
+    n_nodes = sum(_NFW_NODES) + 1
+    log_n = np.empty((len(C_GRID), n_nodes))
+    cdf = np.empty((len(C_GRID), n_nodes))
+    log_w = np.empty((len(C_GRID), n_nodes))
+    for lo in range(0, len(C_GRID), _NFW_CHUNK):
+        c = C_GRID[lo:lo + _NFW_CHUNK]
+        eps = _nfw_nodes(c)
+        cal = 1.0 - eps
+        n = _eddington(eps) * nfw_density_of_states(cal, c[:, None])
+        seg = 0.5 * (n[:, 1:] + n[:, :-1]) * np.diff(eps, axis=1)
+        # mass more bound than each node: summed from the deepest, plus the power-law tail below it
+        tail = _deep_tail(n[:, -2:], cal[:, -2:])
+        row_cdf = np.concatenate([np.cumsum(seg[:, ::-1], axis=1)[:, ::-1], np.zeros((len(c), 1))], axis=1) + tail[:, None]
+        n /= row_cdf[:, :1]
+        row_cdf /= row_cdf[:, :1]
+        log_q = np.log(nfw_phase_volume(cal, c[:, None]))
+        log_q_zero = np.log(nfw_phase_volume(np.ones(1), c[:, None]))     # E = 0
+        hi = lo + len(c)
+        log_n[lo:hi], cdf[lo:hi], log_w[lo:hi] = np.log(n), row_cdf, log_q - log_q_zero
+    return NFWEnergyTables(log_n, cdf, log_w)
 
 
 def _deep_tail(n, cal):
@@ -565,8 +770,67 @@ def nfw_log_phase_space_fraction(eps, c):
 _SHALLOWEST = 1e-12                            # shallowest node of the generic tables: -E = 1e-12 |Φ(0)|
 _GENERIC_NODES = 640, 660                      # nodes deeper and shallower than the kink (see _depth_nodes)
 _APO_NODES = 4000                              # radial nodes (0, then log-spaced 1e-6 R .. R) of the apocentre lookup
-_EDDINGTON_R = np.geomspace(1e-7, 1e16, 46000)  # physical radii (kpc) of the generic Eddington inversion: f to -E ~ 1e-12 |Φ(0)|
+_EDDINGTON_R = np.geomspace(1e-7, 1e16, 23000)  # physical radii (kpc) of the generic Eddington inversion: f to -E ~ 1e-12 |Φ(0)|
 _INSIDE_R = np.concatenate(([0.0], np.geomspace(1e-6, 1e8, 700)))   # radii (units of the radius asked) of fraction_inside's apocentre lookup
+
+
+@njit(cache=True)
+def _eddington_preprocess(r, psi, rho, dpsi):
+    """``d²ρ/dψ²`` through ``r`` and its reversed, finite, Ψ-decreasing selection, in one pass (U7).
+
+    Two non-uniform-grid gradients (second order in the interior, one-sided at the ends, as
+    ``np.gradient``) of ``rho`` against ``r``, each divided by ``dpsi``; then the points kept are
+    those with a finite ``d²ρ/dψ²`` and (but for the first) a strictly smaller ``ψ`` than the one
+    before, returned reversed (increasing ``ψ``) as :func:`_eddington_integral` needs them.
+
+    Parameters
+    ----------
+    r : ndarray of shape (n,)
+        Increasing physical radii.
+    psi, rho, dpsi : ndarray of shape (n,)
+        ``ψ = -Φ``, the density and ``dψ/dr`` there.
+
+    Returns
+    -------
+    psi_kept, d2_kept : ndarray of float64
+        Increasing ``ψ``.
+    """
+    n = r.size
+    drho = np.empty(n)
+    for i in range(n):
+        if i == 0:
+            drho[i] = (rho[1] - rho[0]) / (r[1] - r[0])
+        elif i == n - 1:
+            drho[i] = (rho[n - 1] - rho[n - 2]) / (r[n - 1] - r[n - 2])
+        else:
+            hs, hd = r[i] - r[i - 1], r[i + 1] - r[i]           # np.gradient's own non-uniform formula and grouping
+            a, b, c = -hd / (hs * (hs + hd)), (hd - hs) / (hs * hd), hs / (hd * (hs + hd))
+            drho[i] = a * rho[i - 1] + b * rho[i] + c * rho[i + 1]
+        drho[i] /= dpsi[i]
+    d2 = np.empty(n)
+    for i in range(n):
+        if i == 0:
+            d2[i] = (drho[1] - drho[0]) / (r[1] - r[0])
+        elif i == n - 1:
+            d2[i] = (drho[n - 1] - drho[n - 2]) / (r[n - 1] - r[n - 2])
+        else:
+            hs, hd = r[i] - r[i - 1], r[i + 1] - r[i]
+            a, b, c = -hd / (hs * (hs + hd)), (hd - hs) / (hs * hd), hs / (hd * (hs + hd))
+            d2[i] = a * drho[i - 1] + b * drho[i] + c * drho[i + 1]
+        d2[i] /= dpsi[i]
+    keep = np.empty(n, dtype=np.bool_)
+    count = 0
+    for i in range(n):
+        ok = np.isfinite(d2[i]) and (i == 0 or psi[i] < psi[i - 1])
+        keep[i] = ok
+        count += ok
+    psi_kept, d2_kept = np.empty(count), np.empty(count)
+    j = count - 1
+    for i in range(n):
+        if keep[i]:
+            psi_kept[j], d2_kept[j] = psi[i], d2[i]
+            j -= 1
+    return psi_kept, d2_kept
 
 
 def eddington_distribution_function(background, energy, density=None):
@@ -603,13 +867,11 @@ def eddington_distribution_function(background, energy, density=None):
     """
     density = background if density is None else density
     r = _EDDINGTON_R
-    psi = -np.asarray(background._potential(r), dtype=np.float64)
-    dpsi = -background.G * np.asarray(background._enclosed_mass(r), dtype=np.float64) / r**2
+    psi = -_radial_potential(background, r)
+    dpsi = -_radial_mass(background, r) / r**2
     with np.errstate(divide="ignore", invalid="ignore"):
-        drho = np.gradient(np.asarray(density._density(r), dtype=np.float64), r) / dpsi
-        d2 = np.gradient(drho, r) / dpsi
-    keep = np.isfinite(d2) & np.concatenate(([True], np.diff(psi) < 0))   # ψ strictly decreasing in r
-    psi, d2 = psi[keep][::-1], d2[keep][::-1]                              # increasing ψ
+        rho = np.asarray(density._density(r), dtype=np.float64)
+        psi, d2 = _eddington_preprocess(r, psi, rho, dpsi)   # ψ strictly decreasing in r; reversed, finite: increasing ψ
     energy = np.asarray(energy, dtype=np.float64)
     phi0 = float(np.asarray(background._potential(np.zeros(1)), dtype=np.float64)[0])
     f = _eddington_integral(-energy, energy - phi0, psi, d2)
@@ -625,31 +887,68 @@ def eddington_distribution_function(background, energy, density=None):
     return np.maximum(f, 0.0)
 
 
-def q_and_g(potential, profile, energy, x_max):
+def _offset_table(potential, r):
+    """Split ``potential.profile()`` into concentric and offset rows, and tabulate the offset rows' Φ̄ on ``r`` (U2).
+
+    Shared by every ``q_and_g`` caller: :class:`SphericalDistribution` and :func:`fraction_inside`
+    each call this on their own radial grid (``r[0] = 0``, then geometric), once. The offset rows'
+    shell-averaged potential and its ``d / d ln r`` (finite differences) feed :func:`_offset_phi`'s
+    Hermite spline, so the q/g quadratures no longer run a Gauss–Legendre sum per row per node for
+    them; the concentric rows stay exact, read straight by :func:`profile_phi`.
+
+    Parameters
+    ----------
+    potential : SphericalPotential
+    r : ndarray of shape (n,)
+        Increasing radii, ``r[0] = 0``, ``r[1:]`` geometric.
+
+    Returns
+    -------
+    profile : ndarray of shape (k, 4) or None
+        Concentric rows; ``None`` when ``potential.profile()`` is ``None`` (no compiled route).
+    ln_r1, inv_h : float
+    phi_off, dphi_off : ndarray of shape (n,)
+        Empty when there are no offset rows.
+    """
+    rows = potential.profile()
+    profile = None if rows is None else rows[rows[:, 3] == 0.0]
+    offset = np.empty((0, 4)) if rows is None else rows[rows[:, 3] > 0.0]
+    r_off = r if len(offset) else r[:0]
+    phi_off = profile_potential(offset, r_off)
+    ln_r = np.log(r[1:])
+    ln_r1, inv_h = ln_r[0], (ln_r.size - 1) / (ln_r[-1] - ln_r[0])
+    dphi_off = np.concatenate(([0.0], np.gradient(phi_off[1:], ln_r))) if len(offset) else r_off
+    return profile, ln_r1, inv_h, phi_off, dphi_off
+
+
+def q_and_g(potential, profile, energy, x_max, ln_r1, inv_h, phi_off, dphi_off):
     """Phase-space volume ``q(E)`` and density of states ``g(E)`` of the orbits out to ``x_max``.
 
     Both integrals run over ``r`` from 0 to ``x_max`` (the radial apocentre ``r_E``, capped at a
     counting radius when there is one), with ``r = x_max (1 - w²)``, which removes the
     square-root endpoint at the apocentre, and Gauss–Legendre in ``w``. They share their nodes
     and potential evaluations: compiled (parallel) when ``profile`` is not ``None``, otherwise
-    from ``potential._potential``.
+    from ``potential._potential`` (exact offsets included, no tabulation).
 
     Parameters
     ----------
     potential : SphericalPotential
     profile : ndarray of shape (k, 4) or None
-        ``potential.profile()``.
+        The concentric rows of ``potential.profile()`` (:func:`_offset_table`).
     energy : ndarray of shape (n,)
         Physical energies (float64).
     x_max : ndarray of shape (n,)
         Outer radii (float64, contiguous).
+    ln_r1, inv_h, phi_off, dphi_off
+        The offset rows' table (:func:`_offset_table`); unused in the numpy fallback.
 
     Returns
     -------
     q, g : ndarray of float64, shape (n,)
     """
     if profile is not None:
-        return _q_and_g_kernel(np.ascontiguousarray(energy, dtype=np.float64), x_max, profile, _W, _WW)
+        return _q_and_g_kernel(np.ascontiguousarray(energy, dtype=np.float64), x_max, profile, _W, _WW,
+                               ln_r1, inv_h, phi_off, dphi_off)
     x = x_max[:, None] * (1.0 - _W**2)
     kin2 = np.clip(2.0 * (energy[:, None] - np.asarray(potential._potential(x), dtype=np.float64)), 0.0, None)
     w = 16.0 * np.pi**2 * _WW * 2.0 * x_max[:, None] * _W * x**2
@@ -665,7 +964,8 @@ def fraction_inside(potential, energy, radius):
     ``N = f g`` its enclosed fraction is ``∫ N (g_R / g) dE``, without a radial grid.
     Apocentres come from ``potential._potential`` on ``radius`` times :data:`_INSIDE_R`
     (``r = 0``, then ``1e-6`` to ``1e8``); orbits reaching beyond that are counted out to its
-    end. Energies must lie above ``Φ(0)``, where ``g = 0``.
+    end. Energies must lie above ``Φ(0)``, where ``g = 0``. Its own offset table
+    (:func:`_offset_table`, U2) is built fresh each call, on this apocentre grid.
 
     Parameters
     ----------
@@ -683,8 +983,9 @@ def fraction_inside(potential, energy, radius):
     energy = np.asarray(energy, dtype=np.float64)
     r = radius * _INSIDE_R
     apo = np.interp(energy, np.asarray(potential._potential(r), dtype=np.float64), r)
-    _, g = q_and_g(potential, potential.profile(), np.concatenate((energy, energy)),
-                   np.concatenate((apo, np.minimum(apo, radius))))
+    profile, ln_r1, inv_h, phi_off, dphi_off = _offset_table(potential, r)
+    _, g = q_and_g(potential, profile, np.concatenate((energy, energy)),
+                   np.concatenate((apo, np.minimum(apo, radius))), ln_r1, inv_h, phi_off, dphi_off)
     g_all, g_in = g.reshape(2, -1)
     return g_in / g_all
 
@@ -742,12 +1043,13 @@ class SphericalDistribution:
         self.r_max = float(r_max)
         self._distribution_function = potential.distribution_function if distribution_function is None else distribution_function
         self._r = self.r_max * np.concatenate(([0.0], np.geomspace(1e-6, 1.0, _APO_NODES - 1)))
-        self._phi = np.asarray(potential._potential(self._r), dtype=np.float64)
+        self._phi = _radial_potential(potential, self._r)
         self._eps = _depth_nodes(self._phi[-1] / self._phi[0], _SHALLOWEST, *_GENERIC_NODES)
         self._energies = self._phi[0] * self._eps                 # physical energies at the nodes
         self._log_w = None
         self._log_density = self._cdf = None
-        self._profile = potential.profile()
+        # U2: the offset rows' Φ̄, tabulated on self._r with Hermite slopes; the concentric rows stay exact
+        self._profile, self._ln_r1, self._inv_h, self._phi_off, self._dphi_off = _offset_table(potential, self._r)
 
     def _scaled(self, energy):
         """``eps = E / Φ(0)``: 0 at ``E = 0``, 1 at the bottom of the well.
@@ -774,7 +1076,8 @@ class SphericalDistribution:
         -------
         q, g : ndarray of float64, shape (n,)
         """
-        return q_and_g(self.potential, self._profile, energy, np.interp(energy, self._phi, self._r))
+        return q_and_g(self.potential, self._profile, energy, np.interp(energy, self._phi, self._r),
+                      self._ln_r1, self._inv_h, self._phi_off, self._dphi_off)
 
     def _phase_table(self):
         """``ln q(E) - ln q(0)`` at the depth nodes, built once.

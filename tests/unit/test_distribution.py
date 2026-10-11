@@ -203,15 +203,30 @@ class TestCompiledKernels:
         assert ed.table_query(np.float64(0.5), nodes, row).shape == ()
 
     def test_compiled_quadratures_match_numpy(self):
-        from roadrunner.physics.potentials import HernquistPotential, KeplerPotential, NFWPotential, PlummerPotential
+        from roadrunner.physics.potentials import CompositeSphericalPotential, HernquistPotential, KeplerPotential, NFWPotential, PlummerPotential
         for p, R in ((PlummerPotential(1e10, 0.5), 5.0), (HernquistPotential(1e10, 0.5), 5.0),
                      (NFWPotential(1e11, 8.0, 10.0), 80.0), (KeplerPotential(1e11), 60.0)):
             d = ed.SphericalDistribution(p, R)
             q, g = d._q_and_g(d._energies)
-            d._profile = None                                    # the numpy fallback
+            d._profile = None                                    # the numpy fallback (still evaluates exact offsets)
             q0, g0 = d._q_and_g(d._energies)
             np.testing.assert_allclose(q, q0, rtol=1e-12)
             np.testing.assert_allclose(g, g0, rtol=1e-12)
+        # U2: offset composites (one row offset, the other concentric -> the Hermite-tabulated q/g
+        # path for the offset row) across a few concentrations, companion profiles and offsets;
+        # measured max relative error over this set: q 3.3e-9, g 7.4e-8 (well inside rtol=1e-4)
+        for c, Rs in ((10.0, 8.0), (15.0, 6.0)):
+            for cls, a in ((PlummerPotential, 0.4), (HernquistPotential, 0.3)):
+                for d_off in (0.3, 1.0):
+                    nfw = NFWPotential(1e11, Rs, c)
+                    comp = CompositeSphericalPotential(dark_matter=nfw, stars=cls(2e8, a, centre=np.array([d_off, 0.0, 0.0])))
+                    d = ed.SphericalDistribution(comp, 80.0)
+                    assert comp._offsets.sum() > 0.0                 # one row (DM or stars) is on the monopole pathway
+                    q, g = d._q_and_g(d._energies)
+                    d._profile = None                                # the numpy fallback (still evaluates exact offsets)
+                    q0, g0 = d._q_and_g(d._energies)
+                    np.testing.assert_allclose(q, q0, rtol=1e-4)
+                    np.testing.assert_allclose(g, g0, rtol=1e-4)
         # the Eddington quadrature against its numpy form
         b = np.array([1 - 1e-6, 0.5, 1e-3, 1e-8])
         psi = -ed.nfw_phi(ed._X)
@@ -224,3 +239,20 @@ class TestCompiledKernels:
         d2_at = np.interp(b[:, None] - (root * np.sinh(t)) ** 2, psi[::-1], d2[::-1])
         ref = t_max * np.sum(ed._WW * 2.0 * d2_at * root * np.cosh(t), axis=-1) / (np.sqrt(8.0) * np.pi**2)
         np.testing.assert_allclose(ed._eddington(b), ref, rtol=1e-12)
+
+    def test_eddington_preprocess_matches_numpy(self):
+        # U7: the fused gradients/filter/reversal against the numpy form they replace, on a real cusp
+        from roadrunner.physics.potentials import HernquistPotential
+        p = HernquistPotential(1e10, 0.5)
+        r = ed._EDDINGTON_R
+        psi = -np.asarray(p._potential(r), dtype=np.float64)
+        dpsi = -p.G * np.asarray(p._enclosed_mass(r), dtype=np.float64) / r**2
+        rho = np.asarray(p._density(r), dtype=np.float64)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            drho = np.gradient(rho, r) / dpsi
+            d2 = np.gradient(drho, r) / dpsi
+        keep = np.isfinite(d2) & np.concatenate(([True], np.diff(psi) < 0))
+        ref_psi, ref_d2 = psi[keep][::-1], d2[keep][::-1]
+        psi_k, d2_k = ed._eddington_preprocess(r, psi, rho, dpsi)
+        np.testing.assert_array_equal(psi_k, ref_psi)
+        np.testing.assert_array_equal(d2_k, ref_d2)

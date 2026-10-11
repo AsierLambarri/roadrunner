@@ -52,6 +52,11 @@ Models:
   ``<u^2>`` from its previous-snapshot members shrunk to the pooled value,
   mixed with the literature value ``v_c^2 / v_esc^2`` at ``r_1/2``
   (Wolf et al. 2010), and floored.
+
+The literature summaries (the circular orbits around ``r_1/2``, ``v_c^2 / v_esc^2`` there and
+the tabulated ``calE_s``) read the halo's spherical profile about the bottom of its well, the
+one the energy and phase tables and the solved ``calE_s`` read; of the summaries, only the kinematic ``u^2``
+reads the potential at each particle's position.
 """
 
 import functools
@@ -283,6 +288,7 @@ class _Plausibility:
             sid = int(h.sub_tree_id)
             self._alpha[sid] = _mixed_alpha(log_lit, log_emp)
             self._t[sid] = (rows, stat)
+            h.release_tables()                      # U6: tables read above, once per halo; drop them now
 
     def _log_ratios(self, halo, rows, E, coords):
         """Per-pair statistic and its log ratios to the null: literature, empirical (``None`` before a refit).
@@ -497,17 +503,27 @@ class EnergyPlausibility(_Plausibility):
 
 _LOG_2PI = np.log(2.0 * np.pi)
 _FD_STEP = 1e-3                                   # central difference step in ln r
-_X_HAT = np.array([[1.0, 0.0, 0.0]])            # direction of the radial summaries from the halo centre
-
-
-def _potential64(halo, xyz):
-    """Potential (float64, physical) at absolute catalogue positions ``xyz``: the input of every float64 summary."""
-    return halo.potential_model.potential(np.asarray(xyz, dtype=np.float64) * halo.length_scale)
 
 
 def _summary_potential(halo, r):
-    """Potential (float64) at snapshot radii ``r`` from the halo centre along x: the radial summaries' input."""
-    return _potential64(halo, halo.tree_centre + np.asarray(r, dtype=np.float64).reshape(-1, 1) * _X_HAT)
+    """Potential (float64, physical) at catalogue radii ``r`` about the bottom of the well: the radial summaries' input.
+
+    The halo's spherical profile about ``x_min`` (``potential_model._potential``: concentric
+    components exact about their own centres, within ``CONCENTRIC_OFFSET`` of ``x_min``; offset ones
+    shell-averaged), the one its energy and phase tables and the
+    solved Errani ``calE_s`` read; for a single potential it is the true potential along any ray.
+
+    Parameters
+    ----------
+    halo : HaloModel
+    r : ndarray of float64
+        Radii in catalogue units, made physical with ``length_scale``.
+
+    Returns
+    -------
+    phi : ndarray of float64, shape of ``r``
+    """
+    return halo.potential_model._potential(r * halo.length_scale)
 
 
 def _normal_log_pdf(t, mu, sd):
@@ -520,10 +536,10 @@ def literature_depth(halo):
 
     Circular orbits at ``r_1/2 = KRAVTSOV_RHALF R_vir`` and at
     ``r_1/2 * 10^(±s)`` for ``s`` = ``PLAUSIBILITY_LIT_SCATTER_DEX`` and
-    ``PLAUSIBILITY_MIN_SCATTER_DEX``: ``v_c^2 = dPhi / d ln r`` (central
-    difference in ``ln r``, so independent of the comoving/physical
-    scaling), ``E = Phi + v_c^2 / 2``. One potential call and one
-    phase-space call per halo.
+    ``PLAUSIBILITY_MIN_SCATTER_DEX``, about the bottom of the well in the halo's
+    spherical profile (:func:`_summary_potential`): ``v_c^2 = dPhi / d ln r``
+    (central difference in ``ln r``), ``E = Phi + v_c^2 / 2``. One potential
+    call and one phase-space call per halo.
 
     Parameters
     ----------
@@ -635,7 +651,9 @@ def escape_speed_fraction(halo, rows, coords):
     Same centre, frame (the halo's centre-of-mass velocity) and ``(1 + z)`` scaling as
     :func:`compute_halo_bound_particles`: ``E < 0`` there is ``u^2 < 1`` here
     (float rounding clipped). ``nu = u^3`` is ``U(0, 1)`` for a uniform
-    phase-space background at fixed radius.
+    phase-space background at fixed radius. ``Phi_k`` is the halo's true potential at the
+    particle's position, as in the boundness, not the spherical profile of the literature
+    summaries.
 
     Parameters
     ----------
@@ -651,7 +669,7 @@ def escape_speed_fraction(halo, rows, coords):
     """
     x = np.asarray(coords[rows], dtype=np.float64)
     v2 = np.sum((x[:, 3:6] - halo.com_velocity) ** 2, axis=1)
-    return np.minimum(v2 / (-2.0 * _potential64(halo, x[:, :3])), 1.0)
+    return np.minimum(v2 / (-2.0 * halo.potential_model.potential(x[:, :3] * halo.length_scale)), 1.0)
 
 
 def literature_speed(halo):
@@ -659,7 +677,8 @@ def literature_speed(halo):
 
     Wolf et al. (2010): ``<v^2> = v_c^2(r_1/2)`` for any isotropic equilibrium
     tracer, hot or cold; it matches Errani's NFW tracer to 5% for c = 3-30, and
-    Kepler gives 1/2. ``v_c^2 = dPhi / d ln r`` by central difference.
+    Kepler gives 1/2. ``v_c^2 = dPhi / d ln r`` by central difference, in the halo's
+    spherical profile about the bottom of its well (:func:`_summary_potential`).
 
     Parameters
     ----------
