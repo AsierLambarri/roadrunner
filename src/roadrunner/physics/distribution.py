@@ -82,7 +82,7 @@ _X = np.geomspace(1e-7, 1e10, 34000)           # radial grid of the inversion
 GL_NODES, GL_WEIGHTS = np.polynomial.legendre.leggauss(96)   # Gauss–Legendre on [-1, 1]: the quadratures here and composite shell averages
 _W, _WW = 0.5 * (GL_NODES + 1.0), 0.5 * GL_WEIGHTS  # Gauss-Legendre on [0, 1]
 _TINY = 2.2250738585072014e-308                 # smallest normal float64
-PROFILE_PLUMMER, PROFILE_HERNQUIST, PROFILE_NFW = 0.0, 1.0, 2.0   # kinds of profile rows (see profile_phi)
+PROFILE_PLUMMER, PROFILE_HERNQUIST, PROFILE_NFW, PROFILE_SHELL = 0.0, 1.0, 2.0, 3.0   # kinds of profile rows (see profile_phi)
 
 
 def trapezoid_weights(x):
@@ -170,22 +170,71 @@ def _node_slope(nodes, row):
 
 
 @njit(cache=True)
-def _row_s_phi(kind, k, a, s):
-    """``s Φ(s)`` of one profile row, finite at ``s = 0`` for every kind: the integrand of a row's shell average."""
-    if kind == PROFILE_PLUMMER:
-        return -k * s / np.sqrt(s * s + a * a)
-    if kind == PROFILE_HERNQUIST:
-        return -k * s / (s + a)
-    return -k * np.log1p(s / a)
+def _cell(r, c, inv_d, K):
+    """Cell of radius ``r`` in a grid of ``K`` log-radius cells starting at ``ln r = c``.
+
+    Cell 0 lies inside the innermost node, cells ``1..K`` between nodes and
+    cell ``K + 1`` beyond the outermost node.
+
+    Parameters
+    ----------
+    r : float
+    c : float
+        Log radius of the innermost node.
+    inv_d : float
+        Inverse log-radius width of a cell.
+    K : int
+        Number of cells between nodes.
+
+    Returns
+    -------
+    b : int
+    """
+    x = (np.log(r) - c) * inv_d
+    if not x >= 0.0:
+        return 0
+    if x >= K:
+        return K + 1
+    return int(x) + 1
 
 
 @njit(cache=True)
-def _row_mass(kind, k, a, r):
-    """``G M(<r)`` of one profile row, own formula (no offset): ``k`` is ``G M`` (NFW: ``G M / A(c)``)."""
+def _row_phi(profile, j, r):
+    """Potential at radius ``r`` of profile row ``j`` by its own formula (no offset).
+
+    ``PROFILE_SHELL``: the row's own tabulated cell at ``r`` (see :func:`profile_phi`); the cell
+    0 (inside the innermost node) is the constant intercept, avoiding the ``1/r`` term at ``r = 0``.
+    """
+    kind, k, a = profile[j, 0], profile[j, 1], profile[j, 2]
+    if kind == PROFILE_PLUMMER:
+        return -k / np.sqrt(r * r + a * a)
+    if kind == PROFILE_HERNQUIST:
+        return -k / (r + a)
+    if kind == PROFILE_SHELL:
+        b = _cell(r, profile[j + 1, 0], profile[j + 1, 1], int(k) - 3)
+        if b == 0:
+            return profile[j + 2, 1]
+        return profile[j + 2 + b, 0] / r + profile[j + 2 + b, 1]
+    if r == 0.0:
+        return -k / a
+    return -k * np.log1p(r / a) / r
+
+
+@njit(cache=True)
+def _row_mass(profile, j, r):
+    """``G M(<r)`` of profile row ``j`` by its own formula (no offset): ``k`` is ``G M`` (NFW: ``G M / A(c)``).
+
+    ``PROFILE_SHELL``: exact, ``G M(<r) = -`` the row's cell slope (:class:`~roadrunner.physics.potentials.ShellPotential`'s
+    ``Φ = slope / r + intercept``, so ``G M = r² dΦ/dr`` is ``-slope`` in each cell, 0 inside the innermost node).
+    """
+    kind, k, a = profile[j, 0], profile[j, 1], profile[j, 2]
     if kind == PROFILE_PLUMMER:
         return k * r**3 / (r * r + a * a) ** 1.5
     if kind == PROFILE_HERNQUIST:
         return k * r * r / ((r + a) * (r + a))
+    if kind == PROFILE_SHELL:
+        b = _cell(r, profile[j + 1, 0], profile[j + 1, 1], int(k) - 3)
+        return -profile[j + 2 + b, 0]
     x = r / a
     return k * (np.log1p(x) - x / (1.0 + x))
 
@@ -205,29 +254,30 @@ def profile_phi(profile, r):
     """Potential at radius ``r`` of a profile: the sum of its rows ``(kind, k, a, d)``.
 
     ``PROFILE_PLUMMER``: ``-k / sqrt(r² + a²)``; ``PROFILE_HERNQUIST``: ``-k / (r + a)``;
-    ``PROFILE_NFW``: ``-k ln(1 + r/a) / r`` (``-k / a`` at ``r = 0``). ``k`` is ``G M`` (NFW:
-    ``G M / A(c)``), ``a`` the scale radius and ``d`` the row's offset from the profile's centre:
-    0 evaluates the row's own formula; ``d > 0`` its shell average about the centre,
-    ``Σ_k w_k s_k Φ(s_k) / (2 max(r, d))``, ``s_k = max(r, d) + min(r, d) x_k`` (Gauss–Legendre
-    on [-1, 1]; the composite's monopole pathway). A composite potential stacks its components' rows.
+    ``PROFILE_NFW``: ``-k ln(1 + r/a) / r`` (``-k / a`` at ``r = 0``); ``PROFILE_SHELL``: a
+    particle set's tabulated potential, ``k`` the number of table rows that follow (``K + 3``):
+    ``(ln r₀, 1/Δ)``, then the ``K + 2`` cells' ``(slope, intercept)`` of ``Φ`` in ``1/r``
+    (columns 0–1), skipped by this row's own entry in the loop. ``k`` is ``G M`` for the other
+    kinds (NFW: ``G M / A(c)``), ``a`` the scale radius and ``d`` the row's offset from the
+    profile's centre: 0 evaluates the row's own formula (:func:`_row_phi`); ``d > 0`` its shell
+    average about the centre, ``Σ_k w_k s_k Φ(s_k) / (2 max(r, d))``,
+    ``s_k = max(r, d) + min(r, d) x_k`` (Gauss–Legendre on [-1, 1]; the composite's monopole
+    pathway). A composite potential stacks its components' rows.
     """
     phi = 0.0
-    for j in range(profile.shape[0]):
-        kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
+    j = 0
+    while j < profile.shape[0]:
+        d = profile[j, 3]
         if d > 0.0:
             mid, half = max(r, d), min(r, d)
             acc = 0.0
             for m in range(GL_NODES.size):
-                acc += GL_WEIGHTS[m] * _row_s_phi(kind, k, a, mid + half * GL_NODES[m])
+                s = mid + half * GL_NODES[m]
+                acc += GL_WEIGHTS[m] * s * _row_phi(profile, j, s)
             phi += acc / (2.0 * mid)
-        elif kind == PROFILE_PLUMMER:
-            phi -= k / np.sqrt(r * r + a * a)
-        elif kind == PROFILE_HERNQUIST:
-            phi -= k / (r + a)
-        elif r == 0.0:
-            phi -= k / a
         else:
-            phi -= k * np.log1p(r / a) / r
+            phi += _row_phi(profile, j, r)
+        j += (1 + int(profile[j, 1])) if profile[j, 0] == PROFILE_SHELL else 1
     return phi
 
 
@@ -254,9 +304,13 @@ def profile_potential(profile, r):
 def profile_mass(profile, r):
     """``G M(<r)`` of a profile at every radius of ``r`` (compiled, parallel): the sum of its rows.
 
-    A concentric row (``d = 0``) adds its own :func:`_row_mass`; an offset row (``d > 0``) adds
-    the monopole's enclosed mass, :func:`~roadrunner.physics.potentials._shell_mass` on the same
-    Gauss–Legendre nodes as :func:`profile_phi`'s shell average.
+    A concentric row (``d = 0``) adds its own :func:`_row_mass` (``PROFILE_SHELL`` exact, see
+    there); an offset row (``d > 0``) adds the monopole's enclosed mass,
+    :func:`~roadrunner.physics.potentials._shell_mass` on the same Gauss–Legendre nodes as
+    :func:`profile_phi`'s shell average. An offset ``PROFILE_SHELL`` row never reaches this
+    function: its density has no closed form for the monopole quadrature, so callers
+    (:func:`_radial_mass`) route it to the numpy :func:`~roadrunner.physics.potentials._shell_mass`
+    instead; its payload is still skipped here.
 
     Parameters
     ----------
@@ -270,18 +324,25 @@ def profile_mass(profile, r):
     gm = np.zeros(r.size)
     for i in prange(r.size):
         ri = r[i]
-        for j in range(profile.shape[0]):
+        j = 0
+        while j < profile.shape[0]:
             kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
-            if d > 0.0:
-                mid, half, inner = max(ri, d), min(ri, d), max(ri - d, 0.0)
-                acc = 0.0
-                for m in range(GL_NODES.size):
-                    x = GL_NODES[m]
-                    s = mid + half * x
-                    acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s) * half * (1.0 - x) * (ri + inner + half * x)
-                gm[i] += _row_mass(kind, k, a, inner) + np.pi / d * half * acc
+            if kind == PROFILE_SHELL:
+                if d == 0.0:
+                    gm[i] += _row_mass(profile, j, ri)
+                j += 1 + int(k)
             else:
-                gm[i] += _row_mass(kind, k, a, ri)
+                if d > 0.0:
+                    mid, half, inner = max(ri, d), min(ri, d), max(ri - d, 0.0)
+                    acc = 0.0
+                    for m in range(GL_NODES.size):
+                        x = GL_NODES[m]
+                        s = mid + half * x
+                        acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s) * half * (1.0 - x) * (ri + inner + half * x)
+                    gm[i] += _row_mass(profile, j, inner) + np.pi / d * half * acc
+                else:
+                    gm[i] += _row_mass(profile, j, ri)
+                j += 1
     return gm
 
 
@@ -291,6 +352,10 @@ def profile_density(profile, r):
 
     A concentric row (``d = 0``) adds its own :func:`_row_rho`; an offset row (``d > 0``) adds its
     shell average, :func:`~roadrunner.physics.potentials._shell_mean` on the same nodes.
+    ``PROFILE_SHELL`` has no density here (its windowed estimate is too noisy for an Eddington
+    inversion): it contributes nothing, its payload only skipped. Reached only through
+    :func:`~roadrunner.physics.potentials._GroupDensity._density`, whose rows never hold one
+    (a Shell has no ``distribution_function``, so it is never in a ``has_distribution`` group).
 
     Parameters
     ----------
@@ -304,18 +369,21 @@ def profile_density(profile, r):
     rho = np.zeros(r.size)
     for i in prange(r.size):
         ri = r[i]
-        for j in range(profile.shape[0]):
+        j = 0
+        while j < profile.shape[0]:
             kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
-            if d > 0.0:
-                mid, half = max(ri, d), min(ri, d)
-                acc = 0.0
-                for m in range(GL_NODES.size):
-                    x = GL_NODES[m]
-                    s = mid + half * x
-                    acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s)
-                rho[i] += acc / (2.0 * mid)
-            else:
-                rho[i] += _row_rho(kind, k, a, ri)
+            if kind != PROFILE_SHELL:
+                if d > 0.0:
+                    mid, half = max(ri, d), min(ri, d)
+                    acc = 0.0
+                    for m in range(GL_NODES.size):
+                        x = GL_NODES[m]
+                        s = mid + half * x
+                        acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s)
+                    rho[i] += acc / (2.0 * mid)
+                else:
+                    rho[i] += _row_rho(kind, k, a, ri)
+            j += (1 + int(k)) if kind == PROFILE_SHELL else 1
     return rho
 
 
@@ -336,8 +404,26 @@ def _radial_potential(p, r):
     return np.asarray(p._potential(r), dtype=np.float64) if rows is None else profile_potential(rows, r)
 
 
+def _has_offset_shell(rows):
+    """Whether profile rows hold an offset (``d > 0``) ``PROFILE_SHELL`` header row, walking the header-by-header structure."""
+    j = 0
+    while j < len(rows):
+        kind, k, _, d = rows[j]
+        if kind == PROFILE_SHELL:
+            if d > 0.0:
+                return True
+            j += 1 + int(k)
+        else:
+            j += 1
+    return False
+
+
 def _radial_mass(p, r):
     """``G M(<r)`` of a potential's radial profile: compiled (:func:`profile_mass`) when it has one, else ``G`` times :meth:`~roadrunner.physics.potentials.SphericalPotential._enclosed_mass`.
+
+    An offset ``PROFILE_SHELL`` row (its density is too noisy for :func:`profile_mass`'s monopole
+    quadrature) falls back to the same numpy route as ``profile() is None``, which reaches it
+    through the exact numpy :func:`~roadrunner.physics.potentials._shell_mass` monopole instead.
 
     Parameters
     ----------
@@ -350,7 +436,9 @@ def _radial_mass(p, r):
     gm : ndarray of float64, shape (n,)
     """
     rows = p.profile()
-    return p.G * np.asarray(p._enclosed_mass(r), dtype=np.float64) if rows is None else profile_mass(rows, r)
+    if rows is None or _has_offset_shell(rows):
+        return p.G * np.asarray(p._enclosed_mass(r), dtype=np.float64)
+    return profile_mass(rows, r)
 
 
 @njit(cache=True)

@@ -6,7 +6,7 @@ from scipy.integrate import quad, trapezoid
 
 from roadrunner._defaults import CONCENTRIC_OFFSET
 from roadrunner._mcf_types import PotentialModel
-from roadrunner.physics.distribution import profile_phi, profile_potential, profile_mass, profile_density
+from roadrunner.physics.distribution import profile_phi, profile_potential, profile_mass, profile_density, _radial_mass
 from roadrunner.physics.potentials import (
     get_potential,
     CompositeSphericalPotential,
@@ -555,6 +555,47 @@ class TestCompositePathways:
             c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
             np.testing.assert_allclose(profile_potential(c.profile(), r), c._potential(r), rtol=1e-13)
             np.testing.assert_allclose(profile_mass(c.profile(), r) / c.G, c._enclosed_mass(r), rtol=1e-13)
+
+    def test_shell_profile_row(self):
+        # the Shell plan: its tabulated row matches its own _potential exactly, incl. inside the
+        # innermost node, through the cells and beyond the outermost; a composite stacks its payload too
+        rng = np.random.default_rng(0)
+        off = _C0 + np.array([4.0, 0.0, 0.0])
+        shell = ShellPotential(off + _xyz(rng.uniform(0.01, 10.0, 1000)), 1e5, centre=off)
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        r = np.array([0.0, 0.5 * shell._scale_radius, 5.0, 50.0])   # 0, inside innermost node, mid, beyond outermost
+        np.testing.assert_array_equal([profile_phi(shell.profile(), x) for x in r], shell._potential(r))
+        # independent pins: flat Φ0 inside the innermost node, -G M / r beyond the outermost
+        assert profile_phi(shell.profile(), 0.0) == shell.central_potential()
+        assert profile_phi(shell.profile(), 0.5 * shell._scale_radius) == shell.central_potential()
+        np.testing.assert_allclose(profile_phi(shell.profile(), 50.0), -shell.G * shell.M / 50.0, rtol=1e-12)
+        assert not shell.profile().flags.writeable
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=shell)
+        assert len(c.profile()) == 1 + len(shell.profile())
+        np.testing.assert_array_equal(c.profile()[:, 3], np.repeat(c._offsets, [1, len(shell.profile())]))
+        np.testing.assert_allclose([profile_phi(c.profile(), x) for x in r], c._potential(r), rtol=1e-12)
+        with pytest.raises(NotImplementedError):
+            shell.energy_fraction(np.array([-1.0]), 5.0)
+
+    def test_radial_mass_with_concentric_shell(self):
+        # PROFILE_SHELL in _row_mass (concentric): G M(<r) = -cell slope, exact
+        shell = ShellPotential(_C0 + _xyz(np.random.default_rng(0).uniform(0.01, 10.0, 1000)), 1e5, centre=_C0)
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=shell)
+        np.testing.assert_array_equal(c._offsets, [0.0, 0.0])
+        r = np.geomspace(1e-7, 1e16, 2000)
+        np.testing.assert_allclose(_radial_mass(c, r), c.G * c._enclosed_mass(r), rtol=1e-10)
+
+    def test_offset_shell_mass_stays_off_the_compiled_route(self):
+        # an offset Shell's density has no closed form for profile_mass's monopole quadrature:
+        # _radial_mass must fall back to the numpy route (exact _shell_mass), not profile_mass
+        off = _C0 + np.array([4.0, 0.0, 0.0])
+        shell = ShellPotential(off + _xyz(np.random.default_rng(0).uniform(0.01, 10.0, 1000)), 1e5, centre=off)
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=shell)
+        assert c._offsets[1] > 0.0
+        r = np.geomspace(1e-7, 1e16, 2000)
+        np.testing.assert_array_equal(_radial_mass(c, r), c.G * c._enclosed_mass(r))
 
 
 class TestGroupDensity:

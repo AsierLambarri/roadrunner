@@ -44,13 +44,16 @@ from roadrunner.physics.distribution import (
     PROFILE_HERNQUIST,
     PROFILE_NFW,
     PROFILE_PLUMMER,
+    PROFILE_SHELL,
     SELF_SIMILAR_C,
     SphericalDistribution,
+    _cell,
     eddington_distribution_function,
     nfw_energy_fraction,
     nfw_log_energy_density,
     nfw_log_phase_space_fraction,
     profile_density,
+    profile_potential,
     self_similar_lookup,
     self_similar_tables,
 )
@@ -267,8 +270,10 @@ class SphericalPotential(PotentialModel):
         """Compiled description for the q and g quadratures: rows ``(kind, k, a, d)`` summed by :func:`~roadrunner.physics.distribution.profile_phi`.
 
         ``None`` (the default) when the potential has none: the quadratures then evaluate
-        :meth:`potential`. A composite potential stacks its components' rows; ``d`` is the row's
-        offset from the profile's centre (0 for a plain potential).
+        :meth:`potential`. Every concrete potential here has rows (a
+        :class:`ShellPotential` row is followed by its tabulated payload rows, skipped by the
+        kernels). A composite potential stacks its components' rows; ``d`` is the row's offset
+        from the profile's centre (0 for a plain potential).
 
         Returns
         -------
@@ -1083,35 +1088,6 @@ class NFWPotential(SphericalPotential):
         return nfw_log_phase_space_fraction(np.asarray(E, dtype=np.float64) / self.central_potential(), r_max / self.Rs)
 
 
-@njit(cache=True)
-def _cell(r, c, inv_d, K):
-    """Cell of radius ``r`` in a grid of ``K`` log-radius cells starting at ``ln r = c``.
-
-    Cell 0 lies inside the innermost node, cells ``1..K`` between nodes and
-    cell ``K + 1`` beyond the outermost node.
-
-    Parameters
-    ----------
-    r : float
-    c : float
-        Log radius of the innermost node.
-    inv_d : float
-        Inverse log-radius width of a cell.
-    K : int
-        Number of cells between nodes.
-
-    Returns
-    -------
-    b : int
-    """
-    x = (np.log(r) - c) * inv_d
-    if not x >= 0.0:
-        return 0
-    if x >= K:
-        return K + 1
-    return int(x) + 1
-
-
 @njit(parallel=True, cache=True)
 def _cells(r, c, inv_d, K):
     """:func:`_cell` of every radius (parallel).
@@ -1167,30 +1143,6 @@ def _shell_histogram(r, m, softening, c, inv_d, K, n_chunks):
     return part.sum(axis=0)
 
 
-@njit(parallel=True, cache=True)
-def _shell_potential_kernel(r, coef, c, inv_d, K):
-    """``Φ = coef[b, 0] / r + coef[b, 1]`` in the cell ``b`` of every radius (parallel).
-
-    Parameters
-    ----------
-    r : ndarray of shape (n,)
-    coef : ndarray of shape (K + 2, 2)
-        Per-cell slope and intercept of ``Φ`` in ``1/r``.
-    c, inv_d, K
-        See :func:`_cell`.
-
-    Returns
-    -------
-    phi : ndarray of shape (n,)
-    """
-    phi = np.empty(r.size, dtype=np.float64)
-    for i in prange(r.size):
-        ri = np.float64(r[i])
-        b = _cell(ri, c, inv_d, K)
-        phi[i] = coef[b, 0] / ri + coef[b, 1] if b > 0 else coef[0, 1]
-    return phi
-
-
 class ShellPotential(SphericalPotential):
     """Spherical potential of a particle set, each particle a thin shell at its radius.
 
@@ -1206,8 +1158,11 @@ class ShellPotential(SphericalPotential):
     beyond the outermost, ``-G M / r``. Radii are floored at ``softening`` so a
     particle at the centre keeps ``Φ₀`` finite. The enclosed mass is the one
     of the interpolated potential, ``M(<r) = -(dΦ/d(1/r)) / G``, constant in
-    each cell; the density follows from its windowed log slope. It has no
-    energy distribution yet; its phase-space fraction is the generic one.
+    each cell; the density follows from its windowed log slope. Its table is
+    carried as a tabulated profile row (:data:`~roadrunner.physics.distribution.PROFILE_SHELL`,
+    :meth:`profile`), so its potential and the q and g quadratures of its
+    phase-space fraction are compiled, usable inside a composite; it has no
+    energy distribution: :meth:`distribution_function` and the energy pair raise.
 
     Parameters
     ----------
@@ -1248,11 +1203,16 @@ class ShellPotential(SphericalPotential):
         m_in = np.concatenate(([0.0], np.cumsum(mass)))
         # Summed from the outermost (smallest) term inwards.
         phi = -G * (m_in * u + np.concatenate((np.cumsum(m_over_r[::-1])[::-1], [0.0])))
-        self._coef = np.empty((n_nodes + 2, 2))
-        self._coef[0] = 0.0, phi[0]
-        self._coef[1:-1, 0] = np.diff(phi) / np.diff(u)
-        self._coef[1:-1, 1] = phi[:-1] - self._coef[1:-1, 0] * u[:-1]
-        self._coef[-1] = -G * m_in[-1], 0.0
+        # profile row: header (PROFILE_SHELL, n_payload, 0, 0), then (ln r0, 1/d) and the K + 2 cells' (slope, intercept)
+        self._rows = np.zeros((n_nodes + 4, 4))
+        self._rows[0, :2] = PROFILE_SHELL, n_nodes + 3
+        self._rows[1, :2] = self._c, self._inv_d
+        self._coef = coef = self._rows[2:, :2]   # per-cell (slope, intercept) of Φ in 1/r: a view into self._rows
+        coef[0] = 0.0, phi[0]
+        coef[1:-1, 0] = np.diff(phi) / np.diff(u)
+        coef[1:-1, 1] = phi[:-1] - coef[1:-1, 0] * u[:-1]
+        coef[-1] = -G * m_in[-1], 0.0
+        self._rows.flags.writeable = False         # profile() hands it out; _coef is a view into it
         self._w = max(1, round(tidal_dlnr * self._inv_d))
         super().__init__(float(m_in[-1]), G=G, centre=centre, velocity=velocity)
 
@@ -1262,7 +1222,7 @@ class ShellPotential(SphericalPotential):
         return float(np.exp(self._c))
 
     def _potential(self, r):
-        """Evaluate the potential.
+        """Evaluate the potential: :func:`~roadrunner.physics.distribution.profile_potential` of its own tabulated row.
 
         Parameters
         ----------
@@ -1274,7 +1234,7 @@ class ShellPotential(SphericalPotential):
         phi : ndarray
         """
         r = np.asarray(r)
-        return _shell_potential_kernel(r.ravel(), self._coef, self._c, self._inv_d, self._K).reshape(r.shape)
+        return profile_potential(self._rows, r.ravel()).reshape(r.shape)
 
     def _density(self, r):
         """``ρ = γ M(<r) / (4π r³)``, ``γ = d ln M / d ln r``; 0 where ``M(<r) = 0``.
@@ -1328,11 +1288,16 @@ class ShellPotential(SphericalPotential):
         """
         return float(self._coef[0, 1])
 
+    def profile(self):
+        """One ``PROFILE_SHELL`` row (``d = 0``) and its tabulated payload: :attr:`_rows`."""
+        return self._rows
+
     def distribution_function(self, E):
-        """Not defined yet: the density is a windowed log-slope estimate, too noisy for ``d²ρ/dψ²``.
+        """Not defined: the density is a windowed log-slope estimate, too noisy for ``d²ρ/dψ²``.
 
         The energy pair therefore raises; the phase-space fraction, which
-        needs only the potential, is the generic one.
+        needs only the potential, is the generic one, with its q and g
+        quadratures compiled through :meth:`profile`'s tabulated row.
         """
         raise NotImplementedError("ShellPotential has no energy distribution yet.")
 
@@ -1708,7 +1673,11 @@ class CompositeSphericalPotential(SphericalPotential):
         return sum(p._potential_at(self.x_min, inner) for p in self._components)
 
     def profile(self):
-        """The components' profile rows stacked, with their pathway offsets; ``None`` if any component has none (Shell).
+        """The components' profile rows stacked, with their pathway offsets; ``None`` if any component has none.
+
+        A :class:`ShellPotential` row brings its table rows (payload, skipped by the kernels);
+        every one of a component's rows carries its pathway offset, so the composite's row count
+        can exceed its component count.
 
         Returns
         -------
@@ -1717,7 +1686,9 @@ class CompositeSphericalPotential(SphericalPotential):
             :attr:`x_min` (0: concentric, its own profile; otherwise its shell average).
         """
         rows = [p.profile() for p in self._components]
-        return None if any(row is None for row in rows) else np.column_stack((np.vstack(rows)[:, :3], self._offsets))
+        if any(row is None for row in rows):
+            return None
+        return np.column_stack((np.vstack(rows)[:, :3], np.repeat(self._offsets, [len(row) for row in rows])))
 
     def release(self):
         """Drop every cached :class:`~roadrunner.physics.distribution.SphericalDistribution` (U6).

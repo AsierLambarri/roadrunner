@@ -203,9 +203,10 @@ class TestCompiledKernels:
         assert ed.table_query(np.float64(0.5), nodes, row).shape == ()
 
     def test_compiled_quadratures_match_numpy(self):
-        from roadrunner.physics.potentials import CompositeSphericalPotential, HernquistPotential, KeplerPotential, NFWPotential, PlummerPotential
+        from roadrunner.physics.potentials import CompositeSphericalPotential, HernquistPotential, KeplerPotential, NFWPotential, PlummerPotential, ShellPotential
         for p, R in ((PlummerPotential(1e10, 0.5), 5.0), (HernquistPotential(1e10, 0.5), 5.0),
-                     (NFWPotential(1e11, 8.0, 10.0), 80.0), (KeplerPotential(1e11), 60.0)):
+                     (NFWPotential(1e11, 8.0, 10.0), 80.0), (KeplerPotential(1e11), 60.0),
+                     (ShellPotential(_xyz(np.random.default_rng(0).uniform(0.01, 10.0, 1000)), 1e7), 5.0)):
             d = ed.SphericalDistribution(p, R)
             q, g = d._q_and_g(d._energies)
             d._profile = None                                    # the numpy fallback (still evaluates exact offsets)
@@ -227,6 +228,20 @@ class TestCompiledKernels:
                     q0, g0 = d._q_and_g(d._energies)
                     np.testing.assert_allclose(q, q0, rtol=1e-4)
                     np.testing.assert_allclose(g, g0, rtol=1e-4)
+        # Shell plan: a composite's log_phase_space_fraction, concentric and offset Shell, compiled
+        # (its tabulated row, offset through U2's Hermite table) vs the numpy fallback
+        rng = np.random.default_rng(0)
+        for d_off in (0.0, 4.0):
+            centre = d_off * np.array([1.0, 0.0, 0.0])
+            shell = ShellPotential(centre + _xyz(rng.uniform(0.01, 10.0, 1000)), 1e5, centre=centre)
+            comp = CompositeSphericalPotential(dark_matter=NFWPotential(1e11, 8.0, 10.0), stars=shell)
+            R = 80.0
+            E = comp.central_potential() * np.array([0.9, 0.5, 0.1, 0.01, 1e-6])
+            compiled = ed.SphericalDistribution(comp, R).log_phase_space_fraction(E)
+            numpy_d = ed.SphericalDistribution(comp, R)
+            numpy_d._profile = None
+            numpy_w = numpy_d.log_phase_space_fraction(E)
+            np.testing.assert_allclose(compiled, numpy_w, rtol=1e-6 if d_off == 0.0 else 1e-4)
         # the Eddington quadrature against its numpy form
         b = np.array([1 - 1e-6, 0.5, 1e-3, 1e-8])
         psi = -ed.nfw_phi(ed._X)
