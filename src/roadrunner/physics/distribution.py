@@ -212,7 +212,7 @@ def profile_phi(profile, r):
 
 @njit(parallel=True, cache=True)
 def _q_and_g_kernel(energy, x_max, profile, w, ww):
-    """Phase-space volume and density of states of a profile at flat ``energy`` (parallel; see ``SphericalDistribution._q_and_g``)."""
+    """Phase-space volume and density of states of a profile at flat ``energy`` (parallel; see :func:`q_and_g`)."""
     q = np.empty(energy.size)
     g = np.empty(energy.size)
     for i in prange(energy.size):
@@ -566,6 +566,7 @@ _SHALLOWEST = 1e-12                            # shallowest node of the generic 
 _GENERIC_NODES = 640, 660                      # nodes deeper and shallower than the kink (see _depth_nodes)
 _APO_NODES = 4000                              # radial nodes (0, then log-spaced 1e-6 R .. R) of the apocentre lookup
 _EDDINGTON_R = np.geomspace(1e-7, 1e16, 46000)  # physical radii (kpc) of the generic Eddington inversion: f to -E ~ 1e-12 |Φ(0)|
+_INSIDE_R = np.concatenate(([0.0], np.geomspace(1e-6, 1e8, 700)))   # radii (units of the radius asked) of fraction_inside's apocentre lookup
 
 
 def eddington_distribution_function(background, energy, density=None):
@@ -622,6 +623,70 @@ def eddington_distribution_function(background, energy, density=None):
             f"min f / max |f| = {f.min() / np.abs(f).max():.2g}): this density has no isotropic equilibrium in this "
             "potential there; f is clipped to 0.", RuntimeWarning, stacklevel=2)
     return np.maximum(f, 0.0)
+
+
+def q_and_g(potential, profile, energy, x_max):
+    """Phase-space volume ``q(E)`` and density of states ``g(E)`` of the orbits out to ``x_max``.
+
+    Both integrals run over ``r`` from 0 to ``x_max`` (the radial apocentre ``r_E``, capped at a
+    counting radius when there is one), with ``r = x_max (1 - w²)``, which removes the
+    square-root endpoint at the apocentre, and Gauss–Legendre in ``w``. They share their nodes
+    and potential evaluations: compiled (parallel) when ``profile`` is not ``None``, otherwise
+    from ``potential._potential``.
+
+    Parameters
+    ----------
+    potential : SphericalPotential
+    profile : ndarray of shape (k, 4) or None
+        ``potential.profile()``.
+    energy : ndarray of shape (n,)
+        Physical energies (float64).
+    x_max : ndarray of shape (n,)
+        Outer radii (float64, contiguous).
+
+    Returns
+    -------
+    q, g : ndarray of float64, shape (n,)
+    """
+    if profile is not None:
+        return _q_and_g_kernel(np.ascontiguousarray(energy, dtype=np.float64), x_max, profile, _W, _WW)
+    x = x_max[:, None] * (1.0 - _W**2)
+    kin2 = np.clip(2.0 * (energy[:, None] - np.asarray(potential._potential(x), dtype=np.float64)), 0.0, None)
+    w = 16.0 * np.pi**2 * _WW * 2.0 * x_max[:, None] * _W * x**2
+    return np.sum(w * kin2**1.5, axis=-1) / 3.0, np.sum(w * np.sqrt(kin2), axis=-1)
+
+
+def fraction_inside(potential, energy, radius):
+    """Fraction ``g_R(E) / g(E)`` of the orbits of energy ``E`` that lie inside ``radius``.
+
+    ``g`` is the untruncated density of states (:func:`q_and_g` out to the radial apocentre
+    ``r_E``) and ``g_R`` its part inside ``R`` (out to ``min(r_E, R)``): 1 where ``r_E <= R``.
+    The mass inside ``R`` of any isotropic tracer ``f(E)`` is ``∫ f g_R dE``, so with
+    ``N = f g`` its enclosed fraction is ``∫ N (g_R / g) dE``, without a radial grid.
+    Apocentres come from ``potential._potential`` on ``radius`` times :data:`_INSIDE_R`
+    (``r = 0``, then ``1e-6`` to ``1e8``); orbits reaching beyond that are counted out to its
+    end. Energies must lie above ``Φ(0)``, where ``g = 0``.
+
+    Parameters
+    ----------
+    potential : SphericalPotential
+        Its radial profile (``_potential``; ``profile()`` makes the quadratures compiled).
+    energy : ndarray of shape (n,)
+        Physical specific energies, above ``Φ(0)``.
+    radius : float
+        Physical radius.
+
+    Returns
+    -------
+    fraction : ndarray of float64, shape (n,)
+    """
+    energy = np.asarray(energy, dtype=np.float64)
+    r = radius * _INSIDE_R
+    apo = np.interp(energy, np.asarray(potential._potential(r), dtype=np.float64), r)
+    _, g = q_and_g(potential, potential.profile(), np.concatenate((energy, energy)),
+                   np.concatenate((apo, np.minimum(apo, radius))))
+    g_all, g_in = g.reshape(2, -1)
+    return g_in / g_all
 
 
 class SphericalDistribution:
@@ -698,12 +763,7 @@ class SphericalDistribution:
         return np.asarray(energy, dtype=np.float64) / self._phi[0]
 
     def _q_and_g(self, energy):
-        """Phase-space volume ``q(E)`` and density of states ``g(E)`` inside ``r_max``.
-
-        Both integrals run over ``r`` from 0 to ``x_max = min(r_max, r_E)``,
-        with ``r = x_max (1 - w²)``, which removes the square-root endpoint
-        at the apocentre, and Gauss–Legendre in ``w``. They share their
-        nodes and potential evaluations.
+        """Phase-space volume ``q(E)`` and density of states ``g(E)`` inside ``r_max``: :func:`q_and_g` out to the apocentre, capped at ``r_max``.
 
         Parameters
         ----------
@@ -714,13 +774,7 @@ class SphericalDistribution:
         -------
         q, g : ndarray of float64, shape (n,)
         """
-        x_max = np.interp(energy, self._phi, self._r)       # apocentre, capped at r_max
-        if self._profile is not None:
-            return _q_and_g_kernel(np.ascontiguousarray(energy, dtype=np.float64), x_max, self._profile, _W, _WW)
-        x = x_max[:, None] * (1.0 - _W**2)
-        kin2 = np.clip(2.0 * (energy[:, None] - np.asarray(self.potential._potential(x), dtype=np.float64)), 0.0, None)
-        w = 16.0 * np.pi**2 * _WW * 2.0 * x_max[:, None] * _W * x**2
-        return np.sum(w * kin2**1.5, axis=-1) / 3.0, np.sum(w * np.sqrt(kin2), axis=-1)
+        return q_and_g(self.potential, self._profile, energy, np.interp(energy, self._phi, self._r))
 
     def _phase_table(self):
         """``ln q(E) - ln q(0)`` at the depth nodes, built once.

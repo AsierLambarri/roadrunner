@@ -98,9 +98,10 @@ class TestRunConfigFrozen:
 class TestPlausibilityConfig:
     def test_default_and_validation(self):
         assert RunConfig().plausibility == "rank"
-        assert RunConfig(halo_model="nfw", plausibility="energy").plausibility == "energy"
         with pytest.raises(ValueError, match="works with halo_model"):
             RunConfig(halo_model="kepler", plausibility="energy")
+        for hm in ("nfw", "plummer", "hernquist"):
+            assert RunConfig(halo_model=hm, plausibility="energy").plausibility == "energy"
         with pytest.raises(ValueError, match="plausibility must be"):
             RunConfig(plausibility="nope")
         assert RunConfig(halo_model="kepler", plausibility="phase").plausibility == "phase"

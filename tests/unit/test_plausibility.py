@@ -2,17 +2,22 @@
 
 import numpy as np
 import pytest
+from scipy.integrate import cumulative_trapezoid
 from scipy.stats import rankdata
 
 from roadrunner._defaults import PLAUSIBILITY_FLOOR, PLAUSIBILITY_MIN_MEMBERS, math_dtype, precision
 from roadrunner.clustering.assignment.gmm import XGMMAssigner
 from roadrunner.clustering.assignment.plausibility import (
+    CAL_GRID,
     EnergyPlausibility,
     KRAVTSOV_RHALF,
     PhaseSpacePlausibility,
     RankPlausibility,
     literature_depth,
     _errani_scales,
+    _errani_unnormalised,
+    _solved_errani_scale,
+    _tabulated_errani_scale,
     errani_log_ratio,
     errani_scale,
     make_plausibility,
@@ -20,9 +25,16 @@ from roadrunner.clustering.assignment.plausibility import (
 from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.physics.boundness import compute_halo_bound_particles
+from roadrunner.physics.distribution import trapezoid_weights
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.physics.halo_model import HaloModel
-from roadrunner.physics.potentials import CompositeSphericalPotential, HernquistPotential, KeplerPotential, NFWPotential
+from roadrunner.physics.potentials import (
+    CompositeSphericalPotential,
+    HernquistPotential,
+    KeplerPotential,
+    NFWPotential,
+    PlummerPotential,
+)
 from roadrunner.physics.scaler import StandardScaler
 
 
@@ -95,6 +107,30 @@ class TestEnergyPlausibility:
             h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1)
             got = errani_scale(h)
             np.testing.assert_allclose(got, ref, rtol=5e-3)
+
+    def test_single_nfw_reads_the_table_and_the_solve_reproduces_it(self):
+        for c in (3.0, 6.53, 21.31, 100.0):
+            h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1)
+            assert errani_scale(h) == _tabulated_errani_scale(h)          # routed to today's table, bit for bit
+            np.testing.assert_allclose(_solved_errani_scale(h), errani_scale(h), rtol=3e-3)
+
+    def test_solved_errani_scale_puts_r_half_at_kravtsov(self):
+        # forward on a radial grid, independent of fraction_inside: f* = n* / g (untruncated g),
+        # ρ* ∝ ∫ f* sqrt(2 (E - Φ̄)) dE, r_1/2 of M*(<r); constant factors cancel in m / m[-1]
+        for potential in (PlummerPotential(1e11, 6.0), HernquistPotential(1e11, 6.0),
+                          CompositeSphericalPotential(dark_matter=NFWPotential(1e11, 6.0, 10.0),
+                                                      stars=HernquistPotential(5e9, 0.5))):
+            # comoving at z = 1: r_1/2 is physical (catalogue R_vir times length_scale = 1/2)
+            h = HaloModel(potential, np.zeros(3), np.zeros(3), 60.0, sub_tree_id=1, redshift=1.0, comoving=True)
+            es, r_half = errani_scale(h), KRAVTSOV_RHALF * h.virial_radius * h.length_scale
+            E = h.central_potential() * (1.0 - CAL_GRID)
+            r = r_half * np.geomspace(1e-6, 1e8, 3000)
+            kin = np.sqrt(2.0 * np.maximum(E - h.potential_model._potential(r)[:, None], 0.0))   # (radius, energy)
+            g = (r**2 * trapezoid_weights(r)) @ kin
+            rho = kin @ (_errani_unnormalised(CAL_GRID, es) / g * trapezoid_weights(CAL_GRID))
+            m = cumulative_trapezoid(r**2 * rho, r, initial=0.0)
+            np.testing.assert_allclose(np.exp(np.interp(0.5, m / m[-1], np.log(r))), r_half, rtol=5e-3)
+            assert np.all(np.isfinite(EnergyPlausibility()._log_ratios(h, np.arange(E.size), E, None)[1]))   # C4
 
     def test_first_snapshot_is_floored_errani_and_positive(self):
         halos, coords = _two_nfw_halos()

@@ -27,15 +27,16 @@ Models:
 
 - ``"rank"``: ``log1p`` of the ordinal rank of the boundness within each
   halo.
-- ``"energy"`` (any potential with a distribution function; its Errani
-  prior is NFW-calibrated, so ``halo_models = ("nfw",)``): the likelihood
-  ratio ``p*(u)`` of member stars over the halo's dark matter, on the
-  dark-matter energy rank ``u = F_c(calE)`` (the ``dark_matter`` group's
-  energy distribution in the halo's whole potential; uniform for the dark
-  matter itself). ``p*`` is a histogram of the previous snapshot's members in
-  ``t = -ln u``, mixed with Errani et al. (2022)'s tagging ratio
-  (exponential galaxies, with ``r_1/2 = 0.015 R_vir``, Kravtsov 2013) and
-  floored: ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
+- ``"energy"`` (any halo model with a distribution function: NFW, Plummer,
+  Hernquist): the likelihood ratio ``p*(u)`` of member stars over the
+  halo's dark matter, on the dark-matter energy rank ``u = F_c(calE)`` (the
+  ``dark_matter`` group's energy distribution in the halo's whole
+  potential; uniform for the dark matter itself). ``p*`` is a histogram of
+  the previous snapshot's members in ``t = -ln u``, mixed with Errani et
+  al. (2022)'s tagging ratio (exponential galaxies, with ``r_1/2 = 0.015
+  R_vir``, Kravtsov 2013; its ``calE_s`` from the NFW table for a single
+  NFW halo, solved in the halo's own potential otherwise) and floored:
+  ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
   ``lam = A / (1 + A)``. Without a histogram yet (first snapshot) ``lam = 1``.
 - ``"phase"`` (any potential): the same ratio on the fraction ``w`` of the
   halo's bound phase space more bound than the particle (uniform for a
@@ -70,14 +71,15 @@ from roadrunner._defaults import (
     PLAUSIBILITY_PRIOR_WEIGHT,
     PLAUSIBILITY_SHRINK_COUNT,
 )
-from roadrunner.physics.distribution import nfw_density_of_states, nfw_phi, trapezoid_weights
-from roadrunner.physics.potentials import POTENTIAL_MODELS
+from roadrunner.physics.distribution import fraction_inside, nfw_density_of_states, nfw_phi, trapezoid_weights
+from roadrunner.physics.potentials import NFWPotential, POTENTIAL_MODELS
 
 ERRANI_SLOPE = 3.3          # dN*/dcalE ∝ calE^3.3 exp(-(calE / calE_s)^4)
 ERRANI_SHARPNESS = 4.0
 KRAVTSOV_RHALF = 0.015      # stellar half-mass radius / virial radius
 CAL_GRID = np.concatenate([np.geomspace(1e-4, 0.1, 200, endpoint=False), np.linspace(0.1, 1.0 - 1e-4, 200)])
                             # binding depths of Errani's integrals
+_ERRANI_TRIALS = np.geomspace(1e-3, 0.95, 96)   # trial calE_s of the per-halo solve; 1e-3: the shallowest n* CAL_GRID resolves
 _U_MIN = 1e-12              # u floor: t = -ln u <= 27.6
 _LOG_ALPHA_MAX = 50.0       # alpha in [1e-8, e^50]: row sums finite and row ratios
                             # (>= 1e-8 / (K e^50) ~ 1e-30) normal in float32
@@ -121,7 +123,7 @@ def _errani_unnormalised(cal, es):
 
 @functools.cache
 def _errani_scales():
-    """Errani ``calE_s`` against the potential depth at the stellar half-mass radius.
+    """Errani ``calE_s`` against the potential depth at the stellar half-mass radius (single NFW halos).
 
     For each trial scale the stellar distribution function is
     ``f* = n*(calE) / g(calE)``, its density
@@ -151,8 +153,8 @@ def _errani_scales():
     return 1.0 + nfw_phi(r_half), es_try
 
 
-def errani_scale(halo):
-    """Errani ``calE_s`` placing the stellar half-mass radius at ``KRAVTSOV_RHALF R_vir`` (NFW calibration).
+def _tabulated_errani_scale(halo):
+    """Errani ``calE_s`` of a single NFW halo: the NFW table (:func:`_errani_scales`) at its depth at ``KRAVTSOV_RHALF R_vir``.
 
     Parameters
     ----------
@@ -166,6 +168,59 @@ def errani_scale(halo):
     depth = 1.0 - float(_summary_potential(halo, r_half)[0]) / halo.central_potential()
     cal_half, es_try = _errani_scales()
     return float(np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es_try))))
+
+
+@functools.cache
+def _errani_trial_weights():
+    """Errani's ``n*(calE; calE_s)`` of each trial scale on ``CAL_GRID`` times its trapezoid weights, normalised per trial: shape (96, 400)."""
+    w = _errani_unnormalised(CAL_GRID, _ERRANI_TRIALS[:, None]) * trapezoid_weights(CAL_GRID)
+    return w / w.sum(axis=1, keepdims=True)
+
+
+def _solved_errani_scale(halo):
+    """Errani ``calE_s`` placing the stellar half-mass radius at ``KRAVTSOV_RHALF R_vir`` in the halo's own potential.
+
+    The construction of :func:`_errani_scales` in the halo's radial profile about the bottom of
+    its well (``Φ̄(0) = Φ₀``, the ``calE`` zero point), without a radial grid. With
+    ``f* = n* / g`` (``g`` untruncated, as in the table), the stellar mass inside ``R`` is
+    ``∫ f* g_R dE = ∫ n* (g_R / g) dE``. So the fraction inside ``r_1/2`` (physical) of each
+    trial scale is ``n*``'s mean of
+    :func:`~roadrunner.physics.distribution.fraction_inside` on ``CAL_GRID``. It decreases
+    with the scale; ``calE_s`` is where it is 1/2 (linear in ``ln calE_s`` between the trials,
+    held at the ends of ``_ERRANI_TRIALS``).
+
+    Parameters
+    ----------
+    halo : HaloModel
+
+    Returns
+    -------
+    es : float
+    """
+    r_half = KRAVTSOV_RHALF * halo.virial_radius * halo.length_scale
+    inside = fraction_inside(halo.potential_model, halo.central_potential() * (1.0 - CAL_GRID), r_half)
+    half = np.sum(_errani_trial_weights() * inside, axis=1)     # no BLAS gemv here: it stalls ~2 ms after the numba kernel
+    return float(np.exp(np.interp(0.5, half[::-1], np.log(_ERRANI_TRIALS[::-1]))))
+
+
+_ERRANI_ROUTES = {(NFWPotential,): _tabulated_errani_scale}    # a single NFW reads the table; any other potential is solved
+
+
+def errani_scale(halo):
+    """Errani ``calE_s`` placing the stellar half-mass radius at ``KRAVTSOV_RHALF R_vir``.
+
+    A single NFW halo reads the NFW table (:func:`_tabulated_errani_scale`); any other
+    potential is solved in its own radial profile (:func:`_solved_errani_scale`).
+
+    Parameters
+    ----------
+    halo : HaloModel
+
+    Returns
+    -------
+    es : float
+    """
+    return _ERRANI_ROUTES.get(tuple(map(type, halo)), _solved_errani_scale)(halo)
 
 
 def errani_log_ratio(halo, E, es):
@@ -366,7 +421,7 @@ class EnergyPlausibility(_Plausibility):
     """Hybrid empirical ``p*(u)``: member histogram in ``t = -ln u`` + Errani prior, floored."""
 
     name = "energy"
-    halo_models = ("nfw",)                          # Errani's prior is NFW-calibrated (item (c))
+    halo_models = tuple(name for name, model in POTENTIAL_MODELS.items() if model.has_distribution)   # the dark matter's u needs f
 
     def __init__(self):
         super().__init__()
