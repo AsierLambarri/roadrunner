@@ -192,7 +192,9 @@ class TestBindingEnergyInterface:
         import pytest
         p = KeplerPotential(M=1e10)
         assert isinstance(p, PotentialModel)
-        for call in (p.central_potential, lambda: p.energy_fraction(np.array([-0.5]), 1.0),
+        assert p.central_potential() == -np.inf                     # no innermost particle yet
+        assert p.central_potential(np.array([0.2, 0.0, 0.0])) == -p.G * p.M / 0.2   # unsoftened, at the innermost particle
+        for call in (lambda: p.energy_fraction(np.array([-0.5]), 1.0),
                      lambda: p.log_energy_density(np.array([-0.5]), 1.0)):
             with pytest.raises(NotImplementedError):
                 call()
@@ -286,7 +288,7 @@ class TestCompositeSphericalPotential:
             for name in ("potential", "density", "enclosed_mass", "tidal_denominator"):
                 np.testing.assert_array_equal(getattr(c, name)(_xyz(r)), getattr(p, name)(_xyz(r)))
             np.testing.assert_array_equal(c.orbital_time(E, _xyz(r)), p.orbital_time(E, _xyz(r)))
-            assert c.well_depth(_xyz([0.1])) == p.well_depth(_xyz([0.1]))
+            assert c.central_potential(_xyz([0.1])[0]) == p.central_potential(_xyz([0.1])[0])
             np.testing.assert_array_equal(c.profile(), p.profile())
             Eb = E[:3] * (1.0 if isinstance(p, KeplerPotential) else -p.central_potential() / 2e4)
             for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):
@@ -304,7 +306,6 @@ class TestCompositeSphericalPotential:
         for name in ("potential", "density", "enclosed_mass", "tidal_denominator"):
             np.testing.assert_array_equal(getattr(c, name)(_xyz(r)), getattr(nfw, name)(_xyz(r)) + getattr(plummer, name)(_xyz(r)))
         assert c.central_potential() == nfw.central_potential() + plummer.central_potential()
-        assert c.well_depth(_xyz([0.1])) == nfw.well_depth(_xyz([0.1])) + plummer.well_depth(_xyz([0.1]))
         np.testing.assert_array_equal(c.profile(), np.vstack([nfw.profile(), plummer.profile()]))
         # dynamical times combine exactly: t^-2 ∝ M(<r)
         np.testing.assert_allclose(c.orbital_time(None, _xyz(r[1:])), 2 * np.pi * np.sqrt(r[1:]**3 / (G_KM * c.enclosed_mass(_xyz(r[1:])))),
@@ -346,7 +347,7 @@ class TestPositions:
         # the radial profile is about x_min (both components off it here: monopole), so Φ̄(0) is the potential there
         np.testing.assert_allclose(comp._potential(np.zeros(1))[0], comp.central_potential(), rtol=1e-6)
         k = KeplerPotential(1e10, centre=c1)
-        np.testing.assert_allclose(k.well_depth(c1 + np.array([[0.2, 0.0, 0.0]])), -k._potential(np.array([0.2]))[0], rtol=1e-9)
+        np.testing.assert_allclose(k.central_potential(c1 + np.array([0.2, 0.0, 0.0])), -k.G * k.M / 0.2, rtol=1e-9)   # |c1| ~ 1e5
 
 
 class TestCompositeAdd:
@@ -473,11 +474,14 @@ class TestWellMinimum:
         for k in (KeplerPotential(1e9, centre=_C0), KeplerPotential(1e9, centre=_C0 + np.array([1.0, 0.0, 0.0]))):
             c = CompositeSphericalPotential(dark_matter=nfw, stars=k)
             assert np.all(np.isfinite(c.x_min))
-            with pytest.raises(NotImplementedError):
-                c.central_potential()
             c.add("stars", PlummerPotential(1e9, 0.5, centre=_C0 + np.array([0.0, 1.0, 0.0])))
-            with pytest.raises(NotImplementedError):
-                c.central_potential()
+            inner = k.centre + np.array([0.3, 0.0, 0.0])
+            # the point mass taken unsoftened, no deeper than at the innermost particle; -inf at its centre without one
+            expected = (sum(p.potential(c.x_min[None])[0] for p in c if p is not k)
+                        - k.G * k.M / max(np.linalg.norm(c.x_min - k.centre), 0.3))
+            np.testing.assert_allclose(c.central_potential(inner), expected, rtol=1e-12)
+            assert c.central_potential() == (-np.inf if np.array_equal(c.x_min, k.centre) else
+                                             c.central_potential(c.x_min))
 
     def test_add_updates_the_minimum(self):
         from roadrunner.physics.potentials import CompositeSphericalPotential

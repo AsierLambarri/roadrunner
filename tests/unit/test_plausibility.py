@@ -77,6 +77,7 @@ class TestRankPlausibility:
         h2 = HaloModel(KeplerPotential(M=1e11), np.zeros(3), np.zeros(3), 50.0, 2, 0.0)
         h1.set_bound(np.arange(0, 150), -rng.uniform(0, 5, 150).astype(np.float32), np.ones(150))
         h2.set_bound(np.arange(80, 200), -rng.uniform(0, 5, 120).astype(np.float32), np.ones(120))
+        h1.inner_position = h2.inner_position = np.array([1.0, 0.0, 0.0])   # a point mass's scale needs its innermost particle
         ens = HaloEnsemble([h1, h2])
         csc_b, _ = ens.get_particles()
         csc_s, _ = ens.get_particles(scaled_energies=True)     # the old transform ranked b

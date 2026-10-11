@@ -62,7 +62,7 @@ class TestPotential:
             assert halo.orbital_time(np.array([-1.0]), xcen[None])[0] == 0   # the NFW cusp's limit at its centre
             np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.potential(inner.centre[None])[0])
             assert halo.tree_mass == 1e12
-            np.testing.assert_allclose(halo.binding_energy_scale(), -inner.central_potential() - star.central_potential())
+            assert halo.binding_energy_scale() == -halo.central_potential()       # the true bottom of the summed well (D3)
             u = halo.energy_fraction(np.array([-0.5]) * halo.binding_energy_scale())
             assert np.all((u > 0) & (u < 1))
             # the halo holds its own frozen copy: adding to comp afterwards leaves it untouched
@@ -189,7 +189,7 @@ class TestWrappers:
             for name in ("potential", "density", "enclosed_mass", "tidal_denominator"):
                 np.testing.assert_allclose(getattr(halo, name)(xyz), getattr(inner, name)(phys), rtol=1e-12)
             np.testing.assert_allclose(halo.orbital_time(-np.ones(2), xyz), inner.orbital_time(-np.ones(2), phys), rtol=1e-12)
-            np.testing.assert_allclose(halo.well_depth(xyz[:1]), inner.well_depth(phys[:1]))
+            np.testing.assert_allclose(halo.central_potential(), inner.central_potential())
             E = np.array([0.9, 0.5]) * inner.central_potential()
             R = 2.0 * RVR * ls
             for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):

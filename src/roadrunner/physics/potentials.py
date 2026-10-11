@@ -238,14 +238,29 @@ class SphericalPotential(PotentialModel):
             f = np.nan_to_num(4 * np.pi * x**2 * self._density(x), nan=0.0)
         return np.interp(r, x, cumulative_trapezoid(f, x, initial=0.0))
 
-    def central_potential(self):
+    def central_potential(self, inner=None):
         """Central potential ``Φ₀``: the potential at the bottom of the well, :attr:`x_min`.
+
+        The scale of the binding energies (``-Φ₀``) and the zero point of the energy tables.
+
+        Parameters
+        ----------
+        inner : ndarray of shape (3,), optional
+            Absolute physical position of the innermost particle; only a point mass, whose
+            well the data resolve down to it, reads it.
 
         Returns
         -------
         phi0 : float
         """
         return float(self.potential(self.x_min[None])[0])
+
+    def _potential_at(self, x, inner):
+        """This component's term of a composite's central potential at the absolute position ``x``: its potential there.
+
+        ``inner`` (the innermost particle) is read by a point mass only.
+        """
+        return float(self.potential(x[None])[0])
 
     def profile(self):
         """Compiled description for the q and g quadratures: rows ``(kind, k, a, d)`` summed by :func:`~roadrunner.physics.distribution.profile_phi`.
@@ -259,21 +274,6 @@ class SphericalPotential(PotentialModel):
         profile : ndarray of shape (n, 4) or None
         """
         return None
-
-    def well_depth(self, xyz):
-        """Depth ``-Φ₀`` of the potential well, the scale of its binding energies.
-
-        Parameters
-        ----------
-        xyz : ndarray of shape (1, 3)
-            Absolute physical position of the innermost particle; unused by a
-            well with a finite centre.
-
-        Returns
-        -------
-        depth : float
-        """
-        return -self.central_potential()
 
     def _orbital_time(self, E, r):
         """Orbital timescale: the dynamical time ``2π sqrt(r³ / (G M(<r)))`` at the instantaneous radius.
@@ -585,7 +585,7 @@ class PlummerPotential(SelfSimilarPotential):
         """
         return self.M * r**3 / (r**2 + self.a**2) ** 1.5
 
-    def central_potential(self):
+    def central_potential(self, inner=None):
         """Exact: ``Φ₀ = -G M / a``.
 
         Returns
@@ -710,26 +710,32 @@ class KeplerPotential(PlummerPotential):
         """
         return np.full(np.shape(r), 3 * self.M)
 
-    def central_potential(self):
-        """Not defined: the softened central value is not physical."""
-        raise NotImplementedError("The Kepler potential has no finite central potential.")
+    def central_potential(self, inner=None):
+        """Central potential ``-G M / r_in`` of the point mass at its innermost particle.
 
-    def well_depth(self, xyz):
-        """Depth ``-Φ`` of the well at the innermost particle.
-
-        A point mass's ``Φ₀`` is set by the softening alone, so its depth is
-        taken where the data stop resolving it.
+        The softened central value is set by the softening alone, so the well is taken as deep
+        as the data resolve it: the unsoftened point mass at the innermost particle's distance
+        ``r_in``. Without one (``inner`` None) it is ``-inf``.
 
         Parameters
         ----------
-        xyz : ndarray of shape (1, 3)
+        inner : ndarray of shape (3,), optional
             Absolute physical position of the innermost particle.
 
         Returns
         -------
-        depth : float
+        phi0 : float
         """
-        return -float(self.potential(xyz)[0])
+        return self._potential_at(self.centre, inner)
+
+    def _potential_at(self, x, inner):
+        """The unsoftened point mass at ``x``, no deeper than at the innermost particle: ``-G M / max(|x - c|, r_in)``.
+
+        ``r_in = 0`` without an innermost particle, so ``-inf`` at the centre.
+        """
+        r_in = np.linalg.norm((self.centre if inner is None else np.asarray(inner, dtype=np.float64)) - self.centre)
+        with np.errstate(divide="ignore"):
+            return float(-self.G * self.M / max(np.linalg.norm(x - self.centre), r_in))
 
     def distribution_function(self, E):
         """Not defined: a point mass has no extended mass distribution, so no energy distribution.
@@ -835,7 +841,7 @@ class HernquistPotential(SelfSimilarPotential):
         """
         return self.M * r**2 / (r + self.a) ** 2
 
-    def central_potential(self):
+    def central_potential(self, inner=None):
         """Exact: ``Φ₀ = -G M / a``.
 
         Returns
@@ -997,7 +1003,7 @@ class NFWPotential(SphericalPotential):
         B = np.log1p(x) - x / (1 + x)
         return self.M / A * (3 * B - x**2 / (1 + x) ** 2)
 
-    def central_potential(self):
+    def central_potential(self, inner=None):
         """Exact: ``Φ₀ = -G M / (Rs A(c))``, the potential at ``r = 0``.
 
         Returns
@@ -1312,7 +1318,7 @@ class ShellPotential(SphericalPotential):
         b = _cells(r.ravel(), self._c, self._inv_d, self._K)
         return (-self._coef[b, 0] / self.G).reshape(r.shape)
 
-    def central_potential(self):
+    def central_potential(self, inner=None):
         """Central potential ``Φ₀ = -G Σ m_j / r_j``.
 
         Returns
@@ -1402,7 +1408,7 @@ def _about(p, method, r, d):
 
 # Methods without `density` a single component answers itself, exactly (its closed forms and tables);
 # the energy methods go through the group densities (`_densities`).
-_OWN_METHODS = ("orbital_time", "log_phase_space_fraction")
+_OWN_METHODS = ("orbital_time", "log_phase_space_fraction", "central_potential")
 
 
 class _GroupDensity:
@@ -1529,9 +1535,7 @@ class CompositeSphericalPotential(SphericalPotential):
         The composite's mass, :attr:`com_centre`, :attr:`com_velocity`, ``has_distribution``,
         single-component shortcuts, :attr:`x_min`, the pathways (:attr:`_offsets`) and the
         group densities (:attr:`_densities`) are updated, and its cached distributions are
-        dropped, to be rebuilt on next use. A point mass (Kepler) has no finite central
-        potential, so neither has the composite: its :meth:`central_potential` raises as the
-        component's does.
+        dropped, to be rebuilt on next use.
 
         Parameters
         ----------
@@ -1565,10 +1569,6 @@ class CompositeSphericalPotential(SphericalPotential):
             for name in _OWN_METHODS:
                 setattr(self, name, getattr(self._components[0], name))
             whole = self._components[0]
-        # only the new components: a Kepler found earlier already bound central_potential, which add() never pops
-        points = [p for p in potentials if isinstance(p, KeplerPotential)]
-        if points:
-            self.central_potential = points[0].central_potential
         centres = np.array([p.centre for p in self._components])
         self.x_min = _locate_minimum(self.potential, centres)
         # one pathway per component, read by every radial kernel: concentric (offset 0) or monopole about x_min
@@ -1680,18 +1680,23 @@ class CompositeSphericalPotential(SphericalPotential):
         with np.errstate(divide="ignore"):
             return 1.0 / np.sqrt(sum(1.0 / p.orbital_time(E, xyz) ** 2 for p in self._components))
 
-    def well_depth(self, xyz):
-        """Summed well depth, each component's at the innermost particle's absolute physical position.
+    def central_potential(self, inner=None):
+        """Central potential: the summed potential at the bottom of the well, :attr:`x_min`.
+
+        Each component's term there (:meth:`_potential_at`): its potential, or for a point mass
+        the unsoftened ``-G M / max(|x_min - c|, r_in)`` (``-inf`` at its centre without an
+        innermost particle). A single component answers itself (its exact ``Φ₀``).
 
         Parameters
         ----------
-        xyz : ndarray of shape (1, 3)
+        inner : ndarray of shape (3,), optional
+            Absolute physical position of the innermost particle (read by point masses).
 
         Returns
         -------
-        depth : float
+        phi0 : float
         """
-        return self._sum("well_depth", xyz)
+        return sum(p._potential_at(self.x_min, inner) for p in self._components)
 
     def profile(self):
         """The components' profile rows stacked, with their pathway offsets; ``None`` if any component has none (Shell).

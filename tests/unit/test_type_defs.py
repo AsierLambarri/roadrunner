@@ -92,11 +92,8 @@ class MockPotentialModel:
     def tidal_denominator(self, xyz):
         return 3.0 * xyz
 
-    def central_potential(self):
+    def central_potential(self, inner=None):
         raise NotImplementedError
-
-    def well_depth(self, xyz):
-        return 1.0
 
     def distribution_function(self, E):
         raise NotImplementedError

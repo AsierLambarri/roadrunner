@@ -261,40 +261,28 @@ class HaloModel:
         return t.astype(math_dtype(), copy=False)
 
     def central_potential(self) -> float:
-        """Central potential ``Φ₀`` of the potential model (physical units).
+        """Central potential ``Φ₀`` of the potential model (physical units), with its innermost particle.
+
+        The bottom of the well (:attr:`inner_position` read by a point mass, whose well the
+        data resolve down to it; ``-inf`` for one before :func:`compute_halo_bound_particles`
+        sets it away from the centre).
 
         Returns
         -------
         phi0 : float
         """
-        return self.potential_model.central_potential()
-
-    def well_depth(self, xyz: np.ndarray) -> float:
-        """Depth of the potential well with the innermost particle at the catalogue position ``xyz``.
-
-        Parameters
-        ----------
-        xyz : ndarray of shape (1, 3)
-
-        Returns
-        -------
-        depth : float
-        """
-        return float(self.potential_model.well_depth(self._physical(xyz)))
+        return self.potential_model.central_potential(self._physical(self.inner_position))
 
     def binding_energy_scale(self) -> float:
-        """Scale of the halo's binding energies: the depth of its well at the innermost particle.
+        """Scale of the halo's binding energies: the depth ``-Φ₀`` of its well (:meth:`central_potential`).
 
-        :meth:`well_depth` at :attr:`inner_position`: ``-Φ(0)`` for a well
-        with a finite centre, ``-Φ`` there for a point mass, whose ``Φ(0)``
-        the softening alone sets. The boundness ``b = -E / binding_energy_scale()``
-        is given on request by :meth:`get_bound`.
+        The boundness ``b = -E / binding_energy_scale()`` is given on request by :meth:`get_bound`.
 
         Returns
         -------
         scale : float
         """
-        return self.well_depth(self.inner_position[None])
+        return -self.central_potential()
 
     def distribution_function(self, E: np.ndarray, density: str = None) -> np.ndarray:
         """Isotropic distribution function ``f(E)`` of the potential model at physical energies.
