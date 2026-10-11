@@ -99,7 +99,7 @@ def _halo(sid=1, n_bound=0, xcen=(0.0, 0.0, 0.0)):
         sub_tree_id=sid, redshift=0.0,
     )
     if n_bound > 0:
-        h.set_boundness(
+        h.set_bound(
             np.arange(n_bound, dtype=np.uint64),
             np.full(n_bound, 0.5, dtype=np.float32),
             np.full(n_bound, 0.1, dtype=np.float32),

@@ -404,7 +404,7 @@ class XGMMAssigner:
             Fitted parameters for each component in the group.
         """
         sub_ensemble = self.ensemble.select(group)
-        csc_b, _ = sub_ensemble.get_particles()
+        csc_b, _ = sub_ensemble.get_particles(scaled_energies=True)
         group_subtrees = sub_ensemble.sub_tree_ids
         gp_idx = np.unique(np.concatenate(csc_b.column_indices))
 
@@ -418,20 +418,21 @@ class XGMMAssigner:
 
         if n_comp == 1:
             params, post_prob, nonz = self._fit_single(gp_idx, group_subtrees)
-        elif gp_idx.size < UNRESOLVED_GROUP_RATIO * n_comp:
-            warnings.warn(
-                f"WARNING: {n_comp} galaxies are unresolved inside a group!"
-            )
-            params, post_prob, nonz = self._fit_unresolved(gp_idx, group_subtrees, csc_b)
         else:
             csc_a = SparseCSC(
                 csc_b.column_indices,
                 self.plausibility.column_values(csc_b.column_id),
                 column_id=csc_b.column_id,
             )
-            params, post_prob, nonz = self._fit_resolved(
-                gp_idx, group_subtrees, csc_b, csc_a, seed=seed
-            )
+            if gp_idx.size < UNRESOLVED_GROUP_RATIO * n_comp:
+                warnings.warn(
+                    f"WARNING: {n_comp} galaxies are unresolved inside a group!"
+                )
+                params, post_prob, nonz = self._fit_unresolved(gp_idx, group_subtrees, csc_a)
+            else:
+                params, post_prob, nonz = self._fit_resolved(
+                    gp_idx, group_subtrees, csc_b, csc_a, seed=seed
+                )
 
         for i in range(len(group)):
             mask = nonz[:, i] > 0
@@ -512,12 +513,13 @@ class XGMMAssigner:
         }
         return params, post_prob, nonz
 
-    def _fit_unresolved(self, gp_idx, group_subtrees, csc_b):
+    def _fit_unresolved(self, gp_idx, group_subtrees, csc_a):
         """Fit an unresolved group where particles are too few for EM.
 
-        Falls back to the boundness matrix itself as the responsibility
-        matrix, then calls ``_estimate_gaussian_parameters`` to
-        produce standard fitted parameters.
+        The responsibilities are the latent prior itself, the row-normalised
+        plausibility (what the resolved path starts from, without the
+        Gaussian likelihood that cannot be fit), then
+        ``_estimate_gaussian_parameters`` gives standard fitted parameters.
 
         Parameters
         ----------
@@ -525,20 +527,20 @@ class XGMMAssigner:
             Particle indices.
         group_subtrees : ndarray of int64
             ``Sub_tree_id`` for each component.
-        csc_b : SparseCSC
-            Boundness matrix for this group.
+        csc_a : SparseCSC
+            Plausibility (α) matrix of the group.
 
         Returns
         -------
         params : dict
             Fitted parameters.
         post_prob : ndarray of shape (n_particles, n_components)
-            Boundness-derived responsibilities.
+            Row-normalised α.
         nonz : ndarray of shape (n_particles, n_components)
             Non-zero mask.
         """
         post_prob = row_l1_normalize(
-            csc_b.to_dense(col_func=_no_transform)
+            csc_a.to_dense(col_func=_no_transform)
         ).astype(math_dtype(), copy=False)
         nonz = (post_prob > 0).astype(np.uint8)
 

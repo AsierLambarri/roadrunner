@@ -17,7 +17,7 @@ class TestConstructor:
         halo = HaloModel(inner, xcen, vel, RVR, sub_tree_id=42, redshift=0.5)
         assert halo.sub_tree_id == 42
         assert halo.redshift == 0.5
-        assert np.allclose(halo.tree_position, xcen)
+        assert np.allclose(halo.tree_centre, xcen)
         assert np.allclose(halo.tree_velocity, vel)
         assert halo.virial_radius == RVR
         assert halo.comoving is True
@@ -66,21 +66,21 @@ class TestPotential:
 
 
 class TestBoundness:
-    def test_no_boundness_by_default(self):
+    def test_no_bound_by_default(self):
         inner = KeplerPotential(M=1e12)
         halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
-        assert not halo.has_boundness
-        assert halo.get_boundness() is None
+        assert not halo.has_bound
+        assert halo.get_bound() is None
 
-    def test_set_boundness(self):
+    def test_set_bound(self):
         inner = KeplerPotential(M=1e12)
         halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
         indices = np.array([0, 1, 2], dtype=np.uint64)
-        energies = np.array([0.5, 0.8], dtype=np.float64)
+        energies = np.array([-0.5, -0.8], dtype=np.float64)
         tdyns = np.array([1.0, 2.0], dtype=np.float64)
-        halo.set_boundness(indices, energies, tdyns)
-        assert halo.has_boundness
-        result = halo.get_boundness()
+        halo.set_bound(indices, energies, tdyns)
+        assert halo.has_bound
+        result = halo.get_bound()
         assert result is not None
         assert np.array_equal(result[0], indices)
         assert np.array_equal(result[1], energies)
@@ -88,13 +88,24 @@ class TestBoundness:
         assert isinstance(result, tuple)
         assert len(result) == 3
 
-    def test_set_boundness_overwrites(self):
+    def test_set_bound_overwrites(self):
         inner = KeplerPotential(M=1e12)
         halo = HaloModel(inner, np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
-        halo.set_boundness(np.array([0]), np.array([0.1]), np.array([1.0]))
-        halo.set_boundness(np.array([5]), np.array([0.9]), np.array([2.0]))
-        result = halo.get_boundness()
+        halo.set_bound(np.array([0]), np.array([0.1]), np.array([1.0]))
+        halo.set_bound(np.array([5]), np.array([0.9]), np.array([2.0]))
+        result = halo.get_bound()
         assert result[0][0] == 5
+
+    def test_get_bound_scaled_energies(self):
+        halo = HaloModel(NFWPotential(M=1e12, Rs=10.0, c=10.0), np.zeros(3), VCENTER, RVR, sub_tree_id=1, redshift=0.0)
+        E = (-np.array([0.5, 0.8]) * halo.binding_energy_scale()).astype(np.float32)
+        tdyns = np.array([1.0, 2.0], dtype=np.float32)
+        halo.set_bound(np.array([3, 7]), E, tdyns)
+        assert halo.get_bound()[1] is E                         # stored physical energies
+        idx, b, t = halo.get_bound(scaled_energies=True)
+        np.testing.assert_array_equal(idx, [3, 7])
+        assert b.dtype == np.float32 and t is tdyns
+        np.testing.assert_allclose(b, [0.5, 0.8], rtol=1e-6)
 
 
 class TestTidalDenominator:
@@ -117,7 +128,7 @@ class TestFromSnapshotRow:
         })
         halo = HaloModel.from_snapshot_row(row, model="kepler")
         assert halo.sub_tree_id == 42
-        assert np.allclose(halo.tree_position, [1.0, 2.0, 3.0])
+        assert np.allclose(halo.tree_centre, [1.0, 2.0, 3.0])
         assert np.isclose(halo.redshift, 0.5)
         assert halo.comoving is True
 
@@ -192,16 +203,16 @@ class TestCentreOfMass:
             pos, vel = np.array([200.0, -40.0, 10.0]), np.array([100.0, 0.0, -30.0])
             inner = NFWPotential(M=9e11, Rs=10.0, c=10.0, centre=pos * ls, velocity=vel)
             halo = HaloModel(inner, pos, vel, RVR, sub_tree_id=1, redshift=z)
-            np.testing.assert_allclose(halo.com_position, pos)
+            np.testing.assert_allclose(halo.com_centre, pos)
             np.testing.assert_allclose(halo.com_velocity, vel)
             # a displaced, moving component: the centre of mass and the energy frame follow it
             star = PlummerPotential(M=1e11, a=0.5, centre=(pos + np.array([20.0, 0.0, 0.0])) * ls,
                                     velocity=vel + np.array([0.0, 50.0, 0.0]))
             halo.add_potential(star)
-            assert halo.total_mass == 1e12 and halo.tree_mass == 9e11
-            np.testing.assert_allclose(halo.com_position, pos + np.array([2.0, 0.0, 0.0]))
+            assert halo.M == 1e12 and halo.tree_mass == 9e11
+            np.testing.assert_allclose(halo.com_centre, pos + np.array([2.0, 0.0, 0.0]))
             np.testing.assert_allclose(halo.com_velocity, vel + np.array([0.0, 5.0, 0.0]))
-            np.testing.assert_array_equal(halo.tree_position, pos)
+            np.testing.assert_array_equal(halo.tree_centre, pos)
             np.testing.assert_array_equal(halo.tree_velocity, vel)
             xyz, v = pos[None] + np.array([[5.0, 0.0, 0.0]]), vel[None] + np.array([[0.0, 5.0, 0.0]])
             np.testing.assert_allclose(halo.compute_energy(xyz, v), halo.potential(xyz), rtol=1e-12)

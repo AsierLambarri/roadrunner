@@ -22,18 +22,18 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
-                halo.tree_position, r=search_factor * halo.virial_radius, workers=-1
+                halo.tree_centre, r=search_factor * halo.virial_radius, workers=-1
             )
         )
         if local.size == 0:
-            halo.set_boundness(empty_idx, empty_val, empty_val)
+            halo.set_bound(empty_idx, empty_val, empty_val)
             continue
 
         pos, vel = positions[local], velocities[local]
         rel_vel = vel - halo.com_velocity
         vel_mags = np.linalg.norm(rel_vel, axis=1)
 
-        halo.inner_position = pos[np.argmin(np.linalg.norm(pos - halo.tree_position, axis=1))]
+        halo.inner_position = pos[np.argmin(np.linalg.norm(pos - halo.tree_centre, axis=1))]
         v_vir_sq = halo.binding_energy_scale()                   # the halo-owned scale
         phi = halo.potential(pos)
         v_esc = np.sqrt(2 * np.abs(phi))
@@ -43,9 +43,9 @@ def old_boundness(halos, particle_coordinates, search_factor=1.0):
         bound = vel_mags <= v_esc
         valid = local[bound]
         if valid.size == 0:
-            halo.set_boundness(empty_idx, empty_val, empty_val)
+            halo.set_bound(empty_idx, empty_val, empty_val)
         else:
-            halo.set_boundness(
+            halo.set_bound(
                 valid.astype(np.uint64),
                 boundness[bound].astype(np.float32),
                 tdyns[bound].astype(np.float32),
@@ -64,7 +64,7 @@ def _make_halo(position, velocity, mass, rvir, rs, hid, redshift=0.1,
     from roadrunner.physics.potentials import get_potential
     inner = get_potential(model, **kwargs)
     return HaloModel(
-        inner=inner, tree_position=position, tree_velocity=velocity,
+        inner=inner, tree_centre=position, tree_velocity=velocity,
         virial_radius=rvir, sub_tree_id=hid, redshift=redshift,
         comoving=True, search_factor=search_factor,
     )
@@ -96,8 +96,8 @@ class TestBoundnessRegression:
         new_result = compute_halo_bound_particles(halos_new, coords)
 
         for h_old, h_new in zip(old_result, new_result):
-            i_old, e_old, t_old = h_old.get_boundness()
-            i_new, e_new, t_new = h_new.get_boundness()
+            i_old, e_old, t_old = h_old.get_bound()
+            i_new, e_new, t_new = h_new.get_bound(scaled_energies=True)
             # `new` is sorted by particle index (C06); `old` (this file's
             # frozen local reference) is not -- sort both the same way so
             # this compares the underlying sets/values, not incidental order.
@@ -140,8 +140,8 @@ class TestBoundnessRegression:
         new_result = compute_halo_bound_particles(halos_new, coords)
 
         for h_old, h_new in zip(old_result, new_result):
-            i_old, e_old, t_old = h_old.get_boundness()
-            i_new, e_new, t_new = h_new.get_boundness()
+            i_old, e_old, t_old = h_old.get_bound()
+            i_new, e_new, t_new = h_new.get_bound(scaled_energies=True)
             # `new` is sorted by particle index (C06); `old` (this file's
             # frozen local reference) is not -- sort both the same way so
             # this compares the underlying sets/values, not incidental order.

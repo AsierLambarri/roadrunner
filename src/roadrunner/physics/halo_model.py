@@ -36,7 +36,7 @@ class HaloModel:
     :class:`~roadrunner.physics.potentials.CompositeSphericalPotential` in
     physical units, each component centred on its own absolute physical
     ``centre`` and moving with its own ``velocity`` (the tree's at
-    ``tree_position * length_scale`` and ``tree_velocity``). The halo exposes the
+    ``tree_centre * length_scale`` and ``tree_velocity``). The halo exposes the
     potential model's methods as one-line wrappers at catalogue coordinates:
     positions ``xyz`` are made physical (``length_scale``, float64), energies
     ``E`` are physical and pass as they are, and the energy distributions are
@@ -44,26 +44,26 @@ class HaloModel:
     Particle-level results are returned in ``math_dtype()``, the energy
     distributions in float64.
 
-    It adds its record (``tree_position``, ``tree_velocity``, ``tree_mass``:
+    It adds its record (``tree_centre``, ``tree_velocity``, ``tree_mass``:
     the catalogue's centre, bulk velocity and mass, the search sphere being
-    centred on ``tree_position``; ``virial_radius``, ``redshift``,
+    centred on ``tree_centre``; ``virial_radius``, ``redshift``,
     ``comoving``, ``length_scale``, ``search_factor``, ``sub_tree_id``;
     ``inner_position``, the innermost particle of the search sphere, set by
     :func:`compute_halo_bound_particles`, the centre until then), the
-    components' totals (:attr:`total_mass`, and the mass-weighted
-    :attr:`com_position` and :attr:`com_velocity`), the energy of its
+    composite's ``M``, ``com_centre`` and ``com_velocity`` (:attr:`M`, :attr:`com_centre` in
+    catalogue coordinates, :attr:`com_velocity`), the energy of its
     particles (:meth:`compute_energy`, in the centre-of-mass frame), the scale of its binding
-    energies (:meth:`binding_energy_scale`) and the boundness storage
-    ``(indices, energies, tdyns)``, the stored boundness being
-    ``b = -E / binding_energy_scale()``.
+    energies (:meth:`binding_energy_scale`) and the bound storage
+    ``(indices, energies, tdyns)`` in physical units, the boundness
+    ``b = -E / binding_energy_scale()`` on request (:meth:`get_bound`).
 
     Parameters
     ----------
     inner : PotentialModel
         The tree's potential (the first component); its ``centre`` must be
-        the physical halo centre ``tree_position * length_scale`` and its
+        the physical halo centre ``tree_centre * length_scale`` and its
         ``velocity`` the halo's bulk velocity ``tree_velocity``.
-    tree_position : ndarray of shape (3,)
+    tree_centre : ndarray of shape (3,)
         Halo centre (catalogue coordinates).
     tree_velocity : ndarray of shape (3,)
         Halo bulk velocity (km/s).
@@ -84,7 +84,7 @@ class HaloModel:
     def __init__(
         self,
         inner: PotentialModel,
-        tree_position: np.ndarray,
+        tree_centre: np.ndarray,
         tree_velocity: np.ndarray,
         virial_radius: float,
         sub_tree_id: int,
@@ -93,7 +93,7 @@ class HaloModel:
         search_factor: float = 1.0,
     ):
         md = math_dtype()
-        self.tree_position = np.asarray(tree_position, dtype=md)
+        self.tree_centre = np.asarray(tree_centre, dtype=md)
         self.tree_velocity = np.asarray(tree_velocity, dtype=md)
         self.virial_radius = float(virial_radius)
         self.sub_tree_id = sub_tree_id
@@ -103,10 +103,10 @@ class HaloModel:
         self.length_scale = physical_length_factor(self.redshift, comoving)
         self.potential_model = CompositeSphericalPotential(inner)
         self.tree_mass = float(inner.M)
-        self.inner_position = self.tree_position.copy()
-        self._boundness: tuple | None = None
+        self.inner_position = self.tree_centre.copy()
+        self._bound: tuple | None = None
 
-    def set_boundness(
+    def set_bound(
         self, indices: np.ndarray, energies: np.ndarray, tdyns: np.ndarray
     ) -> None:
         """Store the result of a boundness computation.
@@ -118,45 +118,53 @@ class HaloModel:
             all halos share one dtype (mixed uint64/int64 inputs would
             otherwise promote concatenations to float64).
         energies : ndarray
-            Boundness energy values (ambient math precision).
+            Physical specific orbital energies ``E`` (negative; ambient math precision).
         tdyns : ndarray
-            Dynamical times for the bound particles (ambient math precision).
+            Dynamical times of the bound particles (physical; ambient math precision).
         """
-        self._boundness = (
-            np.asarray(indices, dtype=LOCAL_IDX), energies, tdyns,
-        )
+        self._bound = (np.asarray(indices, dtype=LOCAL_IDX), energies, tdyns)
 
-    def get_boundness(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-        """Retrieve the stored boundness data.
+    def get_bound(self, scaled_energies: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """The stored bound particles: ``(indices, energies, tdyns)``.
+
+        Parameters
+        ----------
+        scaled_energies : bool, default=False
+            If ``True`` the energies are the boundness ``b = -E / binding_energy_scale()``
+            (dimensionless, in ``(0, 1]`` for a finite well; float64 maths, stored dtype out);
+            ``tdyns`` stay physical either way.
 
         Returns
         -------
-        boundness : tuple of (indices, energies, tdyns) or None
+        bound : tuple of (indices, energies, tdyns) or None
             ``None`` if boundness has not been computed yet.
         """
-        return self._boundness
+        if self._bound is None or not scaled_energies:
+            return self._bound
+        idx, E, tdyn = self._bound
+        return idx, (np.asarray(E, dtype=np.float64) / -self.binding_energy_scale()).astype(E.dtype, copy=False), tdyn
 
     @property
-    def has_boundness(self) -> bool:
+    def has_bound(self) -> bool:
         """``True`` if boundness data has been stored."""
-        return self._boundness is not None
+        return self._bound is not None
 
     def __iter__(self):
         return iter(self.potential_model)
 
     @property
-    def total_mass(self) -> float:
-        """Mass of all the components, ``Σ M_i``."""
+    def M(self) -> float:
+        """The potential model's ``M``: the mass of all the components, ``Σ M_i``."""
         return float(self.potential_model.M)
 
     @property
-    def com_position(self) -> np.ndarray:
-        """Mass-weighted centre of the components (catalogue coordinates, float64)."""
+    def com_centre(self) -> np.ndarray:
+        """The potential model's ``com_centre`` (mass-weighted) in catalogue coordinates (float64)."""
         return self.potential_model.com_centre / self.length_scale
 
     @property
     def com_velocity(self) -> np.ndarray:
-        """Mass-weighted velocity of the components (km/s, float64): the frame of :meth:`compute_energy`."""
+        """The potential model's ``com_velocity`` (mass-weighted; km/s, float64): the frame of :meth:`compute_energy`."""
         return self.potential_model.com_velocity
 
     def __len__(self):
@@ -285,8 +293,8 @@ class HaloModel:
 
         :meth:`well_depth` at :attr:`inner_position`: ``-Φ(0)`` for a well
         with a finite centre, ``-Φ`` there for a point mass, whose ``Φ(0)``
-        the softening alone sets. Boundness is stored as
-        ``-E / binding_energy_scale()``.
+        the softening alone sets. The boundness ``b = -E / binding_energy_scale()``
+        is given on request by :meth:`get_bound`.
 
         Returns
         -------
@@ -393,7 +401,7 @@ class HaloModel:
         -------
         halo : HaloModel
         """
-        tree_position = np.array([
+        tree_centre = np.array([
             row["position_x"], row["position_y"], row["position_z"],
         ], dtype=math_dtype())
         tree_velocity = np.array([
@@ -401,14 +409,14 @@ class HaloModel:
         ], dtype=math_dtype())
         ls = physical_length_factor(row["Redshift"], comoving)
         scale = row["scale_radius"] * ls
-        kwargs = {"M": row["mass"], "G": G_KM, "centre": tree_position.astype(np.float64) * ls,
+        kwargs = {"M": row["mass"], "G": G_KM, "centre": tree_centre.astype(np.float64) * ls,
                   "velocity": tree_velocity.astype(np.float64)}
         kwargs.update({"nfw": {"Rs": scale, "c": row["virial_radius"] / row["scale_radius"]},
                        "plummer": {"a": scale}, "hernquist": {"a": scale}}.get(model.lower(), {}))
         inner = get_potential(model, **kwargs)
         return cls(
             inner=inner,
-            tree_position=tree_position,
+            tree_centre=tree_centre,
             tree_velocity=tree_velocity,
             virial_radius=float(row["virial_radius"]),
             sub_tree_id=int(row["Sub_tree_id"]),

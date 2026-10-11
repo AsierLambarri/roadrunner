@@ -99,7 +99,7 @@ class TestPlausibilityConfig:
     def test_default_and_validation(self):
         assert RunConfig().plausibility == "rank"
         assert RunConfig(halo_model="nfw", plausibility="energy").plausibility == "energy"
-        with pytest.raises(ValueError, match="needs halo_model='nfw'"):
+        with pytest.raises(ValueError, match="works with halo_model"):
             RunConfig(halo_model="kepler", plausibility="energy")
         with pytest.raises(ValueError, match="plausibility must be"):
             RunConfig(plausibility="nope")

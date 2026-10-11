@@ -14,6 +14,7 @@ from roadrunner.clustering.assignment.plausibility import (
     literature_depth,
     _errani_scales,
     errani_log_ratio,
+    errani_scale,
     make_plausibility,
 )
 from roadrunner.clustering.sparse import SparseCSC
@@ -62,17 +63,18 @@ class TestRankPlausibility:
         rng = np.random.default_rng(1)
         h1 = HaloModel(KeplerPotential(M=1e12), np.zeros(3), np.zeros(3), 100.0, 1, 0.0)
         h2 = HaloModel(KeplerPotential(M=1e11), np.zeros(3), np.zeros(3), 50.0, 2, 0.0)
-        h1.set_boundness(np.arange(0, 150), rng.uniform(0, 5, 150).astype(np.float32), np.ones(150))
-        h2.set_boundness(np.arange(80, 200), rng.uniform(0, 5, 120).astype(np.float32), np.ones(120))
+        h1.set_bound(np.arange(0, 150), -rng.uniform(0, 5, 150).astype(np.float32), np.ones(150))
+        h2.set_bound(np.arange(80, 200), -rng.uniform(0, 5, 120).astype(np.float32), np.ones(120))
         ens = HaloEnsemble([h1, h2])
         csc_b, _ = ens.get_particles()
+        csc_s, _ = ens.get_particles(scaled_energies=True)     # the old transform ranked b
         a = XGMMAssigner(verbose=0)
         a.previous_resp = {}
-        a.plausibility.prepare(ens)
+        a.plausibility.prepare(ens, None)
         with precision(math=math):        # α is cast to the run's math_dtype by column_values
             csc_a = SparseCSC(csc_b.column_indices, a.plausibility.column_values(csc_b.column_id),
                               column_id=csc_b.column_id)
-            old = row_l1_normalize(csc_b.to_dense(col_func=_old_rank_transform)).astype(math_dtype())
+            old = row_l1_normalize(csc_s.to_dense(col_func=_old_rank_transform)).astype(math_dtype())
             new, _ = a._initial_responsibilities(None, csc_b, csc_a, None, None)
         assert new.dtype == old.dtype
         np.testing.assert_array_equal(new, old)
@@ -91,33 +93,29 @@ class TestEnergyPlausibility:
         assert np.all(np.diff(cal_half) > 0)
         for c, ref in [(6.53, 0.0739), (21.31, 0.2023)]:
             h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1)
-            r = np.array([KRAVTSOV_RHALF * h.virial_radius])
-            depth = 1.0 - h.potential(h.tree_position + r[:, None] * _X)[0] / h.central_potential()
-            got = np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es)))
+            got = errani_scale(h)
             np.testing.assert_allclose(got, ref, rtol=5e-3)
 
     def test_first_snapshot_is_floored_errani_and_positive(self):
-        halos, _ = _two_nfw_halos()
+        halos, coords = _two_nfw_halos()
         p = EnergyPlausibility()
-        p.prepare(halos)
+        p.prepare(halos, coords)
         for h in halos:
-            rows, eps, _ = h.get_boundness()
+            rows, E, _ = h.get_bound()
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape
             assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
-            ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(errani_log_ratio(h, eps.astype(float))) + PLAUSIBILITY_FLOOR
+            ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(errani_log_ratio(h, E.astype(float), errani_scale(h))) + PLAUSIBILITY_FLOOR
             np.testing.assert_allclose(alpha, np.minimum(ref, np.exp(50.0)), rtol=1e-6)
 
     def test_deep_satellite_particle_beats_shallow_host_pair(self):
         host = _nfw_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 10.0, 1)
         sat = _nfw_halo([50, 0, 0], [0, 0, 0], 1e10, 30.0, 12.0, 2)
-        # stored boundness b = -E / scale at E / Phi_0 = 0.3 (shallow in the host) and 0.8 (deep in the satellite)
-        host.set_boundness(np.array([0]), np.array([0.3 * -host.central_potential() / host.binding_energy_scale()]),
-                           np.ones(1))
-        sat.set_boundness(np.array([0]), np.array([0.8 * -sat.central_potential() / sat.binding_energy_scale()]),
-                          np.ones(1))
+        # E / Phi_0 = 0.3 (shallow in the host) and 0.8 (deep in the satellite)
+        host.set_bound(np.array([0]), np.array([0.3 * host.central_potential()]), np.ones(1))
+        sat.set_bound(np.array([0]), np.array([0.8 * sat.central_potential()]), np.ones(1))
         p = EnergyPlausibility()
-        p.prepare([host, sat])
+        p.prepare([host, sat], None)
         a_host, a_sat = (v[0] for v in p.column_values([1, 2]))
         assert a_sat / (a_sat + a_host) > 0.9
 
@@ -192,15 +190,15 @@ class TestPhaseSpacePlausibility:
 
     @pytest.mark.parametrize("make", [_two_kepler_halos, _two_nfw_halos])
     def test_alpha_positive_and_literature_only_first(self, make):
-        halos, _ = make()
+        halos, coords = make()
         p = PhaseSpacePlausibility()
-        p.prepare(halos)
+        p.prepare(halos, coords)
         for h in halos:
-            rows, b, _ = h.get_boundness()
+            rows, E, _ = h.get_bound()
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape
             assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
-            t = -h.log_phase_space_fraction(-b.astype(float) * h.binding_energy_scale())
+            t = -h.log_phase_space_fraction(E.astype(float))
             mu, sd, _ = literature_depth(h)
             ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(-0.5 * ((t - mu) / sd) ** 2 + t) / (sd * np.sqrt(2 * np.pi)) + PLAUSIBILITY_FLOOR
             np.testing.assert_allclose(alpha, ref, rtol=1e-6)
@@ -230,13 +228,12 @@ class TestPhaseSpacePlausibility:
     def test_deep_satellite_particle_beats_shallow_host_pair(self):
         host = _kepler_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 1)
         sat = _kepler_halo([50, 0, 0], [0, 0, 0], 1e10, 30.0, 2)
-        # E = -G M / r_vir in the host (shallow) and -30 G M / r_vir in the satellite (deep), stored as -E / scale
+        # E = -G M / r_vir in the host (shallow) and -30 G M / r_vir in the satellite (deep)
         for h, depth in ((host, 1.0), (sat, 30.0)):
-            h.inner_position = h.tree_position + np.array([0.05, 0.0, 0.0])
             E = -depth * h.tree_mass * KeplerPotential(M=1.0).G / h.virial_radius
-            h.set_boundness(np.array([0]), np.array([-E / h.binding_energy_scale()]), np.ones(1))
+            h.set_bound(np.array([0]), np.array([E]), np.ones(1))
         p = PhaseSpacePlausibility()
-        p.prepare([host, sat])
+        p.prepare([host, sat], None)
         a_host, a_sat = (v[0] for v in p.column_values([1, 2]))
         assert a_sat / (a_sat + a_host) > 0.9
 
@@ -280,8 +277,8 @@ def _kin_floored(u2, m):
 def _members(rng, h, n, r_scale):
     """Isotropic members of halo h: positions ~ N(centre, r_scale), Wolf dispersion at r_1/2."""
     r_half = np.array([KRAVTSOV_RHALF * h.virial_radius])
-    sigma = np.sqrt(literature_speed(h) * -2.0 * h.potential(h.tree_position + r_half[:, None] * _X)[0] / 3.0)
-    pos = h.tree_position + rng.normal(0.0, r_scale, (n, 3))
+    sigma = np.sqrt(literature_speed(h) * -2.0 * h.potential(h.tree_centre + r_half[:, None] * _X)[0] / 3.0)
+    pos = h.tree_centre + rng.normal(0.0, r_scale, (n, 3))
     vel = h.tree_velocity + rng.normal(0.0, sigma, (n, 3))
     return np.hstack([pos, vel])
 
@@ -291,13 +288,13 @@ def _alpha_pairs(halos, coords):
     for h in halos:
         u2 = escape_speed_fraction(h, np.arange(len(coords)), coords)
         rows = np.flatnonzero(u2 < 1.0)
-        h.set_boundness(rows, np.ones(rows.size), np.ones(rows.size))
+        h.set_bound(rows, -np.ones(rows.size), np.ones(rows.size))
     p = KinematicPlausibility()
     p.prepare(halos, coords)
     out = {}
     for h in halos:
         a = np.zeros(len(coords))
-        a[h.get_boundness()[0]] = p.column_values([h.sub_tree_id])[0]
+        a[h.get_bound()[0]] = p.column_values([h.sub_tree_id])[0]
         out[int(h.sub_tree_id)] = a
     return out
 
@@ -315,15 +312,15 @@ class TestKinematicPlausibility:
         h = HaloModel(inner, xcen, np.array([50.0, -20.0, 10.0]), 60.0,
                       sub_tree_id=1, redshift=z, comoving=comoving)
         n, r = 20000, 7.0
-        v_esc = np.sqrt(-2.0 * h.potential(h.tree_position + np.array([[r, 0.0, 0.0]]))[0])
-        coords = np.hstack([h.tree_position + r * _unit(rng, n),
+        v_esc = np.sqrt(-2.0 * h.potential(h.tree_centre + np.array([[r, 0.0, 0.0]]))[0])
+        coords = np.hstack([h.tree_centre + r * _unit(rng, n),
                             h.tree_velocity + v_esc * rng.uniform(size=(n, 1)) ** (1 / 3) * _unit(rng, n)])
         u2 = escape_speed_fraction(h, np.arange(n), coords)
         assert kstest(u2 ** 1.5, "uniform").pvalue > 1e-3
         ens = HaloEnsemble([h])
         compute_halo_bound_particles(ens, coords)
-        rows, b, _ = h.get_boundness()
-        e_over_phi = -b.astype(float) * h.binding_energy_scale() / h.potential(h.tree_position + np.array([[r, 0.0, 0.0]]))[0]
+        rows, E, _ = h.get_bound()
+        e_over_phi = E.astype(float) / h.potential(h.tree_centre + np.array([[r, 0.0, 0.0]]))[0]
         np.testing.assert_allclose(1.0 - u2[rows], e_over_phi, rtol=1e-4, atol=1e-5)
 
     def test_member_model_normalisation_moment_and_null(self):
@@ -345,7 +342,7 @@ class TestKinematicPlausibility:
         p = KinematicPlausibility()
         p.prepare(halos, coords)
         for h in halos:
-            rows = h.get_boundness()[0]
+            rows = h.get_bound()[0]
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape and np.all(np.isfinite(alpha))
             assert np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
@@ -384,7 +381,7 @@ class TestKinematicPlausibility:
     def test_infalling_satellite_stars_go_to_the_satellite(self):
         rng = np.random.default_rng(1)
         host, _ = self._host_sat([0, 0, 0])
-        v_esc = np.sqrt(-2.0 * host.potential(host.tree_position + np.array([[3.0, 0.0, 0.0]]))[0])
+        v_esc = np.sqrt(-2.0 * host.potential(host.tree_centre + np.array([[3.0, 0.0, 0.0]]))[0])
         host, sat = self._host_sat([-0.9 * v_esc, 0, 0])
         coords = _members(rng, sat, 3000, 0.3)
         a = _alpha_pairs([host, sat], coords)
@@ -395,12 +392,12 @@ class TestKinematicPlausibility:
         rng = np.random.default_rng(2)
         host, _ = self._host_sat([0, 0, 0])
         r = np.array([3.0 * np.exp(-1e-3), 3.0, 3.0 * np.exp(1e-3)])
-        phi = host.potential(host.tree_position + r[:, None] * _X)
+        phi = host.potential(host.tree_centre + r[:, None] * _X)
         v_circ = np.sqrt((phi[2] - phi[0]) / 2e-3)
         host, sat = self._host_sat([0, v_circ, 0])
         sat_stars = _members(rng, sat, 3000, 0.3)
         sigma_h = v_circ / np.sqrt(3.0)
-        host_stars = np.hstack([sat.tree_position + rng.normal(0, 0.3, (3000, 3)), rng.normal(0, sigma_h, (3000, 3))])
+        host_stars = np.hstack([sat.tree_centre + rng.normal(0, 0.3, (3000, 3)), rng.normal(0, sigma_h, (3000, 3))])
         a = _alpha_pairs([host, sat], np.vstack([sat_stars, host_stars]))
         both = (a[1] > 0) & (a[2] > 0)
         s, h = both[:3000], both[3000:]
@@ -410,7 +407,7 @@ class TestKinematicPlausibility:
     def test_host_centre_newborn_beats_small_neighbour(self):
         host = _nfw_halo([0, 0, 0], [0, 0, 0], 1e12, 200.0, 10.0, 1)
         nb = _nfw_halo([5, 0, 0], [0, 0, 0], 1e9, 20.0, 15.0, 2)
-        v_esc_nb = np.sqrt(-2.0 * nb.potential(nb.tree_position + np.array([[5.0, 0.0, 0.0]]))[0])
+        v_esc_nb = np.sqrt(-2.0 * nb.potential(nb.tree_centre + np.array([[5.0, 0.0, 0.0]]))[0])
         nb = _nfw_halo([5, 0, 0], [0.5 * v_esc_nb, 0, 0], 1e9, 20.0, 15.0, 2)
         coords = np.array([[0.01, 0, 0, 0, 0, 0]], dtype=float)
         a = _alpha_pairs([host, nb], coords)

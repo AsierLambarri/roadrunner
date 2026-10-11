@@ -154,7 +154,7 @@ class HaloSegmenter:
         removals : dict of {int: ndarray}
             Local halo index -> particle-ID rows that should be
             removed from that halo's own boundness data (apply via
-            :meth:`HaloModel.set_boundness`). Halos with nothing to
+            :meth:`HaloModel.set_bound`). Halos with nothing to
             remove are absent from the dict.
         """
         if self._partition is None:

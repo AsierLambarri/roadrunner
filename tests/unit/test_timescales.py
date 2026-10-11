@@ -25,9 +25,9 @@ def _make_halo(xcen, mass=1e12, rvir=RVR, sub_tree_id=1, inner=None):
 def _make_ensemble(halos):
     # set boundness with tdyn values
     for i, h in enumerate(halos):
-        h.set_boundness(
+        h.set_bound(
             np.array([i * 10 + j for j in range(10)], dtype=np.uint64),
-            np.full(10, 0.5, dtype=np.float32),
+            np.full(10, -0.5, dtype=np.float32),
             np.full(10, float(i + 1) * 0.05, dtype=np.float32),
         )
     return HaloEnsemble(halos)
@@ -47,9 +47,9 @@ class TestDynamicalTimescales:
         halos = [_make_halo([0.0, 0.0, 0.0], sub_tree_id=1)]
         big_tdyn = np.full(10, 10.0, dtype=np.float32)
         ens = HaloEnsemble([halos[0]])
-        halos[0].set_boundness(
+        halos[0].set_bound(
             np.arange(10, dtype=np.uint64),
-            np.full(10, 0.5, dtype=np.float32),
+            np.full(10, -0.5, dtype=np.float32),
             big_tdyn,
         )
         df = pd.DataFrame({"array_index": np.arange(10, dtype=np.uint64), "Sub_tree_id": 1})
@@ -60,14 +60,14 @@ class TestDynamicalTimescales:
         h1 = _make_halo([0.0, 0.0, 0.0], sub_tree_id=1)
         h2 = _make_halo([1.0, 1.0, 1.0], sub_tree_id=2)
         # same particles for both
-        h1.set_boundness(
+        h1.set_bound(
             np.arange(10, dtype=np.uint64),
-            np.full(10, 0.5, dtype=np.float32),
+            np.full(10, -0.5, dtype=np.float32),
             np.full(10, 0.1, dtype=np.float32),
         )
-        h2.set_boundness(
+        h2.set_bound(
             np.arange(10, dtype=np.uint64),
-            np.full(10, 0.5, dtype=np.float32),
+            np.full(10, -0.5, dtype=np.float32),
             np.full(10, 0.3, dtype=np.float32),
         )
         ens = HaloEnsemble([h1, h2])

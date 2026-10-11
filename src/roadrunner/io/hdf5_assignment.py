@@ -153,8 +153,8 @@ class HDF5AssignmentWriter:
             Boundness matrix for this snapshot.
         energy_scales : dict of {int: float}, optional
             Binding energy scale per galaxy, written as the group attribute
-            ``energy_scale`` (``E = -boundness * energy_scale``; for NFW,
-            ``Phi_0 = -energy_scale``).
+            ``energy_scale`` (``E = -boundness * energy_scale``;
+            :meth:`HaloModel.binding_energy_scale`, ``-Phi_0`` for a single NFW).
         """
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:

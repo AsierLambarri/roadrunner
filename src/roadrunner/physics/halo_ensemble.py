@@ -25,7 +25,7 @@ class HaloEnsemble:
 
     Provides array-like access to halo properties (positions, velocities,
     virial radii, Sub_tree_ids) and returns combined particle data
-    as a pair of :class:`SparseCSC` matrices (boundness and dynamical
+    as a pair of :class:`SparseCSC` matrices (bound energies and dynamical
     times).
 
     Parameters
@@ -69,8 +69,8 @@ class HaloEnsemble:
         """Total number of bound star particles across all halos."""
         total = 0
         for h in self._halos:
-            if h.has_boundness:
-                total += len(h.get_boundness()[0])
+            if h.has_bound:
+                total += len(h.get_bound()[0])
         return total
 
     @property
@@ -81,7 +81,7 @@ class HaloEnsemble:
     @property
     def positions(self) -> np.ndarray:
         """Positions of all halos, shape ``(n_halos, 3)``."""
-        return np.array([h.tree_position for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
+        return np.array([h.tree_centre for h in self._halos], dtype=math_dtype()).reshape(-1, 3)
 
     @property
     def velocities(self) -> np.ndarray:
@@ -122,38 +122,44 @@ class HaloEnsemble:
         """
         return HaloEnsemble([self._halos[i] for i in indices])
 
-    def get_particles(self) -> tuple[SparseCSC, SparseCSC]:
-        """Return boundness and dynamical-time matrices as :class:`SparseCSC`.
+    def get_particles(self, scaled_energies: bool = False) -> tuple[SparseCSC, SparseCSC]:
+        """Bound energies and dynamical times of every halo as :class:`SparseCSC`.
 
         Columns correspond to halos in the same order as
         ``self.sub_tree_ids``.  Empty halos contribute empty columns.
 
+        Parameters
+        ----------
+        scaled_energies : bool, default=False
+            Energies as the boundness ``b = -E / binding_energy_scale()`` of each halo
+            (see :meth:`HaloModel.get_bound`); dynamical times stay physical.
+
         Returns
         -------
-        boundness : SparseCSC
-            Boundness energy matrix.
+        energies : SparseCSC
+            Bound energies (physical, or the boundness with ``scaled_energies``).
         tdyns : SparseCSC
             Dynamical time matrix.
         """
         candidates = []
-        boundness = []
+        energies = []
         tdyns = []
 
         for h in self._halos:
-            if h.has_boundness:
-                inds, ener, tdyn_arr = h.get_boundness()
+            if h.has_bound:
+                inds, ener, tdyn_arr = h.get_bound(scaled_energies)
                 candidates.append(inds)
-                boundness.append(ener)
+                energies.append(ener)
                 tdyns.append(tdyn_arr)
             else:
                 empty_idx = np.array([], dtype=LOCAL_IDX)
                 empty_val = np.array([], dtype=math_dtype())
                 candidates.append(empty_idx)
-                boundness.append(empty_val)
+                energies.append(empty_val)
                 tdyns.append(empty_val)
 
         col_id = np.array([h.sub_tree_id for h in self._halos], dtype=GALAXY_ID)
-        return SparseCSC(candidates, boundness, column_id=col_id), SparseCSC(candidates, tdyns, column_id=col_id)
+        return SparseCSC(candidates, energies, column_id=col_id), SparseCSC(candidates, tdyns, column_id=col_id)
 
     def populated_indices(self) -> np.ndarray:
         """Indices of halos that have at least one bound particle.

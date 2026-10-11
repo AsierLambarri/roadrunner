@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 
+from roadrunner.clustering.assignment.plausibility import PLAUSIBILITY_MODELS
 from roadrunner.cosmology import Cosmology
 
 
@@ -84,13 +85,12 @@ class RunConfig:
         coerces numeric fields to the correct type when provided
         as strings or other types.
         """
-        if self.plausibility not in ("rank", "energy", "phase", "kinematic"):
-            raise ValueError(
-                f"plausibility must be 'rank', 'energy', 'phase' or 'kinematic', got '{self.plausibility}'")
-        if self.plausibility == "energy" and self.halo_model.lower() != "nfw":
-            raise ValueError(
-                "plausibility='energy' needs halo_model='nfw': the Kepler potential "
-                "has no finite central potential nor an energy distribution")
+        model = PLAUSIBILITY_MODELS.get(self.plausibility)
+        if model is None:
+            raise ValueError(f"plausibility must be one of {list(PLAUSIBILITY_MODELS)}, got '{self.plausibility}'")
+        if self.halo_model.lower() not in model.halo_models:
+            raise ValueError(f"plausibility='{self.plausibility}' works with halo_model in {model.halo_models}, "
+                             f"got '{self.halo_model}'")
 
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")

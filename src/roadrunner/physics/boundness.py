@@ -31,11 +31,12 @@ def compute_halo_bound_particles(
     Uses a KD-tree to efficiently find particles within each halo's search
     sphere (:attr:`HaloModel.search_factor` virial radii), then evaluates
     boundness via the total specific orbital energy ``E = Φ + ½v²``. The
-    stored boundness is ``-E / HaloModel.binding_energy_scale()``, the depth
-    of the halo's well; each halo's ``inner_position`` (its innermost particle,
-    where a point mass's depth is taken) is set first.
-    Bound particles are stored on each halo via
-    :meth:`HaloModel.set_boundness`.
+    bound particles (``E < 0``) are stored on each halo via
+    :meth:`HaloModel.set_bound` with their physical energies and dynamical
+    times; the boundness ``b = -E / HaloModel.binding_energy_scale()`` (the
+    depth of the halo's well) is given on request by :meth:`HaloModel.get_bound`.
+    Each halo's ``inner_position`` (its innermost particle, where a point
+    mass's depth is taken) is set first.
 
     For Keplerian potentials the dynamical time is computed from the
     orbital semi-major axis derived from the orbital energy, giving
@@ -64,20 +65,18 @@ def compute_halo_bound_particles(
     for halo in halos:
         local = np.asarray(
             tree.query_ball_point(
-                halo.tree_position, r=halo.search_factor * halo.virial_radius, workers=tree_workers()
+                halo.tree_centre, r=halo.search_factor * halo.virial_radius, workers=tree_workers()
             )
         )
         if local.size == 0:
-            halo.set_boundness(empty_indices, empty_values, empty_values)
+            halo.set_bound(empty_indices, empty_values, empty_values)
             continue
 
         pos, vel = positions[local], velocities[local]
-        # Before the scale is formed: a point mass's well depth is taken at the innermost particle.
-        halo.inner_position = pos[np.argmin(row_squared_norms(np.asarray(pos, dtype=np.float64) - halo.tree_position))]
+        # Where a point mass's well depth (the scale of HaloModel.get_bound's boundness) is taken.
+        halo.inner_position = pos[np.argmin(row_squared_norms(np.asarray(pos, dtype=np.float64) - halo.tree_centre))]
 
         E = halo.compute_energy(pos, vel)
-        # -E over the halo's energy scale (physical virial radius, C08).
-        boundness = -E / halo.binding_energy_scale()
 
         # Kepler: the period of the orbit with energy E (bound particles only, I03);
         # otherwise the dynamical time at the instantaneous radius.
@@ -86,7 +85,7 @@ def compute_halo_bound_particles(
         bound = E < 0
         valid = local[bound]
         if valid.size == 0:
-            halo.set_boundness(empty_indices, empty_values, empty_values)
+            halo.set_bound(empty_indices, empty_values, empty_values)
         else:
             # Sorted by particle index (C06): query_ball_point's own
             # traversal order is unspecified, and everything downstream
@@ -96,9 +95,9 @@ def compute_halo_bound_particles(
             # establishes that as a real invariant instead of leaving it
             # to chance.
             order = np.argsort(valid)
-            halo.set_boundness(
+            halo.set_bound(
                 valid[order].astype(LOCAL_IDX),
-                boundness[bound][order].astype(math_dtype(), copy=False),
+                E[bound][order],
                 tdyns[bound][order],
             )
 

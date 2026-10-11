@@ -1318,14 +1318,14 @@ class CompositeSphericalPotential(SphericalPotential):
 
     An iterable container of its components (``for p in composite``, ``len``, indexing);
     :meth:`add` adds more on the fly. Each component carries its own ``centre`` and
-    ``velocity``; the composite's own are its first component's, and :attr:`com_centre` and
-    :attr:`com_velocity` are the components' mass-weighted ones. The primitives and the quantities linear in mass are the sums of the
+    ``velocity``; the composite's are :attr:`com_centre` and :attr:`com_velocity`, the
+    components' mass-weighted ones ``Σ M_i c_i / Σ M_i`` and ``Σ M_i v_i / Σ M_i``, which
+    its ``centre`` and ``velocity`` (the potential protocol's) return. The primitives and the quantities linear in mass are the sums of the
     components' own methods (potential, density, enclosed mass, well
     depth, tidal denominator), so every component keeps its exact forms; the profile stacks
     their rows. The public methods take absolute physical positions and measure each
     component from its own ``centre``; the private profile in ``r`` (which the distribution
-    machinery uses) treats every component as centred on the composite's centre, its first
-    component's. The central potential is the summed potential at the bottom of the well,
+    machinery uses) treats every component as centred on one common centre. The central potential is the summed potential at the bottom of the well,
     :attr:`x_min`, located among the components' centres (each component's own ``Φ₀`` when
     they coincide).
 
@@ -1353,16 +1353,16 @@ class CompositeSphericalPotential(SphericalPotential):
     """
 
     def __init__(self, *components):
-        super().__init__(0.0, G=components[0].G, centre=components[0].centre, velocity=components[0].velocity)
+        self.G = components[0].G
         self._components = ()
         self.add(*components)
 
     def add(self, *potentials):
         """Add components on the fly (e.g. a halo's stellar counterpart).
 
-        The composite's mass, ``has_distribution``, single-component shortcuts and
-        :attr:`x_min` are updated, and its cached distributions are dropped, to be rebuilt on
-        next use. Its centre stays its first component's. A point mass (Kepler) has no finite
+        The composite's mass, :attr:`com_centre`, :attr:`com_velocity`, ``has_distribution``,
+        single-component shortcuts and :attr:`x_min` are updated, and its cached distributions
+        are dropped, to be rebuilt on next use. A point mass (Kepler) has no finite
         central potential, so neither has the composite: its :meth:`central_potential` raises
         as the component's does.
 
@@ -1381,6 +1381,8 @@ class CompositeSphericalPotential(SphericalPotential):
             raise ValueError("The components of a composite potential must share G.")
         self._components += potentials
         self.M = sum(p.M for p in self._components)
+        self.com_centre = sum((p.M / self.M) * p.centre for p in self._components)
+        self.com_velocity = sum((p.M / self.M) * p.velocity for p in self._components)
         self.has_distribution = all(p.has_distribution for p in self._components)
         self._distributions = {}
         for name in _OWN_METHODS:
@@ -1398,14 +1400,14 @@ class CompositeSphericalPotential(SphericalPotential):
         return iter(self._components)
 
     @property
-    def com_centre(self):
-        """Mass-weighted centre of the components, ``Σ M_i c_i / Σ M_i`` (absolute physical position)."""
-        return sum((p.M / self.M) * p.centre for p in self._components)
+    def centre(self):
+        """The protocol's ``centre``: :attr:`com_centre`."""
+        return self.com_centre
 
     @property
-    def com_velocity(self):
-        """Mass-weighted velocity of the components, ``Σ M_i v_i / Σ M_i`` (km/s)."""
-        return sum((p.M / self.M) * p.velocity for p in self._components)
+    def velocity(self):
+        """The protocol's ``velocity``: :attr:`com_velocity`."""
+        return self.com_velocity
 
     def __len__(self):
         return len(self._components)
@@ -1530,7 +1532,7 @@ class CompositeSphericalPotential(SphericalPotential):
         return super().distribution_function(E)
 
 
-_POTENTIAL_MODELS: dict[str, type[SphericalPotential]] = {
+POTENTIAL_MODELS: dict[str, type[SphericalPotential]] = {
     "kepler": KeplerPotential,
     "nfw": NFWPotential,
     "plummer": PlummerPotential,
@@ -1551,11 +1553,11 @@ def get_potential(model: str, **kwargs) -> type[SphericalPotential] | SphericalP
     -------
     potential : type or instance
     """
-    cls = _POTENTIAL_MODELS.get(model.lower())
+    cls = POTENTIAL_MODELS.get(model.lower())
     if cls is None:
         raise ValueError(
             f"Unknown potential model: {model}. "
-            f"Available: {list(_POTENTIAL_MODELS)}"
+            f"Available: {list(POTENTIAL_MODELS)}"
         )
     if not kwargs:
         return cls

@@ -9,6 +9,7 @@ from roadrunner.clustering.assignment.gmm import (
     _rows_to_pad_kernel,
 )
 from roadrunner.clustering.sparse import SparseCSC
+from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.physics.potentials import KeplerPotential
@@ -39,9 +40,9 @@ def _setup_mock_halos(n_halos=2, n_particles=100):
     for i, h in enumerate(halos):
         start = i * (n_particles // n_halos)
         end = (i + 1) * (n_particles // n_halos)
-        h.set_boundness(
+        h.set_bound(
             np.arange(start, end, dtype=np.uint64),
-            np.ones(end - start, dtype=np.float32) * 0.5,
+            np.full(end - start, -0.5, dtype=np.float32),
             np.ones(end - start, dtype=np.float32) * 0.1,
         )
     return halos, coords
@@ -155,14 +156,14 @@ class TestXGMMAssigner:
         h2 = _make_halo([0.5, 0.5, 0.5], sub_tree_id=2)
         coords = rng.uniform(-50, 50, (200, 6)).astype(np.float64)
         # Each halo sees the same particle set (fully overlapping)
-        h1.set_boundness(
+        h1.set_bound(
             np.arange(200, dtype=np.uint64),
-            np.full(200, 0.6, dtype=np.float32),
+            np.full(200, -0.6, dtype=np.float32),
             np.full(200, 0.1, dtype=np.float32),
         )
-        h2.set_boundness(
+        h2.set_bound(
             np.arange(200, dtype=np.uint64),
-            np.full(200, 0.4, dtype=np.float32),
+            np.full(200, -0.4, dtype=np.float32),
             np.full(200, 0.1, dtype=np.float32),
         )
         groups = [[0, 1]]
@@ -175,9 +176,9 @@ class TestXGMMAssigner:
         h1 = _make_halo([0.0, 0.0, 0.0], sub_tree_id=1)
         h2 = _make_halo([10.0, 10.0, 10.0], sub_tree_id=2)
         coords = np.random.default_rng(42).uniform(-50, 50, (100, 6)).astype(np.float64)
-        h1.set_boundness(
+        h1.set_bound(
             np.arange(50, dtype=np.uint64),
-            np.full(50, 0.5, dtype=np.float32),
+            np.full(50, -0.5, dtype=np.float32),
             np.full(50, 0.1, dtype=np.float32),
         )
         # h2 has no boundness — stays empty
@@ -185,6 +186,23 @@ class TestXGMMAssigner:
         assigner = XGMMAssigner(verbose=0)
         result = assigner.assign([h1, h2], coords, groups)
         assert result.particle_df is not None
+
+    def test_unresolved_group_takes_the_row_normalised_plausibility(self):
+        # 12 particles < UNRESOLVED_GROUP_RATIO * 2: no EM, the responsibilities are the latent prior.
+        rng = np.random.default_rng(5)
+        coords = rng.normal(0.0, 3.0, (12, 6))
+        h1, h2 = _make_halo([0.0, 0.0, 0.0], sub_tree_id=1), _make_halo([1.0, 0.0, 0.0], sub_tree_id=2)
+        for h, rows in ((h1, np.arange(0, 9)), (h2, np.arange(3, 12))):
+            h.set_bound(rows.astype(np.uint64), -rng.uniform(0.1, 1.0, rows.size).astype(np.float32),
+                        np.full(rows.size, 0.1, dtype=np.float32))
+        a = XGMMAssigner(verbose=0)
+        with pytest.warns(UserWarning, match="unresolved"):
+            result = a.assign([h1, h2], coords, [[0, 1]])
+        csc_b, _ = a.ensemble.get_particles()
+        csc_a = SparseCSC(csc_b.column_indices, a.plausibility.column_values(csc_b.column_id),
+                          column_id=csc_b.column_id)
+        np.testing.assert_allclose(result.responsibilities.to_dense(),
+                                   row_l1_normalize(csc_a.to_dense(col_func=_no_transform)), rtol=1e-6)
 
 
 def _two_halo_group(n=200):
@@ -197,9 +215,9 @@ def _two_halo_group(n=200):
     h1 = _make_halo([-10.0, -10.0, -10.0], sub_tree_id=1)
     h2 = _make_halo([10.0, 10.0, 10.0], sub_tree_id=2)
     for h, rows in ((h1, np.arange(0, 3 * n // 4)), (h2, np.arange(n // 4, n))):
-        h.set_boundness(rows.astype(np.uint64),
-                        np.linspace(0.1, 0.9, rows.size, dtype=np.float32),
-                        np.full(rows.size, 0.1, dtype=np.float32))
+        h.set_bound(rows.astype(np.uint64),
+                    -np.linspace(0.1, 0.9, rows.size, dtype=np.float32),
+                    np.full(rows.size, 0.1, dtype=np.float32))
     return [h1, h2], coords
 
 
@@ -230,8 +248,8 @@ class TestPredictivePadding:
             a.previous_parameters[2] = {**halo2, "tree_mass": 1e12}
         a.previous_resp = SparseCSC([np.arange(10, 100)], [np.ones(90, np.float32)],
                                     column_id=np.array([1], dtype=np.int64))
-        csc_b, _ = a.ensemble.get_particles()
-        a.plausibility.prepare(a.ensemble)
+        csc_b, _ = a.ensemble.get_particles(scaled_energies=True)
+        a.plausibility.prepare(a.ensemble, coords)
         csc_a = SparseCSC(csc_b.column_indices, a.plausibility.column_values(csc_b.column_id),
                           column_id=csc_b.column_id)
         scaler = StandardScaler()

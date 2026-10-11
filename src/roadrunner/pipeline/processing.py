@@ -38,6 +38,71 @@ class ProcessingConfig:
     comoving: bool = True
 
 
+def bound_ensemble(particle_coords, snap_df, config) -> tuple[HaloEnsemble, list]:
+    """Halos of a snapshot with boundness, ownership resolved, and their overlap groups (largest first).
+
+    The assigner's input: :func:`process_snapshot` calls it before ``assign``.
+
+    Parameters
+    ----------
+    particle_coords : ndarray of shape (n_particles, 6)
+    snap_df : DataFrame
+        Merger-tree data for this snapshot.
+    config : ProcessingConfig
+
+    Returns
+    -------
+    ensemble : HaloEnsemble
+        Halos with their bound sets after the ownership resolution.
+    groups : list of list of int
+        Overlap groups of populated halos (ensemble indices), largest first.
+    """
+    ensemble = HaloEnsemble([
+        HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving,
+                                    search_factor=config.search_factor)
+        for row in snap_df.to_dict("records")
+    ])
+    compute_halo_bound_particles(ensemble, particle_coords)
+
+    # Ownership compares the boundness b = -E / scale across halos: the depth in each halo's own well.
+    csc_b, _ = ensemble.get_particles(scaled_energies=True)
+    pop_idx = ensemble.populated_indices()
+    candidates = [csc_b.column_indices[i] for i in pop_idx]
+    values = [csc_b.column_values[i] for i in pop_idx]
+
+    seg = HaloSegmenter(
+        ensemble.positions[pop_idx],
+        ensemble.virial_radii[pop_idx],
+    )
+    seg.overlap_groups().prune(candidates, config.min_particles, discard=False)
+
+    # Resolve contested particle ownership before any group is fit (C05):
+    # small halos always keep their own particles over the group they were
+    # split from, and ties between two small halos go to whichever has the
+    # higher boundness. HaloEnsemble.select()/__getitem__ return the same
+    # HaloModel references, so mutating boundness here is what makes every
+    # downstream consumer (the assigner, timescales) see corrected data.
+    removals = seg.resolve_ownership(candidates, values, ensemble.sub_tree_ids[pop_idx])
+    for local_h, rows in removals.items():
+        halo = ensemble[pop_idx[local_h]]
+        idx, ener, tdyn = halo.get_bound()
+        keep = ~np.isin(idx, rows)
+        halo.set_bound(idx[keep], ener[keep], tdyn[keep])
+
+    # A halo can lose every candidate to the ownership resolution above;
+    # it is no longer populated, so it leaves its group (and a group left
+    # without halos is dropped) instead of reaching the assigner empty.
+    emptied = {int(pop_idx[h]) for h in removals
+               if ensemble[pop_idx[h]].get_bound()[0].size == 0}
+    groups = sorted(
+        (g for g in ([i for i in pop_idx[grp] if int(i) not in emptied]
+                     for grp in seg.pruned_groups) if g),
+        key=len, reverse=True,
+    )
+
+    return ensemble, groups
+
+
 def process_snapshot(
     snap_data: SnapshotData,
     snap_df: pd.DataFrame,
@@ -69,48 +134,7 @@ def process_snapshot(
         The assignment result from the assigner.
     """
     particle_coords = snap_data.data
-
-    ensemble = HaloEnsemble([
-        HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving,
-                                    search_factor=config.search_factor)
-        for row in snap_df.to_dict("records")
-    ])
-    compute_halo_bound_particles(ensemble, particle_coords)
-
-    csc_b, _ = ensemble.get_particles()
-    pop_idx = ensemble.populated_indices()
-    candidates = [csc_b.column_indices[i] for i in pop_idx]
-    values = [csc_b.column_values[i] for i in pop_idx]
-
-    seg = HaloSegmenter(
-        ensemble.positions[pop_idx],
-        ensemble.virial_radii[pop_idx],
-    )
-    seg.overlap_groups().prune(candidates, config.min_particles, discard=False)
-
-    # Resolve contested particle ownership before any group is fit (C05):
-    # small halos always keep their own particles over the group they were
-    # split from, and ties between two small halos go to whichever has the
-    # higher boundness. HaloEnsemble.select()/__getitem__ return the same
-    # HaloModel references, so mutating boundness here is what makes every
-    # downstream consumer (the assigner, timescales) see corrected data.
-    removals = seg.resolve_ownership(candidates, values, ensemble.sub_tree_ids[pop_idx])
-    for local_h, rows in removals.items():
-        halo = ensemble[pop_idx[local_h]]
-        idx, ener, tdyn = halo.get_boundness()
-        keep = ~np.isin(idx, rows)
-        halo.set_boundness(idx[keep], ener[keep], tdyn[keep])
-
-    # A halo can lose every candidate to the ownership resolution above;
-    # it is no longer populated, so it leaves its group (and a group left
-    # without halos is dropped) instead of reaching the assigner empty.
-    emptied = {int(pop_idx[h]) for h in removals
-               if ensemble[pop_idx[h]].get_boundness()[0].size == 0}
-    groups = sorted(
-        (g for g in ([i for i in pop_idx[grp] if int(i) not in emptied]
-                     for grp in seg.pruned_groups) if g),
-        key=len, reverse=True,
-    )
+    ensemble, groups = bound_ensemble(particle_coords, snap_df, config)
 
     result = assigner.assign(
         ensemble, particle_coords, groups,

@@ -13,10 +13,11 @@
 
 ``alpha[n, k]`` is the plausibility of particle ``n``'s boundness under
 "``n`` belongs to halo ``k``'s galaxy" (model B, soft-label evidence). Only
-bound pairs carry a positive value. Every model is computed per halo,
-before the groups are fit, and exposes the same interface:
+bound pairs carry a positive value. Every model reads the physical energies
+from :meth:`HaloModel.get_bound` (never the scaled boundness). Every model is
+computed per halo, before the groups are fit, and exposes the same interface:
 
-- ``prepare(halos)``: α of every bound pair of this snapshot;
+- ``prepare(halos, coords)``: α of every bound pair of this snapshot;
 - ``column_values(column_id)``: α of the columns of a group's matrix;
 - ``update(resp_map, weights)``: refit after the snapshot (between
   snapshots, never inside EM);
@@ -26,13 +27,14 @@ Models:
 
 - ``"rank"``: ``log1p`` of the ordinal rank of the boundness within each
   halo.
-- ``"energy"`` (NFW only): the likelihood ratio ``p*(u)`` of member stars
-  over the halo's dark matter, on the dark-matter energy rank
-  ``u = F_c(calE)`` (uniform for the dark matter itself). ``p*`` is a
-  histogram of the previous snapshot's members in ``t = -ln u``, mixed with
-  Errani et al. (2022)'s tagging ratio (exponential galaxies, with
-  ``r_1/2 = 0.015 R_vir``, Kravtsov 2013) and floored:
-  ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
+- ``"energy"`` (any potential with a distribution function; its Errani
+  prior is NFW-calibrated, so ``halo_models = ("nfw",)``): the likelihood
+  ratio ``p*(u)`` of member stars over the halo's dark matter, on the
+  dark-matter energy rank ``u = F_c(calE)`` (uniform for the dark matter
+  itself). ``p*`` is a histogram of the previous snapshot's members in
+  ``t = -ln u``, mixed with Errani et al. (2022)'s tagging ratio
+  (exponential galaxies, with ``r_1/2 = 0.015 R_vir``, Kravtsov 2013) and
+  floored: ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
   ``lam = A / (1 + A)``. Without a histogram yet (first snapshot) ``lam = 1``.
 - ``"phase"`` (any potential): the same ratio on the fraction ``w`` of the
   halo's bound phase space more bound than the particle (uniform for a
@@ -68,6 +70,7 @@ from roadrunner._defaults import (
     PLAUSIBILITY_SHRINK_COUNT,
 )
 from roadrunner.physics.distribution import nfw_density_of_states, nfw_phi, trapezoid_weights
+from roadrunner.physics.potentials import POTENTIAL_MODELS
 
 ERRANI_SLOPE = 3.3          # dN*/dcalE ∝ calE^3.3 exp(-(calE / calE_s)^4)
 ERRANI_SHARPNESS = 4.0
@@ -79,6 +82,10 @@ _LOG_ALPHA_MAX = 50.0       # alpha in [1e-8, e^50]: row sums finite and row rat
                             # (>= 1e-8 / (K e^50) ~ 1e-30) normal in float32
 _EMPTY = np.empty(0, dtype=np.float64)
 
+HALO_MODELS = tuple(POTENTIAL_MODELS)         # potential models a plausibility works with by default
+_LAM = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)   # literature weight
+_LOG_KEEP, _LOG_FLOOR = np.log1p(-PLAUSIBILITY_FLOOR), np.log(PLAUSIBILITY_FLOOR)
+
 
 def _log1p_rank(values):
     """``log1p`` of the ordinal ranks of ``values`` (float64; empty stays empty).
@@ -86,7 +93,7 @@ def _log1p_rank(values):
     Parameters
     ----------
     values : ndarray
-        Boundness values of one halo.
+        Values of one halo, ranked ascending (``-E``: the most bound ranks highest).
 
     Returns
     -------
@@ -95,6 +102,15 @@ def _log1p_rank(values):
     if len(values) == 0:
         return np.asarray(values, dtype=np.float64)
     return np.log1p(rankdata(values, method="ordinal"))
+
+
+def _mixed_alpha(log_lit, log_emp):
+    """``alpha = (1 - kappa) [(1 - lam) R_emp + lam R_lit] + kappa`` from log ratios to the null (float64).
+
+    ``log_emp`` is ``None`` before the first refit: ``alpha = (1 - kappa) R_lit + kappa``.
+    """
+    log_mix = log_lit if log_emp is None else np.logaddexp(np.log1p(-_LAM) + log_emp, np.log(_LAM) + log_lit)
+    return np.exp(np.minimum(np.logaddexp(_LOG_KEEP + log_mix, _LOG_FLOOR), _LOG_ALPHA_MAX))
 
 
 def _errani_unnormalised(cal, es):
@@ -134,57 +150,99 @@ def _errani_scales():
     return 1.0 + nfw_phi(r_half), es_try
 
 
-def errani_log_ratio(halo, b):
-    """Log Errani tagging ratio ``log P*`` of a halo's bound particles.
-
-    ``P* = n*(calE; calE_s) / n_DM(calE)`` at ``calE = 1 - E / Φ₀``, both
-    normalised on ``[0, 1]``. ``calE_s`` places the stellar half-mass
-    radius at ``KRAVTSOV_RHALF * R_vir`` (Kravtsov 2013); it is found from
-    the halo's potential depth there. The stored boundness gives
-    ``E = -b s`` (``s`` the halo's energy scale), and the halo's
-    ``ln dN/dE`` becomes ``ln dN/dcalE`` with ``|dE / dcalE| = |Φ₀|``.
+def errani_scale(halo):
+    """Errani ``calE_s`` placing the stellar half-mass radius at ``KRAVTSOV_RHALF R_vir`` (NFW calibration).
 
     Parameters
     ----------
     halo : HaloModel
-        Halo whose potential defines ``central_potential`` and
-        ``log_energy_density`` (NFW).
-    b : ndarray
-        Stored boundness ``-E / halo.binding_energy_scale()``.
+
+    Returns
+    -------
+    es : float
+    """
+    r_half = np.array([KRAVTSOV_RHALF * halo.virial_radius])
+    depth = 1.0 - float(_summary_potential(halo, r_half)[0]) / halo.central_potential()
+    cal_half, es_try = _errani_scales()
+    return float(np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es_try))))
+
+
+def errani_log_ratio(halo, E, es):
+    """Log Errani tagging ratio ``log P* = log n*(calE; es) - log n_DM(calE)`` at physical energies ``E``.
+
+    ``P* = n*(calE; calE_s) / n_DM(calE)`` at ``calE = 1 - E / Φ₀``, both normalised on
+    ``[0, 1]``; the halo's ``ln dN/dE`` becomes ``ln dN/dcalE`` with ``|dE / dcalE| = |Φ₀|``.
+
+    Parameters
+    ----------
+    halo : HaloModel
+        Halo whose potential defines ``central_potential`` and ``log_energy_density``.
+    E : ndarray
+        Physical specific orbital energies (float64).
+    es : float
+        Errani scale (:func:`errani_scale`).
 
     Returns
     -------
     log_ratio : ndarray
     """
-    phi0, s = halo.central_potential(), halo.binding_energy_scale()
-    r_half = np.array([KRAVTSOV_RHALF * halo.virial_radius])
-    depth = 1.0 - float(_summary_potential(halo, r_half)[0]) / phi0
-    cal_half, es_try = _errani_scales()
-    es = float(np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es_try))))
-    cal = np.clip(1.0 + b * s / phi0, CAL_GRID[0], CAL_GRID[-1])        # calE = 1 - E / Φ₀, E = -b s
+    phi0 = halo.central_potential()
+    cal = np.clip(1.0 - E / phi0, CAL_GRID[0], CAL_GRID[-1])
     log_norm = np.log(trapezoid_weights(CAL_GRID) @ _errani_unnormalised(CAL_GRID, es))
     log_star = ERRANI_SLOPE * np.log(cal) - (cal / es) ** ERRANI_SHARPNESS - log_norm
     # n_DM per unit calE = per unit E times |dE / dcalE| = |Φ₀|
-    return log_star - (halo.log_energy_density(-b * s) + np.log(-phi0))
+    return log_star - (halo.log_energy_density(E) + np.log(-phi0))
 
 
 class _Plausibility:
-    """Shared interface: per-halo α, a no-op refit and no state."""
+    """Shared interface: per-halo α from a per-pair statistic, mixed and floored alike for every model; a no-op refit and no state."""
 
     name = ""
+    halo_models = HALO_MODELS                 # potential models it works with (config check)
 
     def __init__(self):
         self._alpha: dict[int, np.ndarray] = {}
+        self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 
-    def prepare(self, halos, coords=None):
+    def prepare(self, halos, coords):
         """Compute α for every bound pair of this snapshot.
+
+        Each model reads the physical energies from :meth:`HaloModel.get_bound`
+        (never the scaled boundness), so α does not depend on the energy scale.
 
         Parameters
         ----------
         halos : HaloEnsemble or iterable of HaloModel
             Halos with boundness already computed.
-        coords : ndarray of shape (n_particles, 6), optional
-            Phase-space coordinates (used by ``kinematic`` only).
+        coords : ndarray of shape (n_particles, 6) or None
+            Phase-space coordinates (catalogue units, km/s); only models that read them need them.
+        """
+        self._alpha, self._t = {}, {}
+        for h in halos:
+            if not h.has_bound:
+                continue
+            rows, E, _ = h.get_bound()
+            stat, log_lit, log_emp = self._log_ratios(h, rows, E.astype(np.float64), coords)
+            sid = int(h.sub_tree_id)
+            self._alpha[sid] = _mixed_alpha(log_lit, log_emp)
+            self._t[sid] = (rows, stat)
+
+    def _log_ratios(self, halo, rows, E, coords):
+        """Per-pair statistic and its log ratios to the null: literature, empirical (``None`` before a refit).
+
+        Parameters
+        ----------
+        halo : HaloModel
+        rows : ndarray of int
+            Bound particle rows.
+        E : ndarray of float64
+            Their physical energies.
+        coords : ndarray of shape (n_particles, 6) or None
+            The snapshot's phase-space coordinates.
+
+        Returns
+        -------
+        stat, log_lit, log_emp : ndarray, ndarray, ndarray or None
         """
         raise NotImplementedError
 
@@ -269,25 +327,9 @@ class _Plausibility:
             Positive weights only. ``None, None`` when the effective member
             count is below ``PLAUSIBILITY_MIN_MEMBERS`` (keep the previous fit).
         """
-        ts, ws = [], []
-        for sid, (rows_r, r) in resp_map.items():
-            cached = self._t.get(int(sid))
-            if cached is None:
-                continue
-            rows_b, t = cached
-            pos = np.searchsorted(rows_b, rows_r)
-            ok = pos < rows_b.size
-            ok[ok] = rows_b[pos[ok]] == rows_r[ok]
-            w = np.asarray(r, dtype=np.float64)[ok]
-            if weights is not None:
-                w = w * weights[rows_r[ok]]
-            ts.append(t[pos[ok]])
-            ws.append(w)
-        if not ts:
-            return None, None
-        t, w = np.concatenate(ts), np.concatenate(ws)
-        keep = w > 0
-        t, w = t[keep], w[keep]
+        per = self._member_pairs(resp_map, weights)
+        t = np.concatenate([t for t, _ in per.values()]) if per else _EMPTY
+        w = np.concatenate([w for _, w in per.values()]) if per else _EMPTY
         if w.size == 0 or w.sum() ** 2 / np.dot(w, w) < PLAUSIBILITY_MIN_MEMBERS:
             return None, None
         return t, w
@@ -312,27 +354,20 @@ class RankPlausibility(_Plausibility):
 
     name = "rank"
 
-    def prepare(self, halos, coords=None):
-        """Compute α for every bound pair of this snapshot.
-
-        Parameters
-        ----------
-        halos : HaloEnsemble or iterable of HaloModel
-        coords : ndarray of shape (n_particles, 6), optional
-            Unused here.
-        """
-        self._alpha = {int(h.sub_tree_id): _log1p_rank(h.get_boundness()[1])
-                       for h in halos if h.has_boundness}
+    def prepare(self, halos, coords):
+        """Compute α for every bound pair of this snapshot (``coords`` unused)."""
+        self._alpha = {int(h.sub_tree_id): _log1p_rank(-h.get_bound()[1])      # -E: same order as b
+                       for h in halos if h.has_bound}
 
 
 class EnergyPlausibility(_Plausibility):
     """Hybrid empirical ``p*(u)``: member histogram in ``t = -ln u`` + Errani prior, floored."""
 
     name = "energy"
+    halo_models = ("nfw",)                          # Errani's prior is NFW-calibrated (item (c))
 
     def __init__(self):
         super().__init__()
-        self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._edges: np.ndarray | None = None
         self._log_density: np.ndarray | None = None
 
@@ -342,31 +377,11 @@ class EnergyPlausibility(_Plausibility):
         b = np.clip(np.searchsorted(self._edges, tc, side="right") - 1, 0, self._log_density.size - 1)
         return self._log_density[b] + tc
 
-    def prepare(self, halos, coords=None):
-        """Compute α for every bound pair of this snapshot.
-
-        Parameters
-        ----------
-        halos : HaloEnsemble or iterable of HaloModel
-            NFW halos with boundness already computed.
-        coords : ndarray of shape (n_particles, 6), optional
-            Unused here.
-        """
-        lam = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)
-        self._alpha, self._t = {}, {}
-        for h in halos:
-            if not h.has_boundness:
-                continue
-            rows, b, _ = h.get_boundness()
-            b = b.astype(np.float64)
-            t = -np.log(np.clip(h.energy_fraction(-b * h.binding_energy_scale()), _U_MIN, 1.0))
-            log_mix = errani_log_ratio(h, b)
-            if self._edges is not None:
-                log_mix = np.logaddexp(np.log1p(-lam) + self._log_pstar(t), np.log(lam) + log_mix)
-            log_alpha = np.logaddexp(np.log1p(-PLAUSIBILITY_FLOOR) + log_mix, np.log(PLAUSIBILITY_FLOOR))
-            sid = int(h.sub_tree_id)
-            self._alpha[sid] = np.exp(np.minimum(log_alpha, _LOG_ALPHA_MAX))
-            self._t[sid] = (rows, t)
+    def _log_ratios(self, halo, rows, E, coords):
+        """``t = -ln u``; literature: Errani's ratio; empirical: the member histogram's."""
+        t = -np.log(np.clip(halo.energy_fraction(E), _U_MIN, 1.0))
+        log_emp = None if self._edges is None else self._log_pstar(t)
+        return t, errani_log_ratio(halo, E, errani_scale(halo)), log_emp
 
     def update(self, resp_map, weights=None):
         """Refit the member histogram from this snapshot's responsibilities.
@@ -428,14 +443,14 @@ _FD_STEP = 1e-3                                   # central difference step in l
 _X_HAT = np.array([[1.0, 0.0, 0.0]])            # direction of the radial summaries from the halo centre
 
 
-def _summary_potential(halo, r):
-    """Potential (float64) at snapshot radii ``r`` from the halo centre along x: the radial summaries' input.
+def _potential64(halo, xyz):
+    """Potential (float64, physical) at absolute catalogue positions ``xyz``: the input of every float64 summary."""
+    return halo.potential_model.potential(np.asarray(xyz, dtype=np.float64) * halo.length_scale)
 
-    Read from the potential model at physical positions, so finite differences
-    of it keep float64 precision whatever ``math_dtype()`` is.
-    """
-    xyz = np.asarray(halo.tree_position, dtype=np.float64) + np.asarray(r, dtype=np.float64).reshape(-1, 1) * _X_HAT
-    return halo.potential_model.potential(xyz * halo.length_scale)
+
+def _summary_potential(halo, r):
+    """Potential (float64) at snapshot radii ``r`` from the halo centre along x: the radial summaries' input."""
+    return _potential64(halo, halo.tree_centre + np.asarray(r, dtype=np.float64).reshape(-1, 1) * _X_HAT)
 
 
 def _normal_log_pdf(t, mu, sd):
@@ -489,46 +504,33 @@ class PhaseSpacePlausibility(_Plausibility):
 
     def __init__(self):
         super().__init__()
-        self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._mu: float | None = None
         self._sd: float | None = None
         self._sd_min = 0.0
+        self._floors: list[float] = []
 
-    def prepare(self, halos, coords=None):
-        """Compute α for every bound pair of this snapshot.
-
-        Also records the snapshot's width floor: the median over halos of
-        the ``PLAUSIBILITY_MIN_SCATTER_DEX`` depth spread (so the floor
-        follows the potential family).
+    def prepare(self, halos, coords):
+        """Compute α; also records this snapshot's width floor (median over halos of the
+        ``PLAUSIBILITY_MIN_SCATTER_DEX`` depth spread, so the floor follows the potential family).
 
         Parameters
         ----------
         halos : HaloEnsemble or iterable of HaloModel
             Halos with boundness already computed (any potential).
-        coords : ndarray of shape (n_particles, 6), optional
+        coords : ndarray of shape (n_particles, 6) or None
             Unused here.
         """
-        lam = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)
-        log_keep, log_floor = np.log1p(-PLAUSIBILITY_FLOOR), np.log(PLAUSIBILITY_FLOOR)
-        self._alpha, self._t = {}, {}
-        floors = []
-        for h in halos:
-            if not h.has_boundness:
-                continue
-            rows, b, _ = h.get_boundness()
-            t = -h.log_phase_space_fraction(-b.astype(np.float64) * h.binding_energy_scale())
-            mu_l, sd_l, sd_min = literature_depth(h)
-            floors.append(sd_min)
-            log_mix = _normal_log_pdf(t, mu_l, sd_l)
-            if self._mu is not None:
-                log_mix = np.logaddexp(np.log1p(-lam) + _normal_log_pdf(t, self._mu, self._sd),
-                                       np.log(lam) + log_mix)
-            log_alpha = np.logaddexp(log_keep + log_mix + t, log_floor)
-            sid = int(h.sub_tree_id)
-            self._alpha[sid] = np.exp(np.minimum(log_alpha, _LOG_ALPHA_MAX))
-            self._t[sid] = (rows, t)
-        if floors:
-            self._sd_min = float(np.median(floors))
+        self._floors = []
+        super().prepare(halos, coords)
+        if self._floors:
+            self._sd_min = float(np.median(self._floors))
+
+    def _log_ratios(self, halo, rows, E, coords):
+        t = -halo.log_phase_space_fraction(E)
+        mu_l, sd_l, sd_min = literature_depth(halo)
+        self._floors.append(sd_min)
+        log_emp = None if self._mu is None else _normal_log_pdf(t, self._mu, self._sd) + t
+        return t, _normal_log_pdf(t, mu_l, sd_l) + t, log_emp
 
     def update(self, resp_map, weights=None):
         """Refit ``(mu*, sigma*)`` as weighted moments of this snapshot's member depths.
@@ -592,7 +594,7 @@ def escape_speed_fraction(halo, rows, coords):
     """
     x = np.asarray(coords[rows], dtype=np.float64)
     v2 = np.sum((x[:, 3:6] - halo.com_velocity) ** 2, axis=1)
-    return np.minimum(v2 / (-2.0 * halo.potential(x[:, :3])), 1.0)
+    return np.minimum(v2 / (-2.0 * _potential64(halo, x[:, :3])), 1.0)
 
 
 def literature_speed(halo):
@@ -650,36 +652,13 @@ class KinematicPlausibility(_Plausibility):
 
     def __init__(self):
         super().__init__()
-        self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._m_pool: float | None = None
         self._m: dict[int, float] = {}
 
-    def prepare(self, halos, coords):
-        """Compute α for every bound pair of this snapshot.
-
-        Parameters
-        ----------
-        halos : HaloEnsemble or iterable of HaloModel
-            Halos with boundness already computed (any potential).
-        coords : ndarray of shape (n_particles, 6)
-            Positions and velocities.
-        """
-        lam = PLAUSIBILITY_PRIOR_WEIGHT / (1.0 + PLAUSIBILITY_PRIOR_WEIGHT)
-        log_keep, log_floor = np.log1p(-PLAUSIBILITY_FLOOR), np.log(PLAUSIBILITY_FLOOR)
-        self._alpha, self._t = {}, {}
-        for h in halos:
-            if not h.has_boundness:
-                continue
-            rows = h.get_boundness()[0]
-            u2 = escape_speed_fraction(h, rows, coords)
-            sid = int(h.sub_tree_id)
-            log_mix = _speed_log_ratio(u2, literature_speed(h))
-            m = self._m.get(sid, self._m_pool)
-            if m is not None:
-                log_mix = np.logaddexp(np.log1p(-lam) + _speed_log_ratio(u2, m), np.log(lam) + log_mix)
-            log_alpha = np.logaddexp(log_keep + log_mix, log_floor)
-            self._alpha[sid] = np.exp(np.minimum(log_alpha, _LOG_ALPHA_MAX))
-            self._t[sid] = (rows, u2)
+    def _log_ratios(self, halo, rows, E, coords):
+        u2 = escape_speed_fraction(halo, rows, coords)
+        m = self._m.get(int(halo.sub_tree_id), self._m_pool)
+        return u2, _speed_log_ratio(u2, literature_speed(halo)), None if m is None else _speed_log_ratio(u2, m)
 
     def update(self, resp_map, weights=None):
         """Refit the pooled and per-halo member ``<u^2>``.
@@ -731,8 +710,8 @@ class KinematicPlausibility(_Plausibility):
                                                      np.asarray(state["m"], dtype=float).tolist()))
 
 
-_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility, "phase": PhaseSpacePlausibility,
-           "kinematic": KinematicPlausibility}
+PLAUSIBILITY_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility, "phase": PhaseSpacePlausibility,
+                        "kinematic": KinematicPlausibility}
 
 
 def make_plausibility(name):
@@ -748,6 +727,6 @@ def make_plausibility(name):
     model : RankPlausibility, EnergyPlausibility, PhaseSpacePlausibility or KinematicPlausibility
     """
     try:
-        return _MODELS[name.lower()]()
+        return PLAUSIBILITY_MODELS[name.lower()]()
     except KeyError:
-        raise ValueError(f"Unknown plausibility {name!r}. Choose from: {list(_MODELS)}")
+        raise ValueError(f"Unknown plausibility {name!r}. Choose from: {list(PLAUSIBILITY_MODELS)}")

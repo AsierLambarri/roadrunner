@@ -40,9 +40,9 @@ def _make_halo(n_particles, sid):
         redshift=0.0,
     )
     if n_particles > 0:
-        h.set_boundness(
+        h.set_bound(
             np.arange(n_particles, dtype=np.uint64),
-            RNG.uniform(0, 1, n_particles).astype(np.float32),
+            -RNG.uniform(0, 1, n_particles).astype(np.float32),
             RNG.uniform(0, 0.5, n_particles).astype(np.float32),
         )
     return h
@@ -64,8 +64,8 @@ def build_dataset(n_halos, n_starry, n_total):
 def v1_for_loop(halos):
     candidates, boundness, tdyns = [], [], []
     for h in halos:
-        if h.has_boundness:
-            inds, ener, td_arr = h.get_boundness()
+        if h.has_bound:
+            inds, ener, td_arr = h.get_bound()
             candidates.append(inds)
             boundness.append(ener)
             tdyns.append(td_arr)
@@ -80,7 +80,7 @@ def v1_for_loop(halos):
 
 def v2_comp_3unpack(halos):
     data = [
-        h.get_boundness() if h.has_boundness
+        h.get_bound() if h.has_bound
         else (np.array([], dtype=np.uint64),
               np.array([], dtype=np.float32),
               np.array([], dtype=np.float32))
@@ -94,7 +94,7 @@ def v2_comp_3unpack(halos):
 
 def v3_comp_zip(halos):
     raw = [
-        h.get_boundness() if h.has_boundness
+        h.get_bound() if h.has_bound
         else (np.array([], dtype=np.uint64),
               np.array([], dtype=np.float32),
               np.array([], dtype=np.float32))

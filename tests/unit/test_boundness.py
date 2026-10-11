@@ -27,7 +27,7 @@ class TestFunction:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             compute_halo_bound_particles([halo], coords)
-        idx, _, tdyn = halo.get_boundness()
+        idx, _, tdyn = halo.get_bound()
         assert idx.size and np.all(np.isfinite(tdyn)) and np.all(tdyn > 0)
 
     def test_v_vir_sq_respects_comoving_flag(self):
@@ -54,8 +54,8 @@ class TestFunction:
         compute_halo_bound_particles([halo_comoving], coords_comoving)
         compute_halo_bound_particles([halo_physical], coords_physical)
 
-        i_com, e_com, _ = halo_comoving.get_boundness()
-        i_phy, e_phy, _ = halo_physical.get_boundness()
+        i_com, e_com, _ = halo_comoving.get_bound()
+        i_phy, e_phy, _ = halo_physical.get_bound()
         assert i_com.size > 0
         np.testing.assert_array_equal(i_com, i_phy)
         np.testing.assert_allclose(e_com, e_phy, rtol=1e-6)
@@ -66,7 +66,7 @@ class TestFunction:
         halos = [_make_halo([1e6, 0.0, 0.0])]
         result = compute_halo_bound_particles(halos, coords)
         assert result is halos
-        inds, vals, tdyns = result[0].get_boundness()
+        inds, vals, tdyns = result[0].get_bound()
         assert len(inds) == 0
         assert len(vals) == 0
         assert len(tdyns) == 0
@@ -83,5 +83,5 @@ class TestFunction:
         np.testing.assert_allclose(kepler.binding_energy_scale(), -kepler.potential_model.potential(coords[i_min:i_min + 1, :3])[0])
         np.testing.assert_allclose(nfw.binding_energy_scale(), -nfw.central_potential())
         for h in (kepler, nfw):
-            b = h.get_boundness()[1]
+            b = h.get_bound(scaled_energies=True)[1]
             assert b.size and np.all((b > 0) & (b <= 1))

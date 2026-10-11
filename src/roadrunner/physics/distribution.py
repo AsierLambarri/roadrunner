@@ -476,7 +476,7 @@ def nfw_energy_fraction(eps, c):
     Parameters
     ----------
     eps : ndarray
-        Normalised boundness ``E / Phi_0`` (1 at the centre, 0 at ``E = 0``).
+        Normalised energy ``eps = E / Phi_0`` (1 at the centre, 0 at ``E = 0``).
     c : float
         Concentration.
 
@@ -494,7 +494,7 @@ def nfw_log_energy_density(eps, c):
     Parameters
     ----------
     eps : ndarray
-        Normalised boundness ``E / Phi_0``.
+        Normalised energy ``eps = E / Phi_0``.
     c : float
         Concentration.
 
@@ -519,7 +519,7 @@ def nfw_log_phase_space_fraction(eps, c):
     Parameters
     ----------
     eps : ndarray
-        Normalised boundness ``E / Phi_0``.
+        Normalised energy ``eps = E / Phi_0``.
     c : float
         Concentration.
 

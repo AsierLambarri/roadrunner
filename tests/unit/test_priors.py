@@ -93,8 +93,8 @@ def _halos_for(X, lab, mus, sigs, which):
         idx = np.flatnonzero((lab == k) | (d < 3.0))
         h = HaloModel(KeplerPotential(M=1e11, G=4.3e-6), mus[k][:3], mus[k][3:], 20.0,
                       sub_tree_id=k + 1, redshift=0.0)
-        h.set_boundness(idx.astype(np.uint64), np.exp(-0.5 * d[idx] ** 2).astype(np.float32),
-                        np.full(idx.size, 0.1, np.float32))
+        h.set_bound(idx.astype(np.uint64), -np.exp(-0.5 * d[idx] ** 2).astype(np.float32),
+                    np.full(idx.size, 0.1, np.float32))
         hs.append(h)
     return hs
 

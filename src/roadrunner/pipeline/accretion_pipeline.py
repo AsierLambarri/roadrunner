@@ -635,7 +635,7 @@ class AccretionPipeline:
                     columns=["array_index", "timescale"], inplace=True, errors="ignore",
                 )
 
-                bound_csc, _ = snap_result.ensemble.get_particles()
+                bound_csc, _ = snap_result.ensemble.get_particles(scaled_energies=True)
                 self.assign_writer.write_snapshot(
                     snap_id, snap_data.time, snap_result.result, bound_csc,
                     energy_scales=dict(zip(snap_result.ensemble.sub_tree_ids.tolist(),
