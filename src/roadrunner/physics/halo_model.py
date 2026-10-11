@@ -59,10 +59,11 @@ class HaloModel:
 
     Parameters
     ----------
-    inner : PotentialModel
-        The tree's potential (the first component); its ``centre`` must be
-        the physical halo centre ``tree_centre * length_scale`` and its
-        ``velocity`` the halo's bulk velocity ``tree_velocity``.
+    potential : PotentialModel
+        A plain potential (the tree halo, put in group ``dark_matter``) or a
+        composite with a ``dark_matter`` group, copied so the halo's is
+        frozen; the tree halo is centred on ``tree_centre * length_scale`` and
+        moves with ``tree_velocity``.
     tree_centre : ndarray of shape (3,)
         Halo centre (catalogue coordinates).
     tree_velocity : ndarray of shape (3,)
@@ -83,7 +84,7 @@ class HaloModel:
 
     def __init__(
         self,
-        inner: PotentialModel,
+        potential: PotentialModel,
         tree_centre: np.ndarray,
         tree_velocity: np.ndarray,
         virial_radius: float,
@@ -101,8 +102,10 @@ class HaloModel:
         self.comoving = comoving
         self.search_factor = float(search_factor)
         self.length_scale = physical_length_factor(self.redshift, comoving)
-        self.potential_model = CompositeSphericalPotential(inner)
-        self.tree_mass = float(inner.M)
+        # the halo's own frozen copy; a plain potential is the tree halo, group dark_matter
+        self.potential_model = CompositeSphericalPotential(
+            **(potential.groups if isinstance(potential, CompositeSphericalPotential) else {"dark_matter": potential}))
+        self.tree_mass = float(sum(p.M for p in self.potential_model.groups["dark_matter"]))
         self.inner_position = self.tree_centre.copy()
         self._bound: tuple | None = None
 
@@ -172,16 +175,6 @@ class HaloModel:
 
     def __getitem__(self, i):
         return self.potential_model[i]
-
-    def add_potential(self, potential: PotentialModel) -> None:
-        """Add a component to the halo's potential on the fly.
-
-        Parameters
-        ----------
-        potential : PotentialModel
-            Centred on its own ``centre``, an absolute physical position.
-        """
-        self.potential_model.add(potential)
 
     def _physical(self, xyz: np.ndarray) -> np.ndarray:
         """Catalogue positions as absolute physical positions, in float64."""
@@ -415,7 +408,7 @@ class HaloModel:
                        "plummer": {"a": scale}, "hernquist": {"a": scale}}.get(model.lower(), {}))
         inner = get_potential(model, **kwargs)
         return cls(
-            inner=inner,
+            potential=inner,
             tree_centre=tree_centre,
             tree_velocity=tree_velocity,
             virial_radius=float(row["virial_radius"]),

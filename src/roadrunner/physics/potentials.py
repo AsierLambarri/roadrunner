@@ -1317,10 +1317,11 @@ class CompositeSphericalPotential(SphericalPotential):
     """Sum of spherical potentials: the total potential of a halo built from several components.
 
     An iterable container of its components (``for p in composite``, ``len``, indexing);
-    :meth:`add` adds more on the fly. Each component carries its own ``centre`` and
-    ``velocity``; the composite's are :attr:`com_centre` and :attr:`com_velocity`, the
-    components' mass-weighted ones ``Σ M_i c_i / Σ M_i`` and ``Σ M_i v_i / Σ M_i``, which
-    its ``centre`` and ``velocity`` (the potential protocol's) return. The primitives and the quantities linear in mass are the sums of the
+    :meth:`add` adds more on the fly, to an existing group or a new one. Each component
+    carries its own ``centre`` and ``velocity``; the composite's are :attr:`com_centre` and
+    :attr:`com_velocity`, the components' mass-weighted ones ``Σ M_i c_i / Σ M_i`` and
+    ``Σ M_i v_i / Σ M_i``, which its ``centre`` and ``velocity`` (the potential protocol's)
+    return. The primitives and the quantities linear in mass are the sums of the
     components' own methods (potential, density, enclosed mass, well
     depth, tidal denominator), so every component keeps its exact forms; the profile stacks
     their rows. The public methods take absolute physical positions and measure each
@@ -1341,10 +1342,14 @@ class CompositeSphericalPotential(SphericalPotential):
     A single component answers those (``_OWN_METHODS``) itself, chosen when components are
     added: its own orbital time, tables and closed forms, exactly.
 
+    :attr:`groups` maps each group's name to its components, in the order they joined; a
+    group accessed as an attribute (``comp.stars``) is a composite of its own, built fresh
+    from that group's components on each access.
+
     Parameters
     ----------
-    *components : SphericalPotential
-        At least one, all with the same ``G`` (the generic route uses one ``G``).
+    **groups : SphericalPotential or sequence of SphericalPotential
+        At least one component, all with the same ``G`` (the generic route uses one ``G``).
 
     Raises
     ------
@@ -1352,13 +1357,15 @@ class CompositeSphericalPotential(SphericalPotential):
         If the components' ``G`` differ (also on :meth:`add`).
     """
 
-    def __init__(self, *components):
-        self.G = components[0].G
-        self._components = ()
-        self.add(*components)
+    def __init__(self, **groups):
+        groups = {name: (m,) if isinstance(m, SphericalPotential) else tuple(m) for name, m in groups.items()}
+        self.G = next(iter(groups.values()))[0].G
+        self._components, self.groups = (), {}
+        for name, members in groups.items():
+            self.add(name, *members)
 
-    def add(self, *potentials):
-        """Add components on the fly (e.g. a halo's stellar counterpart).
+    def add(self, group, *potentials):
+        """Add components on the fly to a group, existing or new (e.g. a halo's stellar counterpart).
 
         The composite's mass, :attr:`com_centre`, :attr:`com_velocity`, ``has_distribution``,
         single-component shortcuts and :attr:`x_min` are updated, and its cached distributions
@@ -1368,6 +1375,8 @@ class CompositeSphericalPotential(SphericalPotential):
 
         Parameters
         ----------
+        group : str
+            The group they join: an existing one or a new one.
         *potentials : SphericalPotential
             With the composite's ``G``.
 
@@ -1380,6 +1389,7 @@ class CompositeSphericalPotential(SphericalPotential):
         if any(p.G != self.G for p in potentials):
             raise ValueError("The components of a composite potential must share G.")
         self._components += potentials
+        self.groups[group] = self.groups.get(group, ()) + potentials
         self.M = sum(p.M for p in self._components)
         self.com_centre = sum((p.M / self.M) * p.centre for p in self._components)
         self.com_velocity = sum((p.M / self.M) * p.velocity for p in self._components)
@@ -1398,6 +1408,17 @@ class CompositeSphericalPotential(SphericalPotential):
 
     def __iter__(self):
         return iter(self._components)
+
+    def __getattr__(self, name):
+        """A group as a new composite of its own (``comp.stars``), built on each access.
+
+        Reached only when ordinary lookup fails: a group named like an attribute (``M``,
+        ``groups``, ...) is reachable through :attr:`groups` alone.
+        """
+        try:
+            return CompositeSphericalPotential(**{name: self.__dict__["groups"][name]})
+        except KeyError:
+            raise AttributeError(f"{type(self).__name__!r} object has no attribute or group {name!r}") from None
 
     @property
     def centre(self):

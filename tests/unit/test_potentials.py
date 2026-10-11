@@ -275,7 +275,7 @@ class TestCompositeSphericalPotential:
         r, E = np.array([0.0, 0.3, 5.0, 80.0]), np.array([-2e4, -5e3, -1e3, 10.0])
         for p, R in ((NFWPotential(1e11, 8.0, 10.0), 80.0), (KeplerPotential(1e11), 80.0),
                      (PlummerPotential(1e10, 0.5), 5.0), (HernquistPotential(1e10, 0.5), 5.0)):
-            c = CompositeSphericalPotential(p)
+            c = CompositeSphericalPotential(dark_matter=p)
             assert len(c) == 1 and c[0] is p and list(c) == [p] and c.M == p.M
             for name in ("potential", "density", "enclosed_mass", "tidal_denominator"):
                 np.testing.assert_array_equal(getattr(c, name)(_xyz(r)), getattr(p, name)(_xyz(r)))
@@ -293,7 +293,7 @@ class TestCompositeSphericalPotential:
     def test_sums_orbital_time_and_distributions_of_the_whole(self):
         from roadrunner.physics.potentials import CompositeSphericalPotential
         nfw, plummer = NFWPotential(1e11, 8.0, 10.0), PlummerPotential(1e10, 0.5)
-        c = CompositeSphericalPotential(nfw, plummer)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=plummer)
         r = np.array([0.0, 0.3, 5.0, 80.0])
         for name in ("potential", "density", "enclosed_mass", "tidal_denominator"):
             np.testing.assert_array_equal(getattr(c, name)(_xyz(r)), getattr(nfw, name)(_xyz(r)) + getattr(plummer, name)(_xyz(r)))
@@ -315,13 +315,13 @@ class TestCompositeSphericalPotential:
         u = c.energy_fraction(np.array([0.9, 0.5, 0.1]) * c.central_potential(), R)
         assert np.all((u > 0) & (u < 1)) and np.all(np.diff(u) > 0)
         # a component without f: the energy pair raises, the phase-space fraction does not
-        k = CompositeSphericalPotential(nfw, KeplerPotential(1e10))
+        k = CompositeSphericalPotential(dark_matter=nfw, stars=KeplerPotential(1e10))
         assert not k.has_distribution
         with pytest.raises(NotImplementedError):
             k.energy_fraction(np.array([-1e4]), R)
         assert np.all(k.log_phase_space_fraction(np.array([-1e4]), R) < 0)
         with pytest.raises(ValueError):
-            CompositeSphericalPotential(nfw, PlummerPotential(1e10, 0.5, G=1.0))
+            CompositeSphericalPotential(dark_matter=nfw, stars=PlummerPotential(1e10, 0.5, G=1.0))
 
 
 class TestPositions:
@@ -332,7 +332,7 @@ class TestPositions:
         xyz = c1 + np.array([[3.0, 0.0, 0.0], [0.0, 1e-3, 0.0], [10.0, 5.0, -2.0]])
         r1, r2 = np.linalg.norm(xyz - c1, axis=1), np.linalg.norm(xyz - c2, axis=1)
         np.testing.assert_allclose(nfw.potential(xyz), nfw._potential(r1), rtol=1e-12)
-        comp = CompositeSphericalPotential(nfw, pl)
+        comp = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
         np.testing.assert_allclose(comp.com_centre, (nfw.M * c1 + pl.M * c2) / (nfw.M + pl.M), rtol=1e-12)
         np.testing.assert_allclose(comp.com_velocity, np.zeros(3), atol=0)
         np.testing.assert_allclose(comp.potential(xyz), nfw._potential(r1) + pl._potential(r2), rtol=1e-12)
@@ -346,11 +346,11 @@ class TestCompositeAdd:
     def test_add_on_the_fly_matches_building_at_once(self):
         from roadrunner.physics.potentials import CompositeSphericalPotential
         nfw, plummer = NFWPotential(1e11, 8.0, 10.0), PlummerPotential(1e10, 0.5)
-        c = CompositeSphericalPotential(nfw)
+        c = CompositeSphericalPotential(dark_matter=nfw)
         E, R = np.array([0.9, 0.5, 0.1]) * nfw.central_potential(), 20.0
         np.testing.assert_array_equal(c.log_phase_space_fraction(E, R), nfw.log_phase_space_fraction(E, R))
-        c.add(plummer)
-        both = CompositeSphericalPotential(nfw, plummer)
+        c.add("stars", plummer)
+        both = CompositeSphericalPotential(dark_matter=nfw, stars=plummer)
         assert len(c) == 2 and c[1] is plummer and c.M == nfw.M + plummer.M and c.has_distribution
         assert "orbital_time" not in c.__dict__ and "log_phase_space_fraction" not in c.__dict__
         xyz = _xyz([0.0, 0.3, 5.0])
@@ -362,14 +362,30 @@ class TestCompositeAdd:
         # a composite whose cache is filled drops it on add: the third component is seen
         hernquist = HernquistPotential(1e9, 0.2)
         before = c.energy_fraction(E, R)
-        c.add(hernquist)
-        three = CompositeSphericalPotential(nfw, plummer, hernquist)
+        c.add("stars", hernquist)
+        three = CompositeSphericalPotential(dark_matter=nfw, stars=[plummer, hernquist])
         assert not np.array_equal(c.energy_fraction(E, R), before)
         np.testing.assert_allclose(c.energy_fraction(E, R), three.energy_fraction(E, R), rtol=1e-12)
-        c.add(KeplerPotential(1e9))
+        c.add("stars", KeplerPotential(1e9))
         assert not c.has_distribution
         with pytest.raises(ValueError):
-            c.add(PlummerPotential(1e10, 0.5, G=1.0))
+            c.add("stars", PlummerPotential(1e10, 0.5, G=1.0))
+
+    def test_groups_and_group_attribute(self):
+        from roadrunner.physics.potentials import CompositeSphericalPotential
+        nfw, plummer = NFWPotential(1e11, 8.0, 10.0), PlummerPotential(1e10, 0.5)
+        c = CompositeSphericalPotential(dark_matter=nfw)
+        assert c.groups == {"dark_matter": (nfw,)}
+        c.add("stars", plummer)                                   # a new group
+        assert c.groups == {"dark_matter": (nfw,), "stars": (plummer,)}
+        hernquist = HernquistPotential(1e9, 0.2)
+        c.add("stars", hernquist)                                 # an existing group
+        assert c.groups == {"dark_matter": (nfw,), "stars": (plummer, hernquist)}
+        stars_only = CompositeSphericalPotential(stars=[plummer, hernquist])
+        xyz = _xyz([0.0, 0.3, 5.0])
+        np.testing.assert_array_equal(c.stars.potential(xyz), stars_only.potential(xyz))
+        with pytest.raises(AttributeError):
+            c.gas
 
 
 _C0 = np.array([1e3, 2e3, 3e3])
@@ -387,7 +403,7 @@ class TestWellMinimum:
         from roadrunner.physics.potentials import CompositeSphericalPotential, _locate_minimum
         nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
         pl = PlummerPotential(1e10, 0.5, centre=_C0)
-        c = CompositeSphericalPotential(nfw, pl)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
         np.testing.assert_array_equal(nfw.x_min, _C0)
         np.testing.assert_array_equal(c.x_min, _C0)
         np.testing.assert_array_equal(_locate_minimum(None, np.array([_C0, _C0])), _C0)
@@ -397,7 +413,7 @@ class TestWellMinimum:
         from roadrunner.physics.potentials import CompositeSphericalPotential
         p1 = PlummerPotential(1e10, 1.0, centre=_C0)
         p2 = PlummerPotential(5e9, 0.8, centre=_C0 + np.array([1.5, 0.5, 0.0]))
-        c = CompositeSphericalPotential(p1, p2)
+        c = CompositeSphericalPotential(stars=[p1, p2])
         xb, pb = _segment(c, p1, p2)
         L = np.linalg.norm(p2.centre - p1.centre)
         np.testing.assert_allclose(c.x_min, xb, rtol=0, atol=2e-5 * L)
@@ -413,12 +429,12 @@ class TestWellMinimum:
         # light Plummer's largest pull 0.385 G M/a^2 = 1.2e8 G is below the NFW gradient on the
         # whole segment, >= G M(<1 kpc) = 4.5e8 G; cone slope |Phi0|/(2 Rs) = 5.25e8 G
         light = PlummerPotential(5e9, 4.0, centre=_C0 + np.array([0.6, 0.8, 0.0]))
-        c = CompositeSphericalPotential(nfw, light)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=light)
         np.testing.assert_array_equal(c.x_min, _C0)
         assert c.central_potential() == nfw.central_potential() + light.potential(_C0[None])[0]
         # heavy Plummer's pull at the cusp, 1.43e9 G, exceeds the slope: the minimum moves off
         heavy = PlummerPotential(1e11, 4.0, centre=_C0 + np.array([0.6, 0.8, 0.0]))
-        c = CompositeSphericalPotential(nfw, heavy)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=heavy)
         xb, pb = _segment(c, nfw, heavy)
         np.testing.assert_allclose(c.x_min, xb, rtol=0, atol=2e-5)
         assert np.linalg.norm(c.x_min - _C0) > 0.1
@@ -427,7 +443,7 @@ class TestWellMinimum:
         from roadrunner.physics.potentials import CompositeSphericalPotential
         p1 = PlummerPotential(1e10, 0.5, centre=_C0)
         p2 = PlummerPotential(1e10, 0.3, centre=_C0 + np.array([20.0, 0.0, 0.0]))
-        c = CompositeSphericalPotential(p1, p2)
+        c = CompositeSphericalPotential(stars=[p1, p2])
         np.testing.assert_allclose(c.x_min, p2.centre, rtol=0, atol=1e-3)
         assert c.central_potential() <= c.potential(p2.centre[None])[0] < c.potential(p1.centre[None])[0]
 
@@ -436,7 +452,7 @@ class TestWellMinimum:
         p1 = PlummerPotential(1e10, 1.5, centre=_C0)
         p2 = PlummerPotential(8e9, 1.2, centre=_C0 + np.array([2.0, 0.0, 0.0]))
         p3 = PlummerPotential(6e9, 1.0, centre=_C0 + np.array([0.8, 1.8, 0.5]))
-        c = CompositeSphericalPotential(p1, p2, p3)
+        c = CompositeSphericalPotential(stars=[p1, p2, p3])
         a = np.linspace(0.0, 1.0, 1001)
         A, B = (g.reshape(-1, 1) for g in np.meshgrid(a, a, indexing="ij"))
         plane = _C0 + A * (p2.centre - _C0) + B * (p3.centre - _C0)
@@ -448,11 +464,11 @@ class TestWellMinimum:
         from roadrunner.physics.potentials import CompositeSphericalPotential
         nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
         for k in (KeplerPotential(1e9, centre=_C0), KeplerPotential(1e9, centre=_C0 + np.array([1.0, 0.0, 0.0]))):
-            c = CompositeSphericalPotential(nfw, k)
+            c = CompositeSphericalPotential(dark_matter=nfw, stars=k)
             assert np.all(np.isfinite(c.x_min))
             with pytest.raises(NotImplementedError):
                 c.central_potential()
-            c.add(PlummerPotential(1e9, 0.5, centre=_C0 + np.array([0.0, 1.0, 0.0])))
+            c.add("stars", PlummerPotential(1e9, 0.5, centre=_C0 + np.array([0.0, 1.0, 0.0])))
             with pytest.raises(NotImplementedError):
                 c.central_potential()
 
@@ -461,11 +477,11 @@ class TestWellMinimum:
         p1 = PlummerPotential(1e10, 1.0, centre=_C0)
         p2 = PlummerPotential(5e9, 0.8, centre=_C0 + np.array([1.5, 0.5, 0.0]))
         p3 = HernquistPotential(3e9, 0.6, centre=_C0 + np.array([0.3, 1.2, -0.4]))
-        c = CompositeSphericalPotential(p1)
+        c = CompositeSphericalPotential(stars=p1)
         np.testing.assert_array_equal(c.x_min, _C0)
-        c.add(p2)
-        np.testing.assert_array_equal(c.x_min, CompositeSphericalPotential(p1, p2).x_min)
+        c.add("stars", p2)
+        np.testing.assert_array_equal(c.x_min, CompositeSphericalPotential(stars=[p1, p2]).x_min)
         assert not np.array_equal(c.x_min, _C0)
-        d = CompositeSphericalPotential(p1)
-        d.add(p2, p3)
-        np.testing.assert_array_equal(d.x_min, CompositeSphericalPotential(p1, p2, p3).x_min)
+        d = CompositeSphericalPotential(stars=p1)
+        d.add("stars", p2, p3)
+        np.testing.assert_array_equal(d.x_min, CompositeSphericalPotential(stars=[p1, p2, p3]).x_min)

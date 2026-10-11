@@ -38,18 +38,20 @@ class TestPotential:
 
     def test_nfw_comoving_and_offset_components(self):
         from roadrunner._defaults import precision
+        from roadrunner.physics.potentials import CompositeSphericalPotential
         with precision(math="double"):
             z, ls = 3.0, 0.25
             xcen = np.array([100.0, 0.0, 0.0])
             inner = NFWPotential(M=1e12, Rs=10.0, c=10.0, G=4.3e-6, centre=xcen * ls)
-            halo = HaloModel(inner, xcen, VCENTER, RVR, sub_tree_id=1, redshift=z)
+            # a second component at its own centre, 36 snapshot units (9 kpc physical) from the particle
+            star = PlummerPotential(M=1e9, a=0.5, centre=(xcen + np.array([4.0, 0.0, 0.0])) * ls, G=4.3e-6)
+            comp = CompositeSphericalPotential(dark_matter=inner, stars=star)
+            halo = HaloModel(comp, xcen, VCENTER, RVR, sub_tree_id=1, redshift=z)
             xyz = xcen + np.array([[40.0, 0.0, 0.0]])
             r_phys = 40.0 * ls
             expected = inner._potential(np.array([r_phys]))
-            np.testing.assert_allclose(halo.potential(xyz), expected, rtol=1e-12)
-            # a second component at its own centre, 36 snapshot units (9 kpc physical) from the particle
-            star = PlummerPotential(M=1e9, a=0.5, centre=(xcen + np.array([4.0, 0.0, 0.0])) * ls, G=4.3e-6)
-            halo.add_potential(star)
+            single = HaloModel(inner, xcen, VCENTER, RVR, sub_tree_id=1, redshift=z)
+            np.testing.assert_allclose(single.potential(xyz), expected, rtol=1e-12)
             np.testing.assert_allclose(halo.potential(xyz), expected + star._potential(np.array([9.0])), rtol=1e-12)
             v = np.array([[0.0, 30.0, 0.0]])
             np.testing.assert_allclose(halo.compute_energy(xyz, v),
@@ -63,6 +65,9 @@ class TestPotential:
             np.testing.assert_allclose(halo.binding_energy_scale(), -inner.central_potential() - star.central_potential())
             u = halo.energy_fraction(np.array([-0.5]) * halo.binding_energy_scale())
             assert np.all((u > 0) & (u < 1))
+            # the halo holds its own frozen copy: adding to comp afterwards leaves it untouched
+            comp.add("gas", PlummerPotential(M=1e7, a=0.2, centre=xcen * ls, G=4.3e-6))
+            assert len(halo) == 2
 
 
 class TestBoundness:
@@ -173,6 +178,7 @@ class TestFromSnapshotRow:
 class TestWrappers:
     def test_catalogue_coordinates_delegate_to_the_potential_model(self):
         from roadrunner._defaults import precision
+        from roadrunner.physics.potentials import CompositeSphericalPotential
         with precision(math="double"):
             z, ls = 1.0, 0.5
             xcen = np.array([200.0, -40.0, 10.0])
@@ -191,24 +197,27 @@ class TestWrappers:
             np.testing.assert_allclose(halo.distribution_function(E), inner.distribution_function(E), rtol=1e-12)
             assert len(halo) == 1 and halo[0] is inner and list(halo) == [inner]
             star = PlummerPotential(M=1e9, a=0.5, centre=xcen * ls)
-            halo.add_potential(star)
-            assert len(halo) == 2 and halo.potential_model[1] is star
+            halo = HaloModel(CompositeSphericalPotential(dark_matter=inner, stars=star), xcen, VCENTER, RVR,
+                             sub_tree_id=1, redshift=z, search_factor=2.0)
+            assert len(halo) == 2 and halo[0] is inner and halo[1] is star
 
 
 class TestCentreOfMass:
     def test_com_frame_follows_the_components(self):
         from roadrunner._defaults import precision
+        from roadrunner.physics.potentials import CompositeSphericalPotential
         with precision(math="double"):
             z, ls = 1.0, 0.5
             pos, vel = np.array([200.0, -40.0, 10.0]), np.array([100.0, 0.0, -30.0])
             inner = NFWPotential(M=9e11, Rs=10.0, c=10.0, centre=pos * ls, velocity=vel)
-            halo = HaloModel(inner, pos, vel, RVR, sub_tree_id=1, redshift=z)
-            np.testing.assert_allclose(halo.com_centre, pos)
-            np.testing.assert_allclose(halo.com_velocity, vel)
+            single = HaloModel(inner, pos, vel, RVR, sub_tree_id=1, redshift=z)
+            np.testing.assert_allclose(single.com_centre, pos)
+            np.testing.assert_allclose(single.com_velocity, vel)
             # a displaced, moving component: the centre of mass and the energy frame follow it
             star = PlummerPotential(M=1e11, a=0.5, centre=(pos + np.array([20.0, 0.0, 0.0])) * ls,
                                     velocity=vel + np.array([0.0, 50.0, 0.0]))
-            halo.add_potential(star)
+            comp = CompositeSphericalPotential(dark_matter=inner, stars=star)
+            halo = HaloModel(comp, pos, vel, RVR, sub_tree_id=1, redshift=z)
             assert halo.M == 1e12 and halo.tree_mass == 9e11
             np.testing.assert_allclose(halo.com_centre, pos + np.array([2.0, 0.0, 0.0]))
             np.testing.assert_allclose(halo.com_velocity, vel + np.array([0.0, 5.0, 0.0]))

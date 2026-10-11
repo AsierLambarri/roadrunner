@@ -64,7 +64,7 @@ def _make_halo(position, velocity, mass, rvir, rs, hid, redshift=0.1,
     from roadrunner.physics.potentials import get_potential
     inner = get_potential(model, **kwargs)
     return HaloModel(
-        inner=inner, tree_centre=position, tree_velocity=velocity,
+        potential=inner, tree_centre=position, tree_velocity=velocity,
         virial_radius=rvir, sub_tree_id=hid, redshift=redshift,
         comoving=True, search_factor=search_factor,
     )
