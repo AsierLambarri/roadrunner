@@ -131,9 +131,11 @@ Each group is fitted on standardised 6-D phase-space coordinates. One of three p
 The E-step is masked by a latent prior a_nk, the row-normalised plausibility of the particle's boundness (`plausibility`, `clustering/assignment/plausibility.py`), so a particle can only belong to halos it is bound to:
 
 - `rank`: log1p of the boundness rank within each halo.
-- `energy` (NFW only): a likelihood ratio on the particle's rank u in the halo's dark-matter energy distribution. It is a histogram of the previous snapshot's members in t = -ln u (refit between snapshots, outside EM), mixed with Errani et al. (2022)'s tagging ratio, with r½ = 0.015 R_vir, and floored.
-- `phase` (any potential: Kepler in closed form, NFW tabulated): a likelihood ratio on the fraction w of the halo's bound phase space more bound than the particle, with a log-normal member model in t = -ln w. The model is the previous snapshot's members' moments, mixed with circular orbits around r½ = 0.015 R_vir, and floored.
+- `energy` (halo models with a distribution function: NFW, Plummer, Hernquist): a likelihood ratio on the particle's rank u in the halo's dark-matter energy distribution. It is a histogram of the previous snapshot's members in t = -ln u (refit between snapshots, outside EM), mixed with the ratio of an isotropic Hernquist tracer's energy distribution (half-mass radius r½) to the dark matter's, both inverted in the halo's whole potential (the tracer is not part of it), and floored.
+- `phase` (any potential: Kepler in closed form, NFW tabulated): a likelihood ratio on the fraction w of the halo's bound phase space more bound than the particle, with a log-normal member model in t = -ln w. The model is the previous snapshot's members' moments, mixed with circular orbits around r½, and floored.
 - `kinematic` (any potential): co-movement. The particle's speed relative to each halo in units of that halo's escape speed at its position, u² = \|v − v_k\|² / v_esc²(r), so the potential at the particle's position carries no evidence (ν = u³ is uniform for a smooth background). Members follow an isotropic equilibrium tracer, hot or cold (u² ~ Beta(3/2, q+1)). Each halo's ⟨u²⟩ is learned from its previous members and shrunk to the pooled value, mixed with the Wolf et al. (2010) value v_c²/v_esc² at r½, and floored.
+
+r½ is `literature_rhalf`: `kravtsov`, 0.015 R_vir (Kravtsov 2013), or `stars`, the half-mass radius of the halo's stars (`kravtsov` for a halo without stars).
 
 ```
 log r_nk = log a_nk + log π_k + log N(x_n | μ_k, Σ_k) - log Z_n
@@ -217,7 +219,8 @@ All keys are fields of the frozen dataclass `RunConfig` (`src/roadrunner/pipelin
 | Key | Default | Meaning |
 |---|---|---|
 | `halo_model` | `kepler` | Potential: `kepler` or `nfw`. |
-| `plausibility` | `rank` | Latent prior: `rank`, `energy` (NFW only), `phase` or `kinematic`. |
+| `plausibility` | `rank` | Latent prior: `rank`, `energy` (NFW, Plummer or Hernquist halos), `phase` or `kinematic`. |
+| `literature_rhalf` | `kravtsov` | Stellar half-mass radius r½ of the literature priors (`energy`, `phase`, `kinematic`): `kravtsov` (0.015 R_vir) or `stars` (the halo's stars group; `kravtsov` without one). |
 | `search_factor` | `1.0` | Boundness search radius in units of the virial radius. |
 | `comoving` | `true` | Merger-tree and particle lengths are comoving kpc. |
 | `n_los` | `15` | Lines of sight for projected properties. |

@@ -1374,7 +1374,7 @@ def _about(p, method, r, d):
 
 
 # Methods without `density` a single component answers itself, exactly (its closed forms and tables);
-# the energy methods go through the group densities (`_densities`).
+# the energy methods go through the density views (`_densities`: the groups, and tracers on first use).
 _OWN_METHODS = ("orbital_time", "log_phase_space_fraction", "central_potential")
 
 
@@ -1445,6 +1445,42 @@ class _GroupDensity:
         return self._distribution(r_max).log_energy_density(E)
 
 
+class _TracerDensity(_GroupDensity):
+    """A density model in a composite's whole potential: a tracer, no part of the potential.
+
+    Its radial density is the model's own formula read about the composite's ``x_min`` (as a
+    concentric component's); Eddington's inversion of it in the composite's potential and its
+    ``N = f g`` inside ``r_max`` are :class:`_GroupDensity`'s, normalised to the tracer's mass there.
+
+    Parameters
+    ----------
+    composite : CompositeSphericalPotential
+    model : SphericalPotential
+        Provides ``_density(r)`` (physical radii); e.g. a :class:`HernquistPotential`.
+    """
+
+    has_distribution = True
+
+    def __init__(self, composite, model):
+        self._composite, self._model, self._distributions = composite, model, {}
+        self._density = model._density              # read at once: fails here for a non-model (e.g. an unknown group name)
+
+    def __repr__(self):
+        return f"tracer {self._model!r} in {self._composite!r}"
+
+
+class _DensityViews(dict):
+    """A composite's density views: by group name (``None``: the whole composite) and, built on first use, by density model (:class:`_TracerDensity`)."""
+
+    def __init__(self, composite, views):
+        super().__init__(views)
+        self._composite = composite
+
+    def __missing__(self, model):
+        view = self[model] = _TracerDensity(self._composite, model)
+        return view
+
+
 class CompositeSphericalPotential(SphericalPotential):
     """Sum of spherical potentials: the total potential of a halo built from several components.
 
@@ -1476,7 +1512,9 @@ class CompositeSphericalPotential(SphericalPotential):
     dynamical times (``t_i^-2 ∝ M_i(<r)``). :meth:`distribution_function`,
     :meth:`energy_fraction` and :meth:`log_energy_density` take a ``density`` (a group's name):
     that group's density in the whole potential (the two-model Eddington inversion,
-    :class:`_GroupDensity`); the whole composite's when
+    :class:`_GroupDensity`), or a density model: that tracer's density about :attr:`x_min` in the
+    whole potential, no part of it (:class:`_TracerDensity`, built on first use and kept until
+    :meth:`add`); the whole composite's when
     ``None`` or when the group holds every component (then its own, self-consistent
     distribution: a single component's exact closed forms and tables, several components the
     generic :class:`~roadrunner.physics.distribution.SphericalDistribution` of the summed
@@ -1571,8 +1609,8 @@ class CompositeSphericalPotential(SphericalPotential):
             pull = np.nan_to_num(self.G * np.concatenate([p._enclosed_mass(d) for p, d in zip(self._components, offset[:, None])])
                                  / offset**2, nan=np.inf)
         self._offsets = offset * ((offset > CONCENTRIC_OFFSET * scale) & (pull < MONOPOLE_MAX_PULL * slope))
-        self._densities = {None: whole} | {name: whole if len(index) == len(every) else _GroupDensity(self, (name,), index)
-                                           for name, index in self._index.items()}
+        self._densities = _DensityViews(self, {None: whole} | {name: whole if len(index) == len(every) else _GroupDensity(self, (name,), index)
+                                                                for name, index in self._index.items()})
 
     def __repr__(self):
         return f"{type(self).__name__}({', '.join(f'{name}={list(members)!r}' for name, members in self.groups.items())})"
@@ -1716,8 +1754,8 @@ class CompositeSphericalPotential(SphericalPotential):
     def release(self):
         """Drop every cached :class:`~roadrunner.physics.distribution.SphericalDistribution` (U6).
 
-        Clears :attr:`_distributions` on the composite and on every group density (:attr:`_densities`):
-        memory held per ``r_max`` since the last table was read, rebuilt on next use. A single
+        Clears :attr:`_distributions` on the composite and on every density view (groups and tracers)
+        (:attr:`_densities`): memory held per ``r_max`` since the last table was read, rebuilt on next use. A single
         component answers for its own group (:attr:`_densities`'s entry is itself, e.g. a bare
         ``NFWPotential``); clearing a potential with no generic tables (the per-process NFW route)
         is a no-op.
@@ -1731,12 +1769,13 @@ class CompositeSphericalPotential(SphericalPotential):
         Parameters
         ----------
         E : ndarray
-        density : str, optional
+        density : str or density model, optional
             A group's name: that group's density in the whole potential (Eddington's
             inversion of its radial density). The whole composite's when ``None`` or when
             the group holds every component (a single component's own closed forms and
             tables; several, the generic tables of the summed density in the summed
-            potential).
+            potential). Or a density model (``_density(r)``, e.g. a :class:`HernquistPotential`):
+            that tracer about :attr:`x_min` in the whole potential.
 
         Returns
         -------
@@ -1746,8 +1785,8 @@ class CompositeSphericalPotential(SphericalPotential):
         ------
         NotImplementedError
             If a component of that group has no distribution function (Kepler, Shell).
-        KeyError
-            If ``density`` names no group of this composite.
+        AttributeError
+            If ``density`` is neither a group's name nor a density model.
         """
         return self._densities[density].distribution_function(E)
 
@@ -1758,10 +1797,12 @@ class CompositeSphericalPotential(SphericalPotential):
         ----------
         E : ndarray
         r_max : float
-        density : str, optional
+        density : str or density model, optional
             A group's name: that group's density in the whole potential, normalised to its
             own mass inside ``r_max``. The whole composite's when ``None`` or when the group
-            holds every component.
+            holds every component. Or a density model (``_density(r)``, e.g. a
+            :class:`HernquistPotential`): that tracer about :attr:`x_min` in the whole potential,
+            normalised to its own mass inside ``r_max``.
 
         Returns
         -------
@@ -1771,8 +1812,8 @@ class CompositeSphericalPotential(SphericalPotential):
         ------
         NotImplementedError
             If a component of that group has no distribution function (Kepler, Shell).
-        KeyError
-            If ``density`` names no group of this composite.
+        AttributeError
+            If ``density`` is neither a group's name nor a density model.
         """
         return self._densities[density].energy_fraction(E, r_max)
 
@@ -1783,10 +1824,12 @@ class CompositeSphericalPotential(SphericalPotential):
         ----------
         E : ndarray
         r_max : float
-        density : str, optional
+        density : str or density model, optional
             A group's name: that group's density in the whole potential, normalised to its
             own mass inside ``r_max``. The whole composite's when ``None`` or when the group
-            holds every component.
+            holds every component. Or a density model (``_density(r)``, e.g. a
+            :class:`HernquistPotential`): that tracer about :attr:`x_min` in the whole potential,
+            normalised to its own mass inside ``r_max``.
 
         Returns
         -------
@@ -1796,8 +1839,8 @@ class CompositeSphericalPotential(SphericalPotential):
         ------
         NotImplementedError
             If a component of that group has no distribution function (Kepler, Shell).
-        KeyError
-            If ``density`` names no group of this composite.
+        AttributeError
+            If ``density`` is neither a group's name nor a density model.
         """
         return self._densities[density].log_energy_density(E, r_max)
 

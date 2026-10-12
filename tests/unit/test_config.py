@@ -118,3 +118,11 @@ class TestStarsConfig:
             assert RunConfig(stars=value).stars == value
         with pytest.raises(ValueError, match="stars must be"):
             RunConfig(stars="nope")
+
+
+class TestLiteratureRhalfConfig:
+    def test_default_and_validation(self):
+        assert RunConfig().literature_rhalf == "kravtsov"
+        assert RunConfig(literature_rhalf="stars").literature_rhalf == "stars"
+        with pytest.raises(ValueError, match="literature_rhalf must be"):
+            RunConfig(literature_rhalf="nope")

@@ -41,7 +41,7 @@ class HaloModel:
     positions ``xyz`` are made physical (``length_scale``, float64), energies
     ``E`` are physical and pass as they are, and the energy distributions are
     counted inside the halo's search sphere (``search_factor`` virial radii) —
-    of the whole halo or, with ``density``, of one group in the whole potential.
+    of the whole halo or, with ``density``, of one group or of a tracer density model in the whole potential.
     Particle-level results are returned in ``math_dtype()``, the energy
     distributions in float64.
 
@@ -284,15 +284,17 @@ class HaloModel:
         """
         return -self.central_potential()
 
-    def distribution_function(self, E: np.ndarray, density: str = None) -> np.ndarray:
+    def distribution_function(self, E: np.ndarray, density: str | PotentialModel | None = None) -> np.ndarray:
         """Isotropic distribution function ``f(E)`` of the potential model at physical energies.
 
         Parameters
         ----------
         E : ndarray
-        density : str, optional
+        density : str or density model, optional
             A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
-            potential. The whole halo when ``None``.
+            potential. The whole halo when ``None``. Or a density model (e.g. a
+            :class:`~roadrunner.physics.potentials.HernquistPotential`): that tracer in the whole
+            potential, about the bottom of the well.
 
         Returns
         -------
@@ -300,15 +302,17 @@ class HaloModel:
         """
         return self.potential_model.distribution_function(np.asarray(E, dtype=np.float64), density=density)
 
-    def energy_fraction(self, E: np.ndarray, density: str = None) -> np.ndarray:
+    def energy_fraction(self, E: np.ndarray, density: str | PotentialModel | None = None) -> np.ndarray:
         """Fraction of the halo's mass inside the search sphere more bound than the physical energy ``E``.
 
         Parameters
         ----------
         E : ndarray
-        density : str, optional
+        density : str or density model, optional
             A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
-            potential. The whole halo when ``None``.
+            potential. The whole halo when ``None``. Or a density model (e.g. a
+            :class:`~roadrunner.physics.potentials.HernquistPotential`): that tracer in the whole
+            potential, about the bottom of the well.
 
         Returns
         -------
@@ -316,15 +320,17 @@ class HaloModel:
         """
         return self.potential_model.energy_fraction(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
 
-    def log_energy_density(self, E: np.ndarray, density: str = None) -> np.ndarray:
+    def log_energy_density(self, E: np.ndarray, density: str | PotentialModel | None = None) -> np.ndarray:
         """``ln dN/dE``: energy distribution of the halo's mass inside the search sphere, per unit physical ``E``.
 
         Parameters
         ----------
         E : ndarray
-        density : str, optional
+        density : str or density model, optional
             A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
-            potential. The whole halo when ``None``.
+            potential. The whole halo when ``None``. Or a density model (e.g. a
+            :class:`~roadrunner.physics.potentials.HernquistPotential`): that tracer in the whole
+            potential, about the bottom of the well.
 
         Returns
         -------

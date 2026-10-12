@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from scipy.integrate import quad
+from scipy.integrate import quad, trapezoid
 from scipy.optimize import brentq
 from scipy.special import beta
 
@@ -29,7 +29,7 @@ class TestNFWEnergyTables:
         # power-law tail below the deepest node, which completes the normalisation
         t = ed.nfw_energy_tables()
         eps = ed._nfw_nodes(ed.C_GRID)
-        norm = [ed.trapezoid_weights(row) @ np.exp(n) for row, n in zip(eps, t.log_density)]
+        norm = [trapezoid(np.exp(n), row) for row, n in zip(eps, t.log_density)]
         np.testing.assert_allclose(norm + t.cdf[:, -1], 1.0, rtol=1e-10)
         assert np.all(np.diff(t.cdf, axis=1) <= 0)
         np.testing.assert_allclose(t.cdf[:, 0], 1.0)

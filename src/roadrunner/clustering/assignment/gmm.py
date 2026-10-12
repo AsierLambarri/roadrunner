@@ -267,7 +267,10 @@ class XGMMAssigner:
         by ``'svi-bgmm'``.
     plausibility : str, default='rank'
         Latent prior α model (:mod:`.plausibility`): ``'rank'``,
-        ``'energy'`` (NFW halos only), ``'phase'`` or ``'kinematic'``.
+        ``'energy'`` (halo models with a distribution function: NFW, Plummer, Hernquist), ``'phase'`` or ``'kinematic'``.
+    literature_rhalf : str, default='kravtsov'
+        Stellar half-mass radius of the literature priors (:data:`.plausibility.LITERATURE_RHALF`):
+        ``'kravtsov'`` (``0.015 R_vir``) or ``'stars'`` (the halo's ``stars`` group; Kravtsov's without one).
     **mixture_kwargs
         Additional keyword arguments forwarded to the mixture
         constructor (e.g. ``n_svi_iters``, ``batch_size`` for SVI).
@@ -276,7 +279,7 @@ class XGMMAssigner:
     def __init__(self, cov_type="full", max_iter=10, tol=1e-2,
                  min_particles=10, reg_covar=1e-6, prior_type="",
                  verbose=1, method="gmm", use_bgmm_priors=True,
-                 mass_weighting=False, plausibility="rank", **mixture_kwargs):
+                 mass_weighting=False, plausibility="rank", literature_rhalf="kravtsov", **mixture_kwargs):
         self.cov_type = cov_type
         self.max_iter = max_iter
         self.tol = tol
@@ -293,7 +296,7 @@ class XGMMAssigner:
         if mass_weighting and method == "svi-bgmm":
             raise ValueError("mass_weighting is not supported with method='svi-bgmm'")
         self.mass_weighting = mass_weighting
-        self.plausibility = make_plausibility(plausibility)
+        self.plausibility = make_plausibility(plausibility, literature_rhalf)
         self.mixture_kwargs = mixture_kwargs
 
     def assign(self, halos, particle_coords, groups, **kwargs) -> AssignmentResult:

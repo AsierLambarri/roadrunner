@@ -144,6 +144,7 @@ def _run(config, equiv_table, snapshot_reader):
         use_bgmm_priors=config.use_bgmm_priors,
         mass_weighting=config.mass_weighting,
         plausibility=config.plausibility,
+        literature_rhalf=config.literature_rhalf,
         n_svi_iters=config.svi_iters,
         batch_size=config.svi_batch_size,
     )

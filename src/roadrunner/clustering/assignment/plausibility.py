@@ -32,10 +32,11 @@ Models:
   halo's dark matter, on the dark-matter energy rank ``u = F_c(calE)`` (the
   ``dark_matter`` group's energy distribution in the halo's whole
   potential; uniform for the dark matter itself). ``p*`` is a histogram of
-  the previous snapshot's members in ``t = -ln u``, mixed with Errani et
-  al. (2022)'s tagging ratio (exponential galaxies, with ``r_1/2 = 0.015
-  R_vir``, Kravtsov 2013; its ``calE_s`` from the NFW table for a single
-  NFW halo, solved in the halo's own potential otherwise) and floored:
+  the previous snapshot's members in ``t = -ln u``, mixed with the literature
+  ratio ``P* = N*(E) / N_DM(E)`` of an isotropic Hernquist tracer of half-mass
+  radius ``r_1/2`` over the dark matter (Eddington's inversion of the tracer's
+  density in the halo's whole potential, about the bottom of its well; a density
+  only, not part of the potential), both counted inside the search sphere, and floored:
   ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
   ``lam = A / (1 + A)``. Without a histogram yet (first snapshot) ``lam = 1``.
 - ``"phase"`` (any potential): the same ratio on the fraction ``w`` of the
@@ -43,7 +44,7 @@ Models:
   smooth phase-space background, so ``t = -ln w`` is ``Exp(1)``), with a
   log-normal member model ``t ~ Normal(mu*, sigma*)``: the pooled moments of
   the previous snapshot's members mixed with each halo's literature model
-  (circular orbits around ``r_1/2 = 0.015 R_vir``), and floored.
+  (circular orbits around ``r_1/2``), and floored.
 - ``"kinematic"`` (any potential): co-movement. ``u^2 = |v - v_k|^2 / v_esc,k^2(r)``
   at the particle's position, so ``nu = u^3`` is ``U(0, 1)`` for a uniform
   phase-space background there and the potential at that position carries
@@ -53,13 +54,16 @@ Models:
   mixed with the literature value ``v_c^2 / v_esc^2`` at ``r_1/2``
   (Wolf et al. 2010), and floored.
 
+``r_1/2``, the stellar half-mass radius every literature model reads, is chosen by
+``literature_rhalf`` (:data:`LITERATURE_RHALF`): ``"kravtsov"``, ``KRAVTSOV_RHALF R_vir``
+(``0.015 R_vir``, Kravtsov 2013); ``"stars"``, the half-mass radius of the halo's ``stars``
+group (Kravtsov's for a halo without one).
+
 The literature summaries (the circular orbits around ``r_1/2``, ``v_c^2 / v_esc^2`` there and
-the tabulated ``calE_s``) read the halo's spherical profile about the bottom of its well, the
-one the energy and phase tables and the solved ``calE_s`` read; of the summaries, only the kinematic ``u^2``
+the tracer's energy distribution) read the halo's spherical profile about the bottom of its well,
+the one the energy and phase tables read; of the summaries, only the kinematic ``u^2``
 reads the potential at each particle's position.
 """
-
-import functools
 
 import numpy as np
 from scipy.special import betaln, xlog1py
@@ -76,15 +80,10 @@ from roadrunner._defaults import (
     PLAUSIBILITY_PRIOR_WEIGHT,
     PLAUSIBILITY_SHRINK_COUNT,
 )
-from roadrunner.physics.distribution import fraction_inside, nfw_density_of_states, nfw_phi, trapezoid_weights
-from roadrunner.physics.potentials import NFWPotential, POTENTIAL_MODELS
+from roadrunner.physics.potentials import CompositeSphericalPotential, HernquistPotential, POTENTIAL_MODELS
 
-ERRANI_SLOPE = 3.3          # dN*/dcalE ∝ calE^3.3 exp(-(calE / calE_s)^4)
-ERRANI_SHARPNESS = 4.0
 KRAVTSOV_RHALF = 0.015      # stellar half-mass radius / virial radius
-CAL_GRID = np.concatenate([np.geomspace(1e-4, 0.1, 200, endpoint=False), np.linspace(0.1, 1.0 - 1e-4, 200)])
-                            # binding depths of Errani's integrals
-_ERRANI_TRIALS = np.geomspace(1e-3, 0.95, 96)   # trial calE_s of the per-halo solve; 1e-3: the shallowest n* CAL_GRID resolves
+_HALF_MASS_GRID = np.geomspace(1e-3, 1e3, 2401)   # radii of the stars' half-mass search, in their largest scale radius
 _U_MIN = 1e-12              # u floor: t = -ln u <= 27.6
 _LOG_ALPHA_MAX = 50.0       # alpha in [1e-8, e^50]: row sums finite and row ratios
                             # (>= 1e-8 / (K e^50) ~ 1e-30) normal in float32
@@ -121,45 +120,8 @@ def _mixed_alpha(log_lit, log_emp):
     return np.exp(np.minimum(np.logaddexp(_LOG_KEEP + log_mix, _LOG_FLOOR), _LOG_ALPHA_MAX))
 
 
-def _errani_unnormalised(cal, es):
-    """Errani's stellar energy distribution ``calE^a exp(-(calE / calE_s)^b)``, unnormalised."""
-    return cal**ERRANI_SLOPE * np.exp(-(cal / es) ** ERRANI_SHARPNESS)
-
-
-@functools.cache
-def _errani_scales():
-    """Errani ``calE_s`` against the potential depth at the stellar half-mass radius (single NFW halos).
-
-    For each trial scale the stellar distribution function is
-    ``f* = n*(calE) / g(calE)``, its density
-    ``rho*(x) ∝ int f* sqrt(2 (E - phi(x))) dE``, and ``r_1/2`` is read off
-    the enclosed mass. The depth there, ``calE_1/2 = 1 - phi(r_1/2) / phi(0)``,
-    increases with the scale, so ``calE_s`` is tabulated against it. A halo
-    then needs only ``Phi(KRAVTSOV_RHALF R_vir) / Phi_0`` to pick its scale:
-    no profile parameter is read.
-
-    Returns
-    -------
-    cal_half : ndarray of shape (80,)
-        Depth at the half-mass radius, increasing.
-    es : ndarray of shape (80,)
-        Matching ``calE_s``.
-    """
-    es_try = np.geomspace(3e-3, 0.95, 80)
-    x = np.geomspace(1e-4, 10**2.5, 240)
-    tw = trapezoid_weights(CAL_GRID)
-    f_star = (_errani_unnormalised(CAL_GRID[None, :], es_try[:, None])
-              / nfw_density_of_states(CAL_GRID, np.inf)[None, :])
-    kin = np.sqrt(np.clip(2.0 * ((CAL_GRID - 1.0)[None, :] - nfw_phi(x)[:, None]), 0.0, None))
-    rho = (f_star * tw) @ kin.T                                  # (trial, radius)
-    seg = 0.5 * (rho[:, 1:] * x[1:] ** 2 + rho[:, :-1] * x[:-1] ** 2) * np.diff(x)
-    mass = np.concatenate([np.zeros((len(es_try), 1)), np.cumsum(seg, axis=1)], axis=1)
-    r_half = np.array([np.interp(0.5, m / m[-1], x) for m in mass])
-    return 1.0 + nfw_phi(r_half), es_try
-
-
-def _tabulated_errani_scale(halo):
-    """Errani ``calE_s`` of a single NFW halo: the NFW table (:func:`_errani_scales`) at its depth at ``KRAVTSOV_RHALF R_vir``.
+def kravtsov_half_mass_radius(halo):
+    """Kravtsov (2013)'s stellar half-mass radius ``KRAVTSOV_RHALF R_vir`` (catalogue units).
 
     Parameters
     ----------
@@ -167,32 +129,18 @@ def _tabulated_errani_scale(halo):
 
     Returns
     -------
-    es : float
+    r_half : float
     """
-    r_half = np.array([KRAVTSOV_RHALF * halo.virial_radius])
-    depth = 1.0 - float(_summary_potential(halo, r_half)[0]) / halo.central_potential()
-    cal_half, es_try = _errani_scales()
-    return float(np.exp(np.interp(np.log(depth), np.log(cal_half), np.log(es_try))))
+    return KRAVTSOV_RHALF * halo.virial_radius
 
 
-@functools.cache
-def _errani_trial_weights():
-    """Errani's ``n*(calE; calE_s)`` of each trial scale on ``CAL_GRID`` times its trapezoid weights, normalised per trial: shape (96, 400)."""
-    w = _errani_unnormalised(CAL_GRID, _ERRANI_TRIALS[:, None]) * trapezoid_weights(CAL_GRID)
-    return w / w.sum(axis=1, keepdims=True)
+def stars_half_mass_radius(halo):
+    """Half-mass radius of the halo's ``stars`` group (catalogue units); Kravtsov's (:func:`kravtsov_half_mass_radius`) without one.
 
-
-def _solved_errani_scale(halo):
-    """Errani ``calE_s`` placing the stellar half-mass radius at ``KRAVTSOV_RHALF R_vir`` in the halo's own potential.
-
-    The construction of :func:`_errani_scales` in the halo's radial profile about the bottom of
-    its well (``calE`` from ``Φ₀``; the profile's ``Φ̄(0)`` is ``Φ₀`` or deeper), without a radial grid. With
-    ``f* = n* / g`` (``g`` untruncated, as in the table), the stellar mass inside ``R`` is
-    ``∫ f* g_R dE = ∫ n* (g_R / g) dE``. So the fraction inside ``r_1/2`` (physical) of each
-    trial scale is ``n*``'s mean of
-    :func:`~roadrunner.physics.distribution.fraction_inside` on ``CAL_GRID``. It decreases
-    with the scale; ``calE_s`` is where it is 1/2 (linear in ``ln calE_s`` between the trials,
-    held at the ends of ``_ERRANI_TRIALS``).
+    The group as a composite of its own, about its own bottom of the well: the radius where its
+    enclosed mass is half its mass, ``M(<r) = M / 2``, linear between the radii ``_HALF_MASS_GRID``
+    times its components' largest scale radius (a Shell's is its half-mass radius, a Hernquist's or
+    a Plummer's ``a``); physical, made catalogue with ``length_scale``.
 
     Parameters
     ----------
@@ -200,69 +148,61 @@ def _solved_errani_scale(halo):
 
     Returns
     -------
-    es : float
+    r_half : float
     """
-    r_half = KRAVTSOV_RHALF * halo.virial_radius * halo.length_scale
-    inside = fraction_inside(halo.potential_model, halo.central_potential() * (1.0 - CAL_GRID), r_half)
-    half = np.sum(_errani_trial_weights() * inside, axis=1)     # no BLAS gemv here: it stalls ~2 ms after the numba kernel
-    return float(np.exp(np.interp(0.5, half[::-1], np.log(_ERRANI_TRIALS[::-1]))))
+    stars = halo.potential_model.groups.get("stars")
+    if stars is None:
+        return kravtsov_half_mass_radius(halo)
+    group = CompositeSphericalPotential(stars=stars)
+    r = max(p._scale_radius for p in stars) * _HALF_MASS_GRID
+    return float(np.interp(0.5 * group.M, group._enclosed_mass(r), r)) / halo.length_scale
 
 
-_ERRANI_ROUTES = {(NFWPotential,): _tabulated_errani_scale}    # a single NFW reads the table; any other potential is solved
+LITERATURE_RHALF = {"kravtsov": kravtsov_half_mass_radius, "stars": stars_half_mass_radius}   # literature_rhalf -> r_1/2 of a halo
 
 
-def errani_scale(halo):
-    """Errani ``calE_s`` placing the stellar half-mass radius at ``KRAVTSOV_RHALF R_vir``.
+def tracer_log_ratio(halo, E, r_half):
+    """Log literature ratio ``log P* = ln N*(E) - ln N_DM(E)`` of an isotropic stellar tracer over the halo's dark matter.
 
-    A single NFW halo reads the NFW table (:func:`_tabulated_errani_scale`); any other
-    potential is solved in its own radial profile (:func:`_solved_errani_scale`).
+    ``N*`` is the energy distribution of a Hernquist density of half-mass radius ``r_1/2``
+    (``a = r_1/2 / (1 + √2)``; its mass drops out) about the bottom of the well, in the halo's whole
+    potential (Eddington's two-model ``f``, negative values clipped with a warning): a density only,
+    not part of the potential, so the boundness is untouched. ``N_DM`` is the halo's dark matter
+    (group ``dark_matter``) in the same potential. Both are per unit ``E`` and normalised to their
+    mass inside the search sphere, so ``∫ P* N_DM dE = 1`` over the bound energies: ``P*`` is the
+    members' density in ``u``.
 
     Parameters
     ----------
     halo : HaloModel
+    E : ndarray of float64
+        Physical specific orbital energies.
+    r_half : float
+        Stellar half-mass radius (catalogue units, :data:`LITERATURE_RHALF`).
 
     Returns
     -------
-    es : float
+    log_ratio : ndarray of float64
     """
-    return _ERRANI_ROUTES.get(tuple(map(type, halo)), _solved_errani_scale)(halo)
-
-
-def errani_log_ratio(halo, E, es):
-    """Log Errani tagging ratio ``log P* = log n*(calE; es) - log n_DM(calE)`` at physical energies ``E``.
-
-    ``P* = n*(calE; calE_s) / n_DM(calE)`` at ``calE = 1 - E / Φ₀``, both normalised on
-    ``[0, 1]``; ``n_DM`` is the halo's dark matter (group ``dark_matter``) in its whole
-    potential, and its ``ln dN/dE`` becomes ``ln dN/dcalE`` with ``|dE / dcalE| = |Φ₀|``.
-
-    Parameters
-    ----------
-    halo : HaloModel
-        Halo whose potential defines ``central_potential`` and the dark matter's ``log_energy_density``.
-    E : ndarray
-        Physical specific orbital energies (float64).
-    es : float
-        Errani scale (:func:`errani_scale`).
-
-    Returns
-    -------
-    log_ratio : ndarray
-    """
-    phi0 = halo.central_potential()
-    cal = np.clip(1.0 - E / phi0, CAL_GRID[0], CAL_GRID[-1])
-    log_norm = np.log(trapezoid_weights(CAL_GRID) @ _errani_unnormalised(CAL_GRID, es))
-    log_star = ERRANI_SLOPE * np.log(cal) - (cal / es) ** ERRANI_SHARPNESS - log_norm
-    # n_DM per unit calE = per unit E times |dE / dcalE| = |Φ₀|
-    return log_star - (halo.log_energy_density(E, density="dark_matter") + np.log(-phi0))
+    tracer = HernquistPotential(1.0, r_half * halo.length_scale / (1.0 + np.sqrt(2.0)))
+    return halo.log_energy_density(E, density=tracer) - halo.log_energy_density(E, density="dark_matter")
 
 
 class _Plausibility:
-    """Shared interface: per-halo α from a per-pair statistic, mixed and floored alike for every model; a no-op refit and no state."""
+    """Shared interface: per-halo α from a per-pair statistic, mixed and floored alike for every model; a no-op refit and no state.
+
+    Parameters
+    ----------
+    literature_rhalf : {"kravtsov", "stars"}, default="kravtsov"
+        The stellar half-mass radius ``r_1/2`` its literature prior reads (:data:`LITERATURE_RHALF`);
+        unused by ``"rank"``.
+    """
 
     name = ""
     halo_models = HALO_MODELS                 # potential models it works with (config check)
 
-    def __init__(self):
+    def __init__(self, literature_rhalf="kravtsov"):
+        self._half_mass_radius = LITERATURE_RHALF[literature_rhalf]
         self._alpha: dict[int, np.ndarray] = {}
         self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 
@@ -424,13 +364,13 @@ class RankPlausibility(_Plausibility):
 
 
 class EnergyPlausibility(_Plausibility):
-    """Hybrid empirical ``p*(u)``: member histogram in ``t = -ln u`` + Errani prior, floored."""
+    """Hybrid empirical ``p*(u)``: member histogram in ``t = -ln u`` + the tracer prior (:func:`tracer_log_ratio`), floored."""
 
     name = "energy"
     halo_models = tuple(name for name, model in POTENTIAL_MODELS.items() if model.has_distribution)   # the dark matter's u needs f
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, literature_rhalf="kravtsov"):
+        super().__init__(literature_rhalf)
         self._edges: np.ndarray | None = None
         self._log_density: np.ndarray | None = None
 
@@ -441,10 +381,10 @@ class EnergyPlausibility(_Plausibility):
         return self._log_density[b] + tc
 
     def _log_ratios(self, halo, rows, E, coords):
-        """``t = -ln u``; literature: Errani's ratio; empirical: the member histogram's."""
+        """``t = -ln u``; literature: the tracer's ratio at ``r_1/2`` (:func:`tracer_log_ratio`); empirical: the member histogram's."""
         t = -np.log(np.clip(halo.energy_fraction(E, density="dark_matter"), _U_MIN, 1.0))
         log_emp = None if self._edges is None else self._log_pstar(t)
-        return t, errani_log_ratio(halo, E, errani_scale(halo)), log_emp
+        return t, tracer_log_ratio(halo, E, self._half_mass_radius(halo)), log_emp
 
     def update(self, resp_map, weights=None):
         """Refit the member histogram from this snapshot's responsibilities.
@@ -488,7 +428,7 @@ class EnergyPlausibility(_Plausibility):
         return {"edges": self._edges, "log_density": self._log_density}
 
     def set_state(self, state):
-        """Restore the histogram (``None``: start from the Errani prior alone).
+        """Restore the histogram (``None``: start from the tracer prior alone).
 
         Parameters
         ----------
@@ -510,8 +450,7 @@ def _summary_potential(halo, r):
 
     The halo's spherical profile about ``x_min`` (``potential_model._potential``: each component along
     the pathway its composite fixed, its own profile (concentric) or its shell average about ``x_min``
-    (monopole)), the one its energy and phase tables and the
-    solved Errani ``calE_s`` read; for a single potential it is the true potential along any ray.
+    (monopole)), the one its energy and phase tables read; for a single potential it is the true potential along any ray.
 
     Parameters
     ----------
@@ -531,11 +470,10 @@ def _normal_log_pdf(t, mu, sd):
     return -0.5 * ((t - mu) / sd) ** 2 - np.log(sd) - 0.5 * _LOG_2PI
 
 
-def literature_depth(halo):
+def literature_depth(halo, r_half):
     """Literature member model of a halo in ``t = -ln w``, and its width floor.
 
-    Circular orbits at ``r_1/2 = KRAVTSOV_RHALF R_vir`` and at
-    ``r_1/2 * 10^(±s)`` for ``s`` = ``PLAUSIBILITY_LIT_SCATTER_DEX`` and
+    Circular orbits at ``r_1/2`` and at ``r_1/2 * 10^(±s)`` for ``s`` = ``PLAUSIBILITY_LIT_SCATTER_DEX`` and
     ``PLAUSIBILITY_MIN_SCATTER_DEX``, about the bottom of the well in the halo's
     spherical profile (:func:`_summary_potential`): ``v_c^2 = dPhi / d ln r``
     (central difference in ``ln r``), ``E = Phi + v_c^2 / 2``. One potential
@@ -544,6 +482,8 @@ def literature_depth(halo):
     Parameters
     ----------
     halo : HaloModel
+    r_half : float
+        Stellar half-mass radius (catalogue units, :data:`LITERATURE_RHALF`).
 
     Returns
     -------
@@ -555,7 +495,7 @@ def literature_depth(halo):
         Half the depth range over ``± PLAUSIBILITY_MIN_SCATTER_DEX`` dex.
     """
     s1, s2 = PLAUSIBILITY_LIT_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX
-    r = KRAVTSOV_RHALF * halo.virial_radius * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
+    r = r_half * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
     steps = np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
     phi = _summary_potential(halo, (r[:, None] * steps).ravel()).reshape(r.size, 3)
     v2 = (phi[:, 2] - phi[:, 0]) / (2.0 * _FD_STEP)
@@ -575,8 +515,8 @@ class PhaseSpacePlausibility(_Plausibility):
 
     name = "phase"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, literature_rhalf="kravtsov"):
+        super().__init__(literature_rhalf)
         self._mu: float | None = None
         self._sd: float | None = None
         self._sd_min = 0.0
@@ -600,7 +540,7 @@ class PhaseSpacePlausibility(_Plausibility):
 
     def _log_ratios(self, halo, rows, E, coords):
         t = -halo.log_phase_space_fraction(E)
-        mu_l, sd_l, sd_min = literature_depth(halo)
+        mu_l, sd_l, sd_min = literature_depth(halo, self._half_mass_radius(halo))
         self._floors.append(sd_min)
         log_emp = None if self._mu is None else _normal_log_pdf(t, self._mu, self._sd) + t
         return t, _normal_log_pdf(t, mu_l, sd_l) + t, log_emp
@@ -672,23 +612,24 @@ def escape_speed_fraction(halo, rows, coords):
     return np.minimum(v2 / (-2.0 * halo.potential_model.potential(x[:, :3] * halo.length_scale)), 1.0)
 
 
-def literature_speed(halo):
-    """Literature member ``<u^2> = v_c^2 / v_esc^2`` at ``r_1/2 = KRAVTSOV_RHALF R_vir``.
+def literature_speed(halo, r_half):
+    """Literature member ``<u^2> = v_c^2 / v_esc^2`` at ``r_1/2``.
 
     Wolf et al. (2010): ``<v^2> = v_c^2(r_1/2)`` for any isotropic equilibrium
-    tracer, hot or cold; it matches Errani's NFW tracer to 5% for c = 3-30, and
-    Kepler gives 1/2. ``v_c^2 = dPhi / d ln r`` by central difference, in the halo's
+    tracer, hot or cold; Kepler gives 1/2. ``v_c^2 = dPhi / d ln r`` by central difference, in the halo's
     spherical profile about the bottom of its well (:func:`_summary_potential`).
 
     Parameters
     ----------
     halo : HaloModel
+    r_half : float
+        Stellar half-mass radius (catalogue units, :data:`LITERATURE_RHALF`).
 
     Returns
     -------
     m : float
     """
-    r = KRAVTSOV_RHALF * halo.virial_radius * np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
+    r = r_half * np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
     phi = _summary_potential(halo, r)
     return float((phi[2] - phi[0]) / (2.0 * _FD_STEP) / (-2.0 * phi[1]))
 
@@ -726,15 +667,15 @@ class KinematicPlausibility(_Plausibility):
 
     name = "kinematic"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, literature_rhalf="kravtsov"):
+        super().__init__(literature_rhalf)
         self._m_pool: float | None = None
         self._m: dict[int, float] = {}
 
     def _log_ratios(self, halo, rows, E, coords):
         u2 = escape_speed_fraction(halo, rows, coords)
         m = self._m.get(int(halo.sub_tree_id), self._m_pool)
-        return u2, _speed_log_ratio(u2, literature_speed(halo)), None if m is None else _speed_log_ratio(u2, m)
+        return u2, _speed_log_ratio(u2, literature_speed(halo, self._half_mass_radius(halo))), None if m is None else _speed_log_ratio(u2, m)
 
     def update(self, resp_map, weights=None):
         """Refit the pooled and per-halo member ``<u^2>``.
@@ -790,19 +731,24 @@ PLAUSIBILITY_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility, "
                         "kinematic": KinematicPlausibility}
 
 
-def make_plausibility(name):
+def make_plausibility(name, literature_rhalf="kravtsov"):
     """Instantiate a plausibility model by name.
 
     Parameters
     ----------
     name : str
         ``"rank"``, ``"energy"``, ``"phase"`` or ``"kinematic"``.
+    literature_rhalf : str, default="kravtsov"
+        ``r_1/2`` of the literature priors (:data:`LITERATURE_RHALF`): ``"kravtsov"`` or ``"stars"``.
 
     Returns
     -------
     model : RankPlausibility, EnergyPlausibility, PhaseSpacePlausibility or KinematicPlausibility
     """
     try:
-        return PLAUSIBILITY_MODELS[name.lower()]()
+        model = PLAUSIBILITY_MODELS[name.lower()]
     except KeyError:
         raise ValueError(f"Unknown plausibility {name!r}. Choose from: {list(PLAUSIBILITY_MODELS)}")
+    if literature_rhalf not in LITERATURE_RHALF:
+        raise ValueError(f"Unknown literature_rhalf {literature_rhalf!r}. Choose from: {list(LITERATURE_RHALF)}")
+    return model(literature_rhalf)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 
-from roadrunner.clustering.assignment.plausibility import PLAUSIBILITY_MODELS
+from roadrunner.clustering.assignment.plausibility import LITERATURE_RHALF, PLAUSIBILITY_MODELS
 from roadrunner.cosmology import Cosmology
 
 
@@ -49,6 +49,7 @@ class RunConfig:
     svi_batch_size: int = 10000
     halo_model: str = "kepler"
     plausibility: str = "rank"
+    literature_rhalf: str = "kravtsov"
     cov_type: str = "full"
     max_iter: int = 10
     tol: float = 1e-2
@@ -92,6 +93,8 @@ class RunConfig:
         if self.halo_model.lower() not in model.halo_models:
             raise ValueError(f"plausibility='{self.plausibility}' works with halo_model in {model.halo_models}, "
                              f"got '{self.halo_model}'")
+        if self.literature_rhalf not in LITERATURE_RHALF:
+            raise ValueError(f"literature_rhalf must be one of {list(LITERATURE_RHALF)}, got '{self.literature_rhalf}'")
 
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")

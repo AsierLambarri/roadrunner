@@ -85,25 +85,6 @@ _TINY = 2.2250738585072014e-308                 # smallest normal float64
 PROFILE_PLUMMER, PROFILE_HERNQUIST, PROFILE_NFW, PROFILE_SHELL = 0.0, 1.0, 2.0, 3.0   # kinds of profile rows (see profile_phi)
 
 
-def trapezoid_weights(x):
-    """Trapezoid-rule weights: ``integral f dx ≈ trapezoid_weights(x) @ f(x)``.
-
-    Parameters
-    ----------
-    x : ndarray of shape (n,)
-        Increasing abscissae.
-
-    Returns
-    -------
-    w : ndarray of shape (n,)
-    """
-    dx = np.diff(x)
-    w = np.zeros_like(x, dtype=np.float64)
-    w[:-1] += 0.5 * dx
-    w[1:] += 0.5 * dx
-    return w
-
-
 @njit(cache=True)
 def _interp1(x, xp, fp):
     """``np.interp`` at one ``x``: linear between the increasing nodes ``xp``, held at the end nodes (NaN stays NaN)."""
@@ -859,7 +840,6 @@ _SHALLOWEST = 1e-12                            # shallowest node of the generic 
 _GENERIC_NODES = 640, 660                      # nodes deeper and shallower than the kink (see _depth_nodes)
 _APO_NODES = 4000                              # radial nodes (0, then log-spaced 1e-6 R .. R) of the apocentre lookup
 _EDDINGTON_R = np.geomspace(1e-7, 1e16, 23000)  # physical radii (kpc) of the generic Eddington inversion: f to -E ~ 1e-12 |Φ(0)|
-_INSIDE_R = np.concatenate(([0.0], np.geomspace(1e-6, 1e8, 700)))   # radii (units of the radius asked) of fraction_inside's apocentre lookup
 
 
 @njit(cache=True)
@@ -978,9 +958,8 @@ def eddington_distribution_function(background, energy, density=None):
 def _offset_table(potential, r):
     """Split ``potential.profile()`` into concentric and offset rows, and tabulate the offset rows' Φ̄ on ``r`` (U2).
 
-    Shared by every ``q_and_g`` caller: :class:`SphericalDistribution` and :func:`fraction_inside`
-    each call this on their own radial grid (``r[0] = 0``, then geometric), once. The offset rows'
-    shell-averaged potential and its ``d / d ln r`` (finite differences) feed :func:`_offset_phi`'s
+    Called once by :class:`SphericalDistribution`, on its radial grid (``r[0] = 0``, then geometric). The
+    offset rows' shell-averaged potential and its ``d / d ln r`` (finite differences) feed :func:`_offset_phi`'s
     Hermite spline, so the q/g quadratures no longer run a Gauss–Legendre sum per row per node for
     them; the concentric rows stay exact, read straight by :func:`profile_phi`.
 
@@ -1041,41 +1020,6 @@ def q_and_g(potential, profile, energy, x_max, ln_r1, inv_h, phi_off, dphi_off):
     kin2 = np.clip(2.0 * (energy[:, None] - np.asarray(potential._potential(x), dtype=np.float64)), 0.0, None)
     w = 16.0 * np.pi**2 * _WW * 2.0 * x_max[:, None] * _W * x**2
     return np.sum(w * kin2**1.5, axis=-1) / 3.0, np.sum(w * np.sqrt(kin2), axis=-1)
-
-
-def fraction_inside(potential, energy, radius):
-    """Fraction ``g_R(E) / g(E)`` of the orbits of energy ``E`` that lie inside ``radius``.
-
-    ``g`` is the untruncated density of states (:func:`q_and_g` out to the radial apocentre
-    ``r_E``) and ``g_R`` its part inside ``R`` (out to ``min(r_E, R)``): 1 where ``r_E <= R``.
-    The mass inside ``R`` of any isotropic tracer ``f(E)`` is ``∫ f g_R dE``, so with
-    ``N = f g`` its enclosed fraction is ``∫ N (g_R / g) dE``, without a radial grid.
-    Apocentres come from ``potential._potential`` on ``radius`` times :data:`_INSIDE_R`
-    (``r = 0``, then ``1e-6`` to ``1e8``); orbits reaching beyond that are counted out to its
-    end. Energies must lie above ``Φ(0)``, where ``g = 0``. Its own offset table
-    (:func:`_offset_table`, U2) is built fresh each call, on this apocentre grid.
-
-    Parameters
-    ----------
-    potential : SphericalPotential
-        Its radial profile (``_potential``; ``profile()`` makes the quadratures compiled).
-    energy : ndarray of shape (n,)
-        Physical specific energies, above ``Φ(0)``.
-    radius : float
-        Physical radius.
-
-    Returns
-    -------
-    fraction : ndarray of float64, shape (n,)
-    """
-    energy = np.asarray(energy, dtype=np.float64)
-    r = radius * _INSIDE_R
-    apo = np.interp(energy, np.asarray(potential._potential(r), dtype=np.float64), r)
-    profile, ln_r1, inv_h, phi_off, dphi_off = _offset_table(potential, r)
-    _, g = q_and_g(potential, profile, np.concatenate((energy, energy)),
-                   np.concatenate((apo, np.minimum(apo, radius))), ln_r1, inv_h, phi_off, dphi_off)
-    g_all, g_in = g.reshape(2, -1)
-    return g_in / g_all
 
 
 class SphericalDistribution:
