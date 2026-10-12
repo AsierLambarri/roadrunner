@@ -1056,7 +1056,9 @@ class SphericalDistribution:
     - :meth:`log_energy_density`: ``ln N(E)``, per unit ``E``;
     - :meth:`log_phase_space_fraction`: ``ln w(E)``. ``w`` is uniform on
       ``(0, 1]`` for particles spread uniformly in the bound phase space
-      inside ``r_max``.
+      inside ``r_max``;
+    - :meth:`log_phase_space_density`: ``ln dN/dw``, the mass inside
+      ``r_max`` per unit ``w``: its ratio to a uniform phase-space background.
 
     Everything is tabulated over ``eps = E / Φ(0)`` (every potential is
     finite at ``r = 0``) on :func:`_depth_nodes`, from ``calE = 1 - eps =
@@ -1100,7 +1102,7 @@ class SphericalDistribution:
         self._eps = _depth_nodes(self._phi[-1] / self._phi[0], _SHALLOWEST, *_GENERIC_NODES)
         self._energies = self._phi[0] * self._eps                 # physical energies at the nodes
         self._log_w = None
-        self._log_density = self._cdf = None
+        self._log_density = self._cdf = self._log_volume_density = None
         # U2: the offset rows' Φ̄, tabulated on self._r with Hermite slopes; the concentric rows stay exact
         self._profile, self._ln_r1, self._inv_h, self._phi_off, self._dphi_off = _offset_table(potential, self._r)
 
@@ -1146,33 +1148,35 @@ class SphericalDistribution:
         return self._log_w
 
     def _energy_table(self):
-        """``ln N`` per unit ``E`` and its cumulative from the deepest node, built once.
+        """``ln N`` per unit ``E``, its cumulative from the deepest node and ``ln dN/dw``, built once.
 
         ``N = f g`` is normalised so that ``∫ N dE = 1``, with
         ``dE = |Φ(0)| d eps``: over the nodes, plus the power-law tail deeper
-        than ``calE = 1e-6`` (:func:`_deep_tail`).
+        than ``calE = 1e-6`` (:func:`_deep_tail`). Per unit ``w = q / q(0)``
+        (``dw/dE = g / q(0)``) it is ``dN/dw = N q(0) / g = f q(0) / ∫ f g dE``.
 
         Returns
         -------
-        log_n, cdf : ndarray of float64
+        log_n, cdf, log_volume_density : ndarray of float64
         """
         if self._log_density is None:
             f = np.asarray(self._distribution_function(self._energies), dtype=np.float64)
             _, g = self._q_and_g(self._energies)
+            q0, _ = self._q_and_g(np.zeros(1))
             n = f * g
             seg = -self._phi[0] * 0.5 * (n[1:] + n[:-1]) * np.diff(self._eps)
             tail = -self._phi[0] * _deep_tail(n[-2:], 1.0 - self._eps[-2:])
             cdf = np.concatenate((np.cumsum(seg[::-1])[::-1], [0.0])) + tail   # mass more bound than each node
             with np.errstate(divide="ignore"):
                 self._log_density = np.log(n / cdf[0])
+                self._log_volume_density = np.log(f * q0[0] / cdf[0])
             self._cdf = cdf / cdf[0]
-        return self._log_density, self._cdf
+        return self._log_density, self._cdf, self._log_volume_density
 
     def energy_fraction(self, energy):
         """Fraction of the mass inside ``r_max`` more bound than ``E``.
 
-        It is uniform on ``(0, 1)`` for that mass itself, which is the null
-        hypothesis of the ``energy`` plausibility model. It is held at 0 and
+        It is uniform on ``(0, 1)`` for that mass itself. It is held at 0 and
         1 beyond the depth grid.
 
         Parameters
@@ -1201,6 +1205,24 @@ class SphericalDistribution:
         log_n : ndarray of float64
         """
         return table_query(self._scaled(energy), self._eps, self._energy_table()[0])
+
+    def log_phase_space_density(self, energy):
+        """``ln dN/dw``: the mass inside ``r_max`` per unit phase-space fraction ``w`` (:meth:`log_phase_space_fraction`).
+
+        ``dN/dw = f(E) q(0) / ∫ f g dE``, the distribution function over its mean on the bound
+        phase space inside ``r_max``: ``0`` everywhere for a uniform phase-space background, so it
+        is the ratio of this mass to that background. It is held at its end values beyond the depth grid.
+
+        Parameters
+        ----------
+        energy : ndarray
+            Physical specific energies.
+
+        Returns
+        -------
+        log_density : ndarray of float64
+        """
+        return table_query(self._scaled(energy), self._eps, self._energy_table()[2])
 
     def log_phase_space_fraction(self, energy):
         """``ln w = ln q(E) - ln q(0)``: fraction of the bound phase space inside ``r_max`` more bound than ``E``.

@@ -87,12 +87,8 @@ class RunConfig:
         coerces numeric fields to the correct type when provided
         as strings or other types.
         """
-        model = PLAUSIBILITY_MODELS.get(self.plausibility)
-        if model is None:
+        if self.plausibility not in PLAUSIBILITY_MODELS:
             raise ValueError(f"plausibility must be one of {list(PLAUSIBILITY_MODELS)}, got '{self.plausibility}'")
-        if self.halo_model.lower() not in model.halo_models:
-            raise ValueError(f"plausibility='{self.plausibility}' works with halo_model in {model.halo_models}, "
-                             f"got '{self.halo_model}'")
         if self.literature_rhalf not in LITERATURE_RHALF:
             raise ValueError(f"literature_rhalf must be one of {list(LITERATURE_RHALF)}, got '{self.literature_rhalf}'")
 

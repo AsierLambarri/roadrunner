@@ -7,7 +7,6 @@ from scipy.stats import rankdata
 
 from roadrunner._defaults import (
     PLAUSIBILITY_FLOOR,
-    PLAUSIBILITY_LIT_SCATTER_DEX,
     PLAUSIBILITY_MIN_MEMBERS,
     PLAUSIBILITY_MIN_SCATTER_DEX,
     math_dtype,
@@ -24,8 +23,8 @@ from roadrunner.clustering.assignment.plausibility import (
     _FD_STEP,
     _summary_potential,
     kravtsov_half_mass_radius,
-    literature_depth,
     make_plausibility,
+    size_scatter_depth,
     stars_half_mass_radius,
     tracer_log_ratio,
 )
@@ -146,30 +145,33 @@ class TestEnergyPlausibility:
             ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(tracer_log_ratio(h, E.astype(float), KRAVTSOV_RHALF * h.virial_radius)) + PLAUSIBILITY_FLOOR
             np.testing.assert_allclose(alpha, np.minimum(ref, np.exp(50.0)), rtol=1e-6)
 
-    def test_tracer_like_the_dark_matter_gives_a_flat_prior(self):
-        # a Hernquist halo and a Hernquist tracer of the same size: N* = N_DM, so P* = 1 (generic inversion vs the
-        # halo's own closed forms); a unit or counting-radius slip in the tracer's r_1/2 would break it
+    def test_tracer_like_the_halo_is_its_distribution_function(self):
+        # a Hernquist halo and a Hernquist tracer of the same size: P* = f q(0) / M(<r_max), f the halo's own (generic
+        # inversion vs the halo's own route); a unit or counting-radius slip in the tracer's r_1/2 would break it
         dm = HernquistPotential(1e11, 4.0)
         h = HaloModel(dm, np.zeros(3), np.zeros(3), 60.0, sub_tree_id=1, redshift=1.0, comoving=True)   # length_scale 1/2
         E = h.central_potential() * np.array([0.9, 0.5, 0.1, 0.01])
         r_half = (1.0 + np.sqrt(2.0)) * dm.a / h.length_scale                                       # catalogue units
-        np.testing.assert_allclose(tracer_log_ratio(h, E, r_half), 0.0, atol=1e-3)
+        r_max = h._counting_radius()
+        q0 = dm._distribution(r_max)._q_and_g(np.zeros(1))[0][0]
+        ref = np.log(dm.distribution_function(E) * q0 / (dm.M * (r_max / (r_max + dm.a)) ** 2))
+        np.testing.assert_allclose(tracer_log_ratio(h, E, r_half), ref, atol=1e-3)
         with pytest.raises(ValueError, match="literature_rhalf"):
             make_plausibility("energy", "nope")
 
-    def test_tracer_prior_is_normalised_against_the_dark_matter(self):
-        # ∫ P* N_DM dE = ∫ N* dE = 1 over the bound energies; P* finite (so positive); without stars "stars" is Kravtsov's
+    def test_tracer_prior_is_normalised_in_w(self):
+        # ∫ P* dw = ∫ N* dE = 1 over the bound phase space; P* finite (so positive); without stars "stars" is Kravtsov's
         dm = NFWPotential(1e11, 6.0, 10.0)
         shell = ShellPotential(np.random.default_rng(0).normal(0.0, 0.5, (3000, 3)), 1e6)
-        eps = np.unique(np.concatenate([np.geomspace(1e-12, 0.5, 4000), 1.0 - np.geomspace(1e-6, 0.5, 4000)]))
+        eps = np.unique(np.concatenate([np.geomspace(1e-12, 0.5, 4000), 1.0 - np.geomspace(1e-9, 0.5, 4000)]))
         for stars in ({}, {"stars": shell}):
             h = HaloModel(CompositeSphericalPotential(dark_matter=dm, **stars), np.zeros(3), np.zeros(3), 60.0,
                           sub_tree_id=1, redshift=1.0, comoving=True)
             E = h.central_potential() * eps
             log_ratio = tracer_log_ratio(h, E, LITERATURE_RHALF["stars"](h))
             assert np.all(np.isfinite(log_ratio))
-            n_dm = np.exp(h.log_energy_density(E, density="dark_matter"))
-            np.testing.assert_allclose(trapezoid(np.exp(log_ratio) * n_dm, -E), 1.0, rtol=1e-2)
+            log_w = h.log_phase_space_fraction(E)
+            np.testing.assert_allclose(abs(trapezoid(np.exp(log_ratio + log_w), log_w)), 1.0, rtol=1e-2)
 
     @pytest.mark.parametrize("stars", ["none", "free"])
     @pytest.mark.parametrize("literature_rhalf", ["kravtsov", "stars"])
@@ -215,17 +217,15 @@ class TestEnergyPlausibility:
         q.set_state(None)
         assert q.state is None
 
-    def test_energy_model_reads_the_dark_matter(self):
-        h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, 10.0, 1)
-        E = np.array([0.9, 0.5, 0.1]) * h.central_potential()
-        for name in ("energy_fraction", "log_energy_density"):    # DM-only: today's numbers, bit for bit
-            np.testing.assert_array_equal(getattr(h, name)(E, density="dark_matter"), getattr(h, name)(E))
-        hs = HaloModel(CompositeSphericalPotential(dark_matter=h.potential_model[0], stars=HernquistPotential(5e9, 0.5)),
-                       np.zeros(3), np.zeros(3), 60.0, sub_tree_id=2, redshift=0.0, comoving=False)
-        t, _, _ = EnergyPlausibility()._log_ratios(hs, np.arange(3), E, None)
-        u_dm = hs.energy_fraction(E, density="dark_matter")
-        np.testing.assert_array_equal(t, -np.log(np.clip(u_dm, 1e-12, 1.0)))     # 1e-12 = _U_MIN
-        assert not np.allclose(u_dm, hs.energy_fraction(E))
+    def test_first_snapshot_is_the_phase_model(self):
+        # one statistic (t = -ln w), one null, one literature galaxy: before a refit the two models give the same alpha
+        for make in (_two_kepler_halos, _two_nfw_halos):
+            halos, coords = make()
+            energy, phase = EnergyPlausibility(), PhaseSpacePlausibility()
+            energy.prepare(halos, coords)
+            phase.prepare(halos, coords)
+            for h in halos:
+                np.testing.assert_array_equal(*(m.column_values([h.sub_tree_id])[0] for m in (energy, phase)))
 
 
 class TestAssignerWithEnergyPlausibility:
@@ -278,15 +278,12 @@ def _two_kepler_halos(seed=3):
 
 
 class TestPhaseSpacePlausibility:
-    def test_literature_depth_values(self):
+    def test_size_scatter_depth_values(self):
         h = _kepler_halo([0, 0, 0], [0, 0, 0], 1e10, 50.0, 1)
-        mu, sd, sd_min = literature_depth(h, kravtsov_half_mass_radius(h))
-        np.testing.assert_allclose([mu, sd, sd_min], [6.482, 1.382, 0.691], rtol=2e-3)
-        for c, ref in [(3.0, 17.44), (10.0, 14.88), (30.0, 12.80)]:
+        np.testing.assert_allclose(size_scatter_depth(h, kravtsov_half_mass_radius(h)), 0.691, rtol=2e-3)
+        for c in (3.0, 10.0, 30.0):
             h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1)
-            mu, sd, sd_min = literature_depth(h, kravtsov_half_mass_radius(h))
-            np.testing.assert_allclose(mu, ref, rtol=1e-2)
-            assert 1.5 < sd_min < sd                       # NFW: ~1.8-2.0 floor, ~3.6-4.1 width
+            assert 1.5 < size_scatter_depth(h, kravtsov_half_mass_radius(h)) < 2.2   # NFW: ~1.8-2.0
 
     @pytest.mark.parametrize("make", [_two_kepler_halos, _two_nfw_halos])
     def test_alpha_positive_and_literature_only_first(self, make):
@@ -298,10 +295,8 @@ class TestPhaseSpacePlausibility:
             alpha = p.column_values([h.sub_tree_id])[0]
             assert alpha.shape == rows.shape
             assert np.all(np.isfinite(alpha)) and np.all(alpha >= PLAUSIBILITY_FLOOR * (1 - 1e-6))
-            t = -h.log_phase_space_fraction(E.astype(float))
-            mu, sd, _ = literature_depth(h, kravtsov_half_mass_radius(h))
-            ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(-0.5 * ((t - mu) / sd) ** 2 + t) / (sd * np.sqrt(2 * np.pi)) + PLAUSIBILITY_FLOOR
-            np.testing.assert_allclose(alpha, ref, rtol=1e-6)
+            ref = (1 - PLAUSIBILITY_FLOOR) * np.exp(tracer_log_ratio(h, E.astype(float), kravtsov_half_mass_radius(h))) + PLAUSIBILITY_FLOOR
+            np.testing.assert_allclose(alpha, np.minimum(ref, np.exp(50.0)), rtol=1e-6)
 
     def test_update_moments_floor_skip_and_state(self):
         rng = np.random.default_rng(0)
@@ -437,12 +432,22 @@ class TestKinematicPlausibility:
             np.testing.assert_allclose([norm, mom], [1.0, m], rtol=1e-6)
         np.testing.assert_allclose(_speed_log_ratio(np.linspace(0, 0.99, 5), 0.7), 0.0, atol=1e-12)
 
-    def test_literature_speed(self):
-        h = _kepler_halo([0, 0, 0], [0, 0, 0], 1e11, 100.0, 1)
-        np.testing.assert_allclose(literature_speed(h, kravtsov_half_mass_radius(h)), 0.5, rtol=1e-5)
-        for c, ref in [(3.0, 0.0108), (10.0, 0.0334), (30.0, 0.0824)]:
-            h = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, c, 1)
-            np.testing.assert_allclose(literature_speed(h, kravtsov_half_mass_radius(h)), ref, rtol=1e-2)
+    def test_literature_speed_is_the_tracers_mean(self):
+        # Jeans' <u^2> against the direct moment of the tracer's Eddington f on an (r, v / v_esc) grid inside r_max
+        shell = ShellPotential(np.random.default_rng(1).normal(scale=0.5, size=(3000, 3)), np.full(3000, 1e5))
+        for pot in (KeplerPotential(1e10), NFWPotential(1e10, 5.0, 10.0), PlummerPotential(1e10, 2.0),
+                    CompositeSphericalPotential(dark_matter=NFWPotential(1e10, 5.0, 10.0), stars=shell)):
+            h = HaloModel(pot, np.zeros(3), np.zeros(3), 50.0, sub_tree_id=1, redshift=0.0, comoving=False)
+            r_half = kravtsov_half_mass_radius(h)
+            pm, tracer = h.potential_model, HernquistPotential(1.0, r_half / (1.0 + np.sqrt(2.0)))
+            r = np.geomspace(1e-4 * r_half, h.virial_radius, 600)
+            x = np.linspace(0.0, 1.0, 401)[1:-1]                                    # v / v_esc
+            v_esc = np.sqrt(-2.0 * pm._potential(r))
+            f = pm.distribution_function((0.5 * v_esc[:, None] ** 2 * (x**2 - 1.0)).ravel(), density=tracer).reshape(r.size, x.size)
+            n_v = trapezoid(f * x**2, x, axis=1) * v_esc**3                         # ∫ f d^3v / 4 pi
+            u2_v = trapezoid(f * x**4, x, axis=1) * v_esc**3
+            ref = trapezoid(u2_v * r**3, np.log(r)) / trapezoid(n_v * r**3, np.log(r))
+            np.testing.assert_allclose(literature_speed(h, r_half), ref, rtol=3e-3)
 
     @pytest.mark.parametrize("make", [_two_kepler_halos, _two_nfw_halos])
     def test_first_snapshot_is_floored_literature(self, make):
@@ -541,7 +546,7 @@ def test_literature_summaries_read_the_spherical_profile_about_x_min():
     # offset stars: the summaries are the composite's spherical profile about x_min, with
     # v_c^2 = G M(<r) / r (Gauss on the sphere about x_min; FD error ~2e-7), whatever the offset's
     # direction (the true potential along x from the tree centre differed by ~15% between directions)
-    s1, s2 = PLAUSIBILITY_LIT_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX
+    s2 = PLAUSIBILITY_MIN_SCATTER_DEX
     got = []
     for d in ([0.3, 0.0, 0.0], [0.0, -0.3, 0.0], [0.3 / np.sqrt(3.0)] * 3):
         comp = CompositeSphericalPotential(dark_matter=NFWPotential(1e10, 3.0, 10.0),
@@ -549,37 +554,29 @@ def test_literature_summaries_read_the_spherical_profile_about_x_min():
         # comoving at z = 1: r_1/2 is physical (catalogue R_vir times length_scale = 1/2)
         h = HaloModel(comp, np.zeros(3), np.zeros(3), 30.0, sub_tree_id=1, redshift=1.0, comoving=True)
         pm = h.potential_model
-        r = KRAVTSOV_RHALF * h.virial_radius * h.length_scale * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
+        r = KRAVTSOV_RHALF * h.virial_radius * h.length_scale * 10.0 ** np.array([-s2, s2])
         phi, vc2 = pm._potential(r), pm.G * pm._enclosed_mass(r) / r
         t = -h.log_phase_space_fraction(phi + 0.5 * vc2)
-        depth, speed = literature_depth(h, kravtsov_half_mass_radius(h)), literature_speed(h, kravtsov_half_mass_radius(h))
-        np.testing.assert_allclose(depth, [t[0], 0.5 * abs(t[1] - t[2]), 0.5 * abs(t[3] - t[4])], rtol=1e-6)
-        np.testing.assert_allclose(speed, vc2[0] / (-2.0 * phi[0]), rtol=1e-6)
-        got.append((*depth, speed))
+        depth, speed = size_scatter_depth(h, kravtsov_half_mass_radius(h)), literature_speed(h, kravtsov_half_mass_radius(h))
+        np.testing.assert_allclose(depth, 0.5 * abs(t[0] - t[1]), rtol=1e-6)
+        got.append((depth, speed))
     # x_min sits exactly on the NFW cusp (it beats the Plummer pull), so only |d| matters and the directions agree to rounding
     np.testing.assert_allclose(got[1:], [got[0]] * 2, rtol=1e-12)
 
 
-def _head_literature_depth(halo):
-    """``literature_depth`` at a55592e (``r_1/2 = KRAVTSOV_RHALF R_vir`` hard-wired), kept here as the reference."""
-    s1, s2 = PLAUSIBILITY_LIT_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX
+def _head_width_floor(halo):
+    """The width floor of ``literature_depth`` at a55592e (``r_1/2 = KRAVTSOV_RHALF R_vir`` hard-wired), kept here as the reference."""
+    s1, s2 = 0.4, PLAUSIBILITY_MIN_SCATTER_DEX
     r = KRAVTSOV_RHALF * halo.virial_radius * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
     steps = np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
     phi = _summary_potential(halo, (r[:, None] * steps).ravel()).reshape(r.size, 3)
     v2 = (phi[:, 2] - phi[:, 0]) / (2.0 * _FD_STEP)
     t = -halo.log_phase_space_fraction(phi[:, 1] + 0.5 * v2)
-    return float(t[0]), 0.5 * abs(t[1] - t[2]), 0.5 * abs(t[3] - t[4])
-
-
-def _head_literature_speed(halo):
-    """``literature_speed`` at a55592e, kept here as the reference."""
-    r = KRAVTSOV_RHALF * halo.virial_radius * np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
-    phi = _summary_potential(halo, r)
-    return float((phi[2] - phi[0]) / (2.0 * _FD_STEP) / (-2.0 * phi[1]))
+    return 0.5 * abs(t[3] - t[4])
 
 
 class TestLiteratureRhalf:
-    def test_kravtsov_reproduces_the_hard_wired_radius_bit_for_bit(self):
+    def test_kravtsov_reproduces_the_hard_wired_radius_and_floor_bit_for_bit(self):
         offset = CompositeSphericalPotential(dark_matter=NFWPotential(1e10, 3.0, 10.0),
                                              stars=PlummerPotential(2e7, 0.4, centre=np.array([0.3, 0.0, 0.0])))
         halos = [*_two_kepler_halos()[0], *_two_nfw_halos()[0],
@@ -587,8 +584,7 @@ class TestLiteratureRhalf:
         for h in halos:
             r_half = LITERATURE_RHALF["kravtsov"](h)
             assert r_half == KRAVTSOV_RHALF * h.virial_radius
-            assert literature_depth(h, r_half) == _head_literature_depth(h)
-            assert literature_speed(h, r_half) == _head_literature_speed(h)
+            assert size_scatter_depth(h, r_half) == _head_width_floor(h)
 
     def test_stars_reads_the_stars_group_and_falls_back_to_kravtsov(self):
         dm = NFWPotential(1e11, 6.0, 10.0)

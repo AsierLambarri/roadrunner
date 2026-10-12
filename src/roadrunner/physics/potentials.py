@@ -451,6 +451,25 @@ class SphericalPotential(PotentialModel):
         """
         return self._distribution(r_max).log_energy_density(E)
 
+    def log_phase_space_density(self, E, r_max):
+        """``ln dN/dw``: the mass inside ``r_max`` per unit phase-space fraction ``w`` (:meth:`log_phase_space_fraction`).
+
+        ``f`` over its mean on the bound phase space inside ``r_max``: the ratio of this mass to
+        a uniform phase-space background there (``0`` for the background itself). Generic numerical tables.
+
+        Parameters
+        ----------
+        E : ndarray
+            Physical specific energies.
+        r_max : float
+            Counting radius (physical).
+
+        Returns
+        -------
+        log_density : ndarray of float64
+        """
+        return self._distribution(r_max).log_phase_space_density(E)
+
     def log_phase_space_fraction(self, E, r_max):
         """``ln w``: fraction of the bound phase space inside ``r_max`` more bound than ``E``.
 
@@ -1444,6 +1463,10 @@ class _GroupDensity:
         """``ln dN/dE`` of its mass inside ``r_max``, per unit physical ``E``."""
         return self._distribution(r_max).log_energy_density(E)
 
+    def log_phase_space_density(self, E, r_max):
+        """``ln dN/dw`` of its mass inside ``r_max``, per unit fraction ``w`` of the composite's bound phase space there."""
+        return self._distribution(r_max).log_phase_space_density(E)
+
 
 class _TracerDensity(_GroupDensity):
     """A density model in a composite's whole potential: a tracer, no part of the potential.
@@ -1843,6 +1866,32 @@ class CompositeSphericalPotential(SphericalPotential):
             If ``density`` is neither a group's name nor a density model.
         """
         return self._densities[density].log_energy_density(E, r_max)
+
+    def log_phase_space_density(self, E, r_max, density=None):
+        """``ln dN/dw`` of a density's mass inside ``r_max``, per unit fraction ``w`` of the whole bound phase space there.
+
+        Its ratio to a uniform phase-space background inside ``r_max`` (``0`` for the background
+        itself): ``f`` of the density in the whole potential over its mean on that phase space.
+
+        Parameters
+        ----------
+        E : ndarray
+        r_max : float
+        density : str or density model, optional
+            As in :meth:`log_energy_density`.
+
+        Returns
+        -------
+        log_density : ndarray of float64
+
+        Raises
+        ------
+        NotImplementedError
+            If a component of that group has no distribution function (Kepler, Shell).
+        AttributeError
+            If ``density`` is neither a group's name nor a density model.
+        """
+        return self._densities[density].log_phase_space_density(E, r_max)
 
 
 POTENTIAL_MODELS: dict[str, type[SphericalPotential]] = {

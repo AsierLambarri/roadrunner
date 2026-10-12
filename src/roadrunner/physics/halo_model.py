@@ -338,6 +338,24 @@ class HaloModel:
         """
         return self.potential_model.log_energy_density(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
 
+    def log_phase_space_density(self, E: np.ndarray, density: str | PotentialModel | None = None) -> np.ndarray:
+        """``ln dN/dw``: a density's mass inside the search sphere per unit fraction ``w`` of its bound phase space.
+
+        The ratio of that mass to a uniform phase-space background in the search sphere at the
+        physical energy ``E`` (``0`` for the background itself).
+
+        Parameters
+        ----------
+        E : ndarray
+        density : str or density model, optional
+            As in :meth:`log_energy_density`.
+
+        Returns
+        -------
+        log_density : ndarray of float64
+        """
+        return self.potential_model.log_phase_space_density(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
+
     def release_tables(self) -> None:
         """Drop every cached energy/phase-space table of :attr:`potential_model` (U6).
 
