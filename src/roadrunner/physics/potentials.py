@@ -1214,12 +1214,13 @@ class ShellPotential(SphericalPotential):
         coef[-1] = -G * m_in[-1], 0.0
         self._rows.flags.writeable = False         # profile() hands it out; _coef is a view into it
         self._w = max(1, round(tidal_dlnr * self._inv_d))
+        self._r_half = float(1.0 / u[np.searchsorted(m_in, 0.5 * m_in[-1])])   # first node holding half the mass
         super().__init__(float(m_in[-1]), G=G, centre=centre, velocity=velocity)
 
     @property
     def _scale_radius(self):
-        """The length a composite compares this component's offset with (`CONCENTRIC_OFFSET`): its innermost node radius, inside which its potential is flat."""
-        return float(np.exp(self._c))
+        """The length a composite compares this component's offset with (`CONCENTRIC_OFFSET`): its half-mass radius (to a node)."""
+        return self._r_half
 
     def _potential(self, r):
         """Evaluate the potential: :func:`~roadrunner.physics.distribution.profile_potential` of its own tabulated row.

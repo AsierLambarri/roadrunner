@@ -580,13 +580,15 @@ class TestCompositePathways:
         off = _C0 + np.array([4.0, 0.0, 0.0])
         shell = ShellPotential(off + _xyz(rng.uniform(0.01, 10.0, 1000)), 1e5, centre=off)
         nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
-        r = np.array([0.0, 0.5 * shell._scale_radius, 5.0, 50.0])   # 0, inside innermost node, mid, beyond outermost
+        r = np.array([0.0, 0.5 * np.exp(shell._c), 5.0, 50.0])   # 0, inside innermost node, mid, beyond outermost
         np.testing.assert_array_equal([profile_phi(shell.profile(), x) for x in r], shell._potential(r))
         # independent pins: flat Φ0 inside the innermost node, -G M / r beyond the outermost
         assert profile_phi(shell.profile(), 0.0) == shell.central_potential()
-        assert profile_phi(shell.profile(), 0.5 * shell._scale_radius) == shell.central_potential()
+        assert profile_phi(shell.profile(), 0.5 * np.exp(shell._c)) == shell.central_potential()
         np.testing.assert_allclose(profile_phi(shell.profile(), 50.0), -shell.G * shell.M / 50.0, rtol=1e-12)
         assert not shell.profile().flags.writeable
+        # its size for the pathway rule: the half-mass radius, M(<r_1/2) >= M / 2 at the first such node
+        assert shell._enclosed_mass(np.array([shell._scale_radius * 1.001]))[0] >= 0.5 * shell.M > shell._enclosed_mass(np.array([shell._scale_radius * 0.99]))[0]
         c = CompositeSphericalPotential(dark_matter=nfw, stars=shell)
         assert len(c.profile()) == 1 + len(shell.profile())
         np.testing.assert_array_equal(c.profile()[:, 3], np.repeat(c._offsets, [1, len(shell.profile())]))
