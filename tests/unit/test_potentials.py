@@ -335,7 +335,7 @@ class TestPositions:
     def test_centres_and_composite_offsets(self):
         from roadrunner.physics.potentials import CompositeSphericalPotential
         c1, c2 = np.array([1e5, 2e5, -3e4]), np.array([1e5 + 4.0, 2e5, -3e4])
-        nfw, pl = NFWPotential(1e11, 8.0, 10.0, centre=c1), PlummerPotential(1e10, 0.5, centre=c2)
+        nfw, pl = NFWPotential(1e11, 8.0, 10.0, centre=c1), PlummerPotential(1e8, 0.5, centre=c2)
         xyz = c1 + np.array([[3.0, 0.0, 0.0], [0.0, 1e-3, 0.0], [10.0, 5.0, -2.0]])
         r1, r2 = np.linalg.norm(xyz - c1, axis=1), np.linalg.norm(xyz - c2, axis=1)
         np.testing.assert_allclose(nfw.potential(xyz), nfw._potential(r1), rtol=1e-12)
@@ -344,7 +344,7 @@ class TestPositions:
         np.testing.assert_allclose(comp.com_velocity, np.zeros(3), atol=0)
         np.testing.assert_allclose(comp.potential(xyz), nfw._potential(r1) + pl._potential(r2), rtol=1e-12)
         np.testing.assert_allclose(comp.enclosed_mass(xyz), nfw._enclosed_mass(r1) + pl._enclosed_mass(r2), rtol=1e-12)
-        # the radial profile is about x_min (both components off it here: monopole), so Φ̄(0) is the potential there
+        # the radial profile is about x_min (the NFW cusp; the light Plummer 4 kpc off it is on the monopole pathway), so Φ̄(0) is the potential there
         np.testing.assert_allclose(comp._potential(np.zeros(1))[0], comp.central_potential(), rtol=1e-6)
         k = KeplerPotential(1e10, centre=c1)
         np.testing.assert_allclose(k.central_potential(c1 + np.array([0.2, 0.0, 0.0])), -k.G * k.M / 0.2, rtol=1e-9)   # |c1| ~ 1e5
@@ -545,6 +545,23 @@ class TestCompositePathways:
         prof = c.profile()
         np.testing.assert_array_equal(prof[:, 3], c._offsets)
         np.testing.assert_allclose([profile_phi(prof, x) for x in r], c._potential(r), rtol=1e-12)
+
+    def test_monopole_needs_distance_and_a_weak_pull(self):
+        # (a) a light compact Hernquist 2 kpc off the NFW cusp, which holds x_min: far for its size, weak pull -> monopole
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0)
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=HernquistPotential(1e8, 0.3, centre=_C0 + np.array([2.0, 0.0, 0.0])))
+        np.testing.assert_array_equal(c.x_min, _C0)
+        np.testing.assert_array_equal(c._offsets, [0.0, 2.0])
+        # (b) compact Hernquist stars hold the bottom; the massive NFW cusp 1 kpc away is past CONCENTRIC_OFFSET of Rs,
+        # but its pull there (0.38 of the bottom's slope) shapes the bottom: it stays concentric, its own profile about x_min
+        star = HernquistPotential(1.2e9, 1.0, centre=_C0)
+        nfw = NFWPotential(1e11, 8.0, 10.0, centre=_C0 + np.array([1.0, 0.0, 0.0]))
+        c = CompositeSphericalPotential(dark_matter=nfw, stars=star)
+        np.testing.assert_array_equal(c.x_min, star.centre)
+        assert np.linalg.norm(nfw.centre - c.x_min) > CONCENTRIC_OFFSET * nfw.Rs
+        np.testing.assert_array_equal(c._offsets, [0.0, 0.0])
+        r = np.array([0.0, 0.3, 5.0, 80.0])
+        np.testing.assert_array_equal(c._potential(r), nfw._potential(r) + star._potential(r))
 
     def test_compiled_profile_matches_numpy(self):
         # U1: profile_potential/profile_mass against the numpy pathway sum, aligned and offset

@@ -61,8 +61,11 @@ PLAUSIBILITY_MIN_SCATTER_DEX = 0.2 # "phase": sigma* floor, Kravtsov's galaxy-si
 PLAUSIBILITY_SHRINK_COUNT = 100    # "kinematic": prior count shrinking each halo's member <u^2> to the pooled one
 
 # ── Potentials ─────────────────────────────────────────────────────
-CONCENTRIC_OFFSET = 1e-3           # composite potentials: a component closer to the reference centre (x_min) than this
-                                   # many of its scale radii is taken as centred on it; farther ones are shell-averaged
+CONCENTRIC_OFFSET = 0.1            # composite potentials: a component's offset from x_min, in its own scale radii, below
+                                   # which its concentric and monopole pathways are equal (it stays concentric)
+MONOPOLE_MAX_PULL = 0.3            # composite potentials: a component's pull at x_min, G M(<d)/d², over the bottom's slope K,
+                                   # above which the tilt the monopole drops matters (it stays concentric); both thresholds
+                                   # from a sweep of 48 NFW+Hernquist mock galaxies vs the exact phase-space volume (2026-10-12)
 
 # ── Coresets ───────────────────────────────────────────────────────
 CORESET_ALPHA_BASE = 16

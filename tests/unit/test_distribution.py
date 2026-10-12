@@ -215,12 +215,12 @@ class TestCompiledKernels:
             np.testing.assert_allclose(g, g0, rtol=1e-12)
         # U2: offset composites (one row offset, the other concentric -> the Hermite-tabulated q/g
         # path for the offset row) across a few concentrations, companion profiles and offsets;
-        # measured max relative error over this set: q 3.3e-9, g 7.4e-8 (well inside rtol=1e-4)
+        # measured max relative error over this set: q 3.0e-9, g 6.6e-8 (well inside rtol=1e-4)
         for c, Rs in ((10.0, 8.0), (15.0, 6.0)):
             for cls, a in ((PlummerPotential, 0.4), (HernquistPotential, 0.3)):
-                for d_off in (0.3, 1.0):
+                for d_off in (1.5, 3.0):
                     nfw = NFWPotential(1e11, Rs, c)
-                    comp = CompositeSphericalPotential(dark_matter=nfw, stars=cls(2e8, a, centre=np.array([d_off, 0.0, 0.0])))
+                    comp = CompositeSphericalPotential(dark_matter=nfw, stars=cls(3e8, a, centre=np.array([d_off, 0.0, 0.0])))
                     d = ed.SphericalDistribution(comp, 80.0)
                     assert comp._offsets.sum() > 0.0                 # one row (DM or stars) is on the monopole pathway
                     q, g = d._q_and_g(d._energies)

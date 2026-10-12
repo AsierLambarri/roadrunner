@@ -186,7 +186,7 @@ def _solved_errani_scale(halo):
     """Errani ``calE_s`` placing the stellar half-mass radius at ``KRAVTSOV_RHALF R_vir`` in the halo's own potential.
 
     The construction of :func:`_errani_scales` in the halo's radial profile about the bottom of
-    its well (``Φ̄(0) = Φ₀``, the ``calE`` zero point), without a radial grid. With
+    its well (``calE`` from ``Φ₀``; the profile's ``Φ̄(0)`` is ``Φ₀`` or deeper), without a radial grid. With
     ``f* = n* / g`` (``g`` untruncated, as in the table), the stellar mass inside ``R`` is
     ``∫ f* g_R dE = ∫ n* (g_R / g) dE``. So the fraction inside ``r_1/2`` (physical) of each
     trial scale is ``n*``'s mean of
@@ -508,9 +508,9 @@ _FD_STEP = 1e-3                                   # central difference step in l
 def _summary_potential(halo, r):
     """Potential (float64, physical) at catalogue radii ``r`` about the bottom of the well: the radial summaries' input.
 
-    The halo's spherical profile about ``x_min`` (``potential_model._potential``: concentric
-    components exact about their own centres, within ``CONCENTRIC_OFFSET`` of ``x_min``; offset ones
-    shell-averaged), the one its energy and phase tables and the
+    The halo's spherical profile about ``x_min`` (``potential_model._potential``: each component along
+    the pathway its composite fixed, its own profile (concentric) or its shell average about ``x_min``
+    (monopole)), the one its energy and phase tables and the
     solved Errani ``calE_s`` read; for a single potential it is the true potential along any ray.
 
     Parameters

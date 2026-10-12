@@ -34,7 +34,7 @@ from numba import get_num_threads, njit, prange
 from scipy.integrate import cumulative_trapezoid
 from scipy.special import betainc
 
-from roadrunner._defaults import CONCENTRIC_OFFSET
+from roadrunner._defaults import CONCENTRIC_OFFSET, MONOPOLE_MAX_PULL
 from roadrunner._mcf_types import PotentialModel
 from roadrunner.mixture._math import row_squared_norms
 from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
@@ -245,7 +245,7 @@ class SphericalPotential(PotentialModel):
     def central_potential(self, inner=None):
         """Central potential ``Φ₀``: the potential at the bottom of the well, :attr:`x_min`.
 
-        The scale of the binding energies (``-Φ₀``) and the zero point of the energy tables.
+        The scale of the binding energies (``-Φ₀``); a single potential's energy tables start there.
 
         Parameters
         ----------
@@ -1458,11 +1458,16 @@ class CompositeSphericalPotential(SphericalPotential):
     their rows. The public methods take absolute physical positions and measure each
     component from its own ``centre``; the private radial profile (``_potential``, ``_density``,
     ``_enclosed_mass``, :meth:`profile`'s rows) is measured from :attr:`x_min`, each component
-    along one pathway fixed in :meth:`add`: concentric (its own profile) when its offset from
-    ``x_min`` is below :data:`~roadrunner._defaults.CONCENTRIC_OFFSET` of its own scale radius,
-    monopole (its shell average about ``x_min``, :func:`_shell_mean`/:func:`_shell_mass`)
-    otherwise. Its value at ``r = 0`` is therefore :meth:`central_potential`, and the energy
-    tables share the halo's zero point. The central potential is the summed potential at the
+    along one pathway fixed in :meth:`add`: monopole (its shell average about ``x_min``,
+    :func:`_shell_mean`/:func:`_shell_mass`) when it lies farther from ``x_min`` than
+    :data:`~roadrunner._defaults.CONCENTRIC_OFFSET` of its own scale radius and its pull there,
+    ``G M(<d) / d²``, is below :data:`~roadrunner._defaults.MONOPOLE_MAX_PULL` of the bottom's
+    slope; concentric (its own profile, as if centred on ``x_min``) otherwise: only a component
+    far from the bottom for its size and pulling weakly there is shell-averaged, one whose pull
+    shapes the bottom keeps the tilt the monopole would drop. Its value at ``r = 0``, the energy
+    tables' zero point, is :meth:`central_potential` when every concentric component sits at
+    ``x_min``; one off it adds its own ``Φ₀`` there, deeper by its ``Φ(d) - Φ(0)``.
+    The central potential is the summed potential at the
     bottom of the well, :attr:`x_min`, located among the components' centres (each component's
     own ``Φ₀`` when they coincide).
 
@@ -1511,6 +1516,12 @@ class CompositeSphericalPotential(SphericalPotential):
         group densities (:attr:`_densities`) are updated, and its cached distributions are
         dropped, to be rebuilt on next use.
 
+        A component takes the monopole pathway only when it is farther from ``x_min`` than
+        ``CONCENTRIC_OFFSET`` of its scale radius and its pull there is below ``MONOPOLE_MAX_PULL``
+        of the bottom's slope ``K`` (one-sided climbs over ``±s`` on the three axes, averaged, ``s =
+        CONCENTRIC_OFFSET`` of the scale radius of the component nearest ``x_min`` for its size); every
+        other component is concentric.
+
         Parameters
         ----------
         group : str
@@ -1545,9 +1556,20 @@ class CompositeSphericalPotential(SphericalPotential):
             whole = self._components[0]
         centres = np.array([p.centre for p in self._components])
         self.x_min = _locate_minimum(self.potential, centres)
-        # one pathway per component, read by every radial kernel: concentric (offset 0) or monopole about x_min
+        # one pathway per component, read by every radial kernel: concentric (offset 0) or monopole about x_min.
+        # Monopole only far from x_min for its size and pulling weakly there, G M(<d) / d², against the bottom's
+        # slope K: the mean climb (Φ(x_min ± s ê) - Φ(x_min)) / s over the three axes (the gradient cancels in it),
+        # over s = CONCENTRIC_OFFSET of the scale radius of the component nearest x_min for its size (the bottom's):
+        # a cusp's slope, or a core's finite climb over that "near" region (a fixed tiny step would vanish there)
+        scale = np.array([p._scale_radius for p in self._components])
         offset = np.sqrt(row_squared_norms(centres - self.x_min))
-        self._offsets = offset * (offset > CONCENTRIC_OFFSET * np.array([p._scale_radius for p in self._components]))
+        s = CONCENTRIC_OFFSET * scale[np.argmin(offset / scale)]
+        phi = self.potential(self.x_min + s * np.vstack((np.zeros(3), np.eye(3), -np.eye(3))))
+        slope = np.mean(phi[1:] - phi[0]) / s
+        with np.errstate(divide="ignore", invalid="ignore"):     # a component at x_min: 0/0 -> inf, concentric
+            pull = np.nan_to_num(self.G * np.concatenate([p._enclosed_mass(d) for p, d in zip(self._components, offset[:, None])])
+                                 / offset**2, nan=np.inf)
+        self._offsets = offset * ((offset > CONCENTRIC_OFFSET * scale) & (pull < MONOPOLE_MAX_PULL * slope))
         self._densities = {None: whole} | {name: whole if len(index) == len(every) else _GroupDensity(self, (name,), index)
                                            for name, index in self._index.items()}
 

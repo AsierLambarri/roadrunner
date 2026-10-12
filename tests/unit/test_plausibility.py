@@ -493,7 +493,7 @@ def test_literature_summaries_read_the_spherical_profile_about_x_min():
     got = []
     for d in ([0.3, 0.0, 0.0], [0.0, -0.3, 0.0], [0.3 / np.sqrt(3.0)] * 3):
         comp = CompositeSphericalPotential(dark_matter=NFWPotential(1e10, 3.0, 10.0),
-                                           stars=PlummerPotential(2e8, 0.4, centre=np.array(d)))
+                                           stars=PlummerPotential(2e7, 0.4, centre=np.array(d)))
         # comoving at z = 1: r_1/2 is physical (catalogue R_vir times length_scale = 1/2)
         h = HaloModel(comp, np.zeros(3), np.zeros(3), 30.0, sub_tree_id=1, redshift=1.0, comoving=True)
         pm = h.potential_model
