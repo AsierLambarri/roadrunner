@@ -12,11 +12,8 @@
 """Plausibility models: the latent prior α of the assignment fits.
 
 ``alpha[n, k]`` is the plausibility of particle ``n``'s boundness under
-"``n`` belongs to halo ``k``'s galaxy" (model B, soft-label evidence): the halo's
-evidence, next to the galaxy's phase-space model the fits learn. Each model is a
-ratio ``p*(s) / p_0(s)`` of a statistic ``s`` of the pair: members over interlopers,
-spread uniformly in the halo's bound phase space (a smooth background, by
-Liouville). Only bound pairs carry a positive value. Every model reads the physical energies
+"``n`` belongs to halo ``k``'s galaxy" (model B, soft-label evidence). Only
+bound pairs carry a positive value. Every model reads the physical energies
 from :meth:`HaloModel.get_bound` (never the scaled boundness). Every model is
 computed per halo, before the groups are fit, and exposes the same interface:
 
@@ -30,37 +27,41 @@ Models:
 
 - ``"rank"``: ``log1p`` of the ordinal rank of the boundness within each
   halo.
-- ``"energy"`` (any potential): the ratio ``p*(w)`` on the fraction ``w`` of the
-  halo's bound phase space inside the search sphere more bound than the
-  particle (uniform for the background, so ``t = -ln w`` is ``Exp(1)``).
-  ``p*`` is a histogram of the previous snapshot's members in ``t``, mixed with
-  the literature galaxy's ``P* = dN*/dw`` (:func:`tracer_log_ratio`), and floored:
+- ``"energy"`` (any potential): the likelihood ratio ``p*(w)`` of member stars over
+  interlopers spread uniformly in the halo's bound phase space (a smooth background, by
+  Liouville), on the fraction ``w`` of that phase space inside the search sphere more bound
+  than the particle (uniform for the background, so ``t = -ln w`` is ``Exp(1)``, as in
+  ``"phase"``). ``p*`` is a histogram of the previous snapshot's members in ``t``, mixed with
+  the literature ratio ``P* = dN*/dw`` of an isotropic Hernquist tracer of half-mass radius
+  ``r_1/2`` (Eddington's inversion of the tracer's density in the halo's whole potential,
+  about the bottom of its well; a density only, not part of the potential), counted inside
+  the search sphere, and floored:
   ``alpha = (1 - kappa) [(1 - lam) h(t) e^t + lam P*] + kappa``,
   ``lam = A / (1 + A)``. Without a histogram yet (first snapshot) ``lam = 1``.
-- ``"phase"`` (any potential): the same statistic and literature galaxy, with a
-  log-normal empirical member model ``t ~ Normal(mu*, sigma*)``: the pooled
-  moments of the previous snapshot's members, mixed with ``P*`` and floored.
+- ``"phase"`` (any potential): the same ratio on the fraction ``w`` of the
+  halo's bound phase space more bound than the particle (uniform for a
+  smooth phase-space background, so ``t = -ln w`` is ``Exp(1)``), with a
+  log-normal member model ``t ~ Normal(mu*, sigma*)``: the pooled moments of
+  the previous snapshot's members mixed with each halo's literature model
+  (circular orbits around ``r_1/2``), and floored.
 - ``"kinematic"`` (any potential): co-movement. ``u^2 = |v - v_k|^2 / v_esc,k^2(r)``
-  at the particle's position, so ``nu = u^3`` is ``U(0, 1)`` for the background
-  there and the potential at that position carries no evidence. Members follow
-  an isotropic equilibrium tracer ``f ∝ (-E)^q`` (``u^2 ~ Beta(3/2, q + 1)``, hot
-  or cold), with each halo's ``<u^2>`` from its previous-snapshot members shrunk
-  to the pooled value, mixed with the literature galaxy's ``<u^2>``
-  (:func:`literature_speed`), and floored.
-
-The literature galaxy, one for every model: an isotropic Hernquist tracer of
-half-mass radius ``r_1/2`` in equilibrium in the halo's whole potential, about
-the bottom of its well, counted inside the search sphere (a density only, not
-part of the potential).
+  at the particle's position, so ``nu = u^3`` is ``U(0, 1)`` for a uniform
+  phase-space background there and the potential at that position carries
+  no evidence. Members follow an isotropic equilibrium tracer
+  ``f ∝ (-E)^q`` (``u^2 ~ Beta(3/2, q + 1)``, hot or cold), with each halo's
+  ``<u^2>`` from its previous-snapshot members shrunk to the pooled value,
+  mixed with the literature value ``v_c^2 / v_esc^2`` at ``r_1/2``
+  (Wolf et al. 2010), and floored.
 
 ``r_1/2``, the stellar half-mass radius every literature model reads, is chosen by
 ``literature_rhalf`` (:data:`LITERATURE_RHALF`): ``"kravtsov"``, ``KRAVTSOV_RHALF R_vir``
 (``0.015 R_vir``, Kravtsov 2013); ``"stars"``, the half-mass radius of the halo's ``stars``
 group (Kravtsov's for a halo without one).
 
-The literature galaxy (its ``dN*/dw`` and ``<u^2>``) and the phase model's width floor read the
-halo's spherical profile about the bottom of its well, the one the phase-space tables read; only
-the kinematic ``u^2`` reads the potential at each particle's position.
+The literature summaries (the circular orbits around ``r_1/2``, ``v_c^2 / v_esc^2`` there and
+the tracer's ``dN*/dw``) read the halo's spherical profile about the bottom of its well,
+the one the energy and phase tables read; of the summaries, only the kinematic ``u^2``
+reads the potential at each particle's position.
 """
 
 import numpy as np
@@ -70,6 +71,7 @@ from scipy.stats import rankdata
 from roadrunner._defaults import (
     math_dtype,
     PLAUSIBILITY_FLOOR,
+    PLAUSIBILITY_LIT_SCATTER_DEX,
     PLAUSIBILITY_MAX_BINS,
     PLAUSIBILITY_MIN_BINS,
     PLAUSIBILITY_MIN_MEMBERS,
@@ -156,20 +158,16 @@ def stars_half_mass_radius(halo):
 LITERATURE_RHALF = {"kravtsov": kravtsov_half_mass_radius, "stars": stars_half_mass_radius}   # literature_rhalf -> r_1/2 of a halo
 
 
-def _tracer(halo, r_half):
-    """The literature galaxy's density: a Hernquist model of half-mass radius ``r_1/2`` (``a = r_1/2 / (1 + √2)``; physical; its mass drops out)."""
-    return HernquistPotential(1.0, r_half * halo.length_scale / (1.0 + np.sqrt(2.0)))
-
-
 def tracer_log_ratio(halo, E, r_half):
-    """Log literature ratio ``log P* = ln dN*/dw`` of the literature galaxy over a uniform phase-space background.
+    """Log literature ratio ``log P* = ln dN*/dw`` of an isotropic stellar tracer over a uniform phase-space background.
 
     ``N*`` is the energy distribution of a Hernquist density of half-mass radius ``r_1/2``
-    (:func:`_tracer`) about the bottom of the well, in the halo's whole potential (Eddington's
-    two-model ``f*``, negative values clipped with a warning): a density only, not part of the
-    potential, so the boundness is untouched. Per unit fraction ``w`` of the bound phase space inside
-    the search sphere, ``dN*/dw = f* q(0) / ∫ f* g dE``: ``f*`` over its mean there, the ratio to
-    interlopers spread uniformly in that phase space (``w ~ U(0, 1]``), with ``∫ P* dw = 1``.
+    (``a = r_1/2 / (1 + √2)``; its mass drops out) about the bottom of the well, in the halo's whole
+    potential (Eddington's two-model ``f*``, negative values clipped with a warning): a density only,
+    not part of the potential, so the boundness is untouched. Per unit fraction ``w`` of the bound
+    phase space inside the search sphere, ``dN*/dw = f* q(0) / ∫ f* g dE``: ``f*`` over its mean
+    there, the ratio to interlopers spread uniformly in that phase space (``w ~ U(0, 1]``), with
+    ``∫ P* dw = 1``.
 
     Parameters
     ----------
@@ -183,7 +181,8 @@ def tracer_log_ratio(halo, E, r_half):
     -------
     log_ratio : ndarray of float64
     """
-    return halo.log_phase_space_density(E, density=_tracer(halo, r_half))
+    tracer = HernquistPotential(1.0, r_half * halo.length_scale / (1.0 + np.sqrt(2.0)))
+    return halo.log_phase_space_density(E, density=tracer)
 
 
 class _Plausibility:
@@ -466,14 +465,14 @@ def _normal_log_pdf(t, mu, sd):
     return -0.5 * ((t - mu) / sd) ** 2 - np.log(sd) - 0.5 * _LOG_2PI
 
 
-def size_scatter_depth(halo, r_half):
-    """Width floor of the members' depth ``t = -ln w``: Kravtsov's galaxy-size scatter mapped to depth.
+def literature_depth(halo, r_half):
+    """Literature member model of a halo in ``t = -ln w``, and its width floor.
 
-    Half the depth range of the circular orbits at ``r_1/2 * 10^(±s)``, ``s`` =
-    ``PLAUSIBILITY_MIN_SCATTER_DEX``, about the bottom of the well in the halo's spherical profile
-    (:func:`_summary_potential`): ``v_c^2 = dPhi / d ln r`` (central difference in ``ln r``),
-    ``E = Phi + v_c^2 / 2``. How far the members' depth moves when the galaxy's size scatters
-    at fixed halo. One potential call and one phase-space call per halo.
+    Circular orbits at ``r_1/2`` and at ``r_1/2 * 10^(±s)`` for ``s`` = ``PLAUSIBILITY_LIT_SCATTER_DEX`` and
+    ``PLAUSIBILITY_MIN_SCATTER_DEX``, about the bottom of the well in the halo's
+    spherical profile (:func:`_summary_potential`): ``v_c^2 = dPhi / d ln r``
+    (central difference in ``ln r``), ``E = Phi + v_c^2 / 2``. One potential
+    call and one phase-space call per halo.
 
     Parameters
     ----------
@@ -483,14 +482,20 @@ def size_scatter_depth(halo, r_half):
 
     Returns
     -------
+    mu : float
+        Depth of the ``r_1/2`` circular orbit.
+    sd : float
+        Half the depth range over ``± PLAUSIBILITY_LIT_SCATTER_DEX`` dex.
     sd_min : float
+        Half the depth range over ``± PLAUSIBILITY_MIN_SCATTER_DEX`` dex.
     """
-    r = r_half * 10.0 ** np.array([-PLAUSIBILITY_MIN_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX])
+    s1, s2 = PLAUSIBILITY_LIT_SCATTER_DEX, PLAUSIBILITY_MIN_SCATTER_DEX
+    r = r_half * 10.0 ** np.array([0.0, -s1, s1, -s2, s2])
     steps = np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
     phi = _summary_potential(halo, (r[:, None] * steps).ravel()).reshape(r.size, 3)
     v2 = (phi[:, 2] - phi[:, 0]) / (2.0 * _FD_STEP)
     t = -halo.log_phase_space_fraction(phi[:, 1] + 0.5 * v2)
-    return 0.5 * abs(t[0] - t[1])
+    return float(t[0]), 0.5 * abs(t[1] - t[2]), 0.5 * abs(t[3] - t[4])
 
 
 class PhaseSpacePlausibility(_Plausibility):
@@ -499,8 +504,8 @@ class PhaseSpacePlausibility(_Plausibility):
     ``t = -ln w`` is ``Exp(1)`` for a uniform phase-space background, so
     ``alpha = p*(t) e^t``. ``p*`` mixes the pooled empirical
     ``Normal(mu*, sigma*)`` of the previous snapshot's members (weight
-    ``1 - lam``) with the literature galaxy's ``P*`` (:func:`tracer_log_ratio`,
-    weight ``lam``), and is floored like the energy model.
+    ``1 - lam``) with each halo's literature Normal (weight ``lam``), and is
+    floored like the energy model.
     """
 
     name = "phase"
@@ -513,8 +518,8 @@ class PhaseSpacePlausibility(_Plausibility):
         self._floors: list[float] = []
 
     def prepare(self, halos, coords):
-        """Compute α; also records this snapshot's width floor (median over halos of
-        :func:`size_scatter_depth`, so the floor follows the potential family).
+        """Compute α; also records this snapshot's width floor (median over halos of the
+        ``PLAUSIBILITY_MIN_SCATTER_DEX`` depth spread, so the floor follows the potential family).
 
         Parameters
         ----------
@@ -530,10 +535,10 @@ class PhaseSpacePlausibility(_Plausibility):
 
     def _log_ratios(self, halo, rows, E, coords):
         t = -halo.log_phase_space_fraction(E)
-        r_half = self._half_mass_radius(halo)
-        self._floors.append(size_scatter_depth(halo, r_half))
+        mu_l, sd_l, sd_min = literature_depth(halo, self._half_mass_radius(halo))
+        self._floors.append(sd_min)
         log_emp = None if self._mu is None else _normal_log_pdf(t, self._mu, self._sd) + t
-        return t, tracer_log_ratio(halo, E, r_half), log_emp
+        return t, _normal_log_pdf(t, mu_l, sd_l) + t, log_emp
 
     def update(self, resp_map, weights=None):
         """Refit ``(mu*, sigma*)`` as weighted moments of this snapshot's member depths.
@@ -573,7 +578,6 @@ class PhaseSpacePlausibility(_Plausibility):
 
 
 _LOG_2_3 = np.log(2.0 / 3.0)
-_JEANS_NODES = 400                                # radii of the literature <u^2>, inside and outside the search sphere
 
 
 def escape_speed_fraction(halo, rows, coords):
@@ -603,21 +607,12 @@ def escape_speed_fraction(halo, rows, coords):
     return np.minimum(v2 / (-2.0 * halo.potential_model.potential(x[:, :3] * halo.length_scale)), 1.0)
 
 
-def _trapezoid(y, x):
-    """Trapezoid integral of ``y`` over ``x``."""
-    return float(np.sum(0.5 * (y[1:] + y[:-1]) * np.diff(x)))
-
-
 def literature_speed(halo, r_half):
-    """Literature member ``<u^2>``: the literature galaxy's mean ``v^2 / v_esc^2`` inside the search sphere.
+    """Literature member ``<u^2> = v_c^2 / v_esc^2`` at ``r_1/2``.
 
-    The tracer of :func:`tracer_log_ratio` (isotropic, in equilibrium in the halo's spherical
-    profile about the bottom of its well, :func:`_summary_potential`). Jeans' equation,
-    ``rho sigma^2 (r) = ∫_r^∞ rho v_c^2 d ln r'`` with ``v_c^2 = dPhi / d ln r`` (central
-    difference), gives ``<v^2>(r) = 3 sigma^2``, so
-    ``<u^2> = ∫ 3 rho sigma^2 / (-2 Phi) r^3 d ln r / ∫ rho r^3 d ln r`` over ``r < r_max``:
-    trapezoids in ``ln r`` from ``1e-4 r_1/2``, the Jeans integral out to ``1e3`` times the larger of
-    ``r_max`` and ``r_1/2``. One potential call per halo.
+    Wolf et al. (2010): ``<v^2> = v_c^2(r_1/2)`` for any isotropic equilibrium
+    tracer, hot or cold; Kepler gives 1/2. ``v_c^2 = dPhi / d ln r`` by central difference, in the halo's
+    spherical profile about the bottom of its well (:func:`_summary_potential`).
 
     Parameters
     ----------
@@ -629,18 +624,9 @@ def literature_speed(halo, r_half):
     -------
     m : float
     """
-    r_max = halo.search_factor * halo.virial_radius
-    r = np.stack((np.geomspace(1e-4 * r_half, r_max, _JEANS_NODES),                  # inside the search sphere
-                  np.geomspace(r_max, 1e3 * max(r_max, r_half), _JEANS_NODES)))     # outside it
-    steps = np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
-    phi = _summary_potential(halo, (r[..., None] * steps).ravel()).reshape(*r.shape, 3)
-    rho = np.asarray(_tracer(halo, r_half)._density(r * halo.length_scale), dtype=np.float64)
-    ln_r = np.log(r)
-    jeans = rho * (phi[..., 2] - phi[..., 0]) / (2.0 * _FD_STEP)                    # rho v_c^2
-    seg = 0.5 * (jeans[:, 1:] + jeans[:, :-1]) * np.diff(ln_r, axis=-1)
-    pressure = np.concatenate((np.cumsum(seg[0, ::-1])[::-1], [0.0])) + seg[1].sum()   # rho sigma^2 inside: ∫_r^∞ rho v_c^2 d ln r
-    return (_trapezoid(3.0 * pressure * r[0]**3 / (-2.0 * phi[0, :, 1]), ln_r[0])
-            / _trapezoid(rho[0] * r[0]**3, ln_r[0]))
+    r = r_half * np.exp(np.array([-_FD_STEP, 0.0, _FD_STEP]))
+    phi = _summary_potential(halo, r)
+    return float((phi[2] - phi[0]) / (2.0 * _FD_STEP) / (-2.0 * phi[1]))
 
 
 def _speed_log_ratio(u2, m):
