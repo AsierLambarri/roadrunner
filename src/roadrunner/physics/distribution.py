@@ -901,6 +901,23 @@ def _eddington_preprocess(r, psi, rho, dpsi):
     return psi_kept, d2_kept
 
 
+class NegativeDistributionWarning(RuntimeWarning):
+    """Eddington's ``f`` was negative, and clipped to 0, for a density with no isotropic equilibrium in its potential there.
+
+    It carries what the pipeline needs to summarise all of a snapshot's in one warning: which density
+    in which potential, how many energies, how deep (``E / Φ(0)``) and an upper bound on the share of
+    the density's mass at those energies (its mass inside the radius their orbits reach).
+    """
+
+    def __init__(self, density, background, n_negative, n, eps_range, mass_fraction):
+        self.density, self.background = repr(density), repr(background)
+        self.n_negative, self.n, self.eps_range, self.mass_fraction = n_negative, n, eps_range, mass_fraction
+        super().__init__(
+            f"Eddington's f of {self.density} in the potential of {self.background} is negative at {n_negative} of "
+            f"{n} energies (E / Φ(0) from {eps_range[0]:.3g} to {eps_range[1]:.3g}; at most {mass_fraction:.1e} of its "
+            "mass): this density has no isotropic equilibrium in this potential there; f is clipped to 0.")
+
+
 def eddington_distribution_function(background, energy, density=None):
     """Isotropic distribution function ``f(E)`` of a density in a potential's equilibrium.
 
@@ -918,7 +935,8 @@ def eddington_distribution_function(background, energy, density=None):
 
     ``f`` may be negative for a density in another potential (no isotropic
     equilibrium there, e.g. a cored density in a cusp); it is clipped to 0
-    with a ``RuntimeWarning``.
+    with a :class:`NegativeDistributionWarning` (the pipeline summarises a
+    snapshot's in one line).
 
     Parameters
     ----------
@@ -935,7 +953,8 @@ def eddington_distribution_function(background, energy, density=None):
     """
     density = background if density is None else density
     r = _EDDINGTON_R
-    psi = -_radial_potential(background, r)
+    phi_r = _radial_potential(background, r)
+    psi = -phi_r
     dpsi = -_radial_mass(background, r) / r**2
     with np.errstate(divide="ignore", invalid="ignore"):
         rho = np.asarray(density._density(r), dtype=np.float64)
@@ -946,12 +965,14 @@ def eddington_distribution_function(background, energy, density=None):
     negative = f < 0.0
     if negative.any():
         eps = energy / phi0
-        warnings.warn(
-            f"Eddington's f of {density!r} in the potential of {background!r} is negative at "
-            f"{np.count_nonzero(negative)} of {f.size} energies (E / Φ(0) from "
-            f"{np.min(eps, where=negative, initial=np.inf):.3g} to {np.max(eps, where=negative, initial=-np.inf):.3g}, "
-            f"min f / max |f| = {f.min() / np.abs(f).max():.2g}): this density has no isotropic equilibrium in this "
-            "potential there; f is clipped to 0.", RuntimeWarning, stacklevel=2)
+        # orbits up to the least bound clipped energy stay inside r_E: the density's mass there bounds the share affected
+        dm = np.nan_to_num(4.0 * np.pi * r**2 * rho, posinf=0.0)
+        mass = np.concatenate(([0.0], np.cumsum(0.5 * np.diff(r) * (dm[1:] + dm[:-1]))))
+        r_e = np.interp(np.max(energy, where=negative, initial=-np.inf), phi_r, r)
+        warnings.warn(NegativeDistributionWarning(
+            density, background, int(np.count_nonzero(negative)), f.size,
+            (float(np.min(eps, where=negative, initial=np.inf)), float(np.max(eps, where=negative, initial=-np.inf))),
+            float(np.interp(r_e, r, mass) / mass[-1])), stacklevel=2)
     return np.maximum(f, 0.0)
 
 

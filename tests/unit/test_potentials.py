@@ -665,3 +665,44 @@ class TestRelease:
         assert not c._distributions and not c._densities["dark_matter"]._distributions
         np.testing.assert_array_equal(c.log_phase_space_fraction(E, R), before_w)
         np.testing.assert_array_equal(c.energy_fraction(E, R, density="dark_matter"), before_u)
+
+
+class TestMultiComponentValidity:
+    """End-to-end checks of the multi-component machinery (2026-10-12 validity study)."""
+
+    def test_a_halo_split_in_pieces_is_the_same_halo(self):
+        one = NFWPotential(1e11, 20.0, 10.0)
+        for split in (CompositeSphericalPotential(dark_matter=[NFWPotential(5e10, 20.0, 10.0)] * 2),
+                      CompositeSphericalPotential(dark_matter=[NFWPotential(1e11 / 3, 20.0, 10.0)] * 3)):
+            r = np.geomspace(1e-3, 400.0, 30)
+            np.testing.assert_allclose(split._potential(r), one._potential(r), rtol=1e-14)
+            E = one.central_potential() * (1.0 - np.geomspace(1e-5, 1.0 - 1e-6, 60))
+            np.testing.assert_allclose(split.distribution_function(E), one.distribution_function(E), rtol=1e-9)
+
+    def test_uniform_bound_phase_space_is_uniform_in_w_for_an_offset_composite(self):
+        # positions ∝ r² (-Φ̄)^(3/2) d r and speeds uniform in the escape ball, in the composite's spherical profile
+        # about x_min (the light Plummer 4 kpc off the NFW cusp is on the monopole pathway)
+        c = CompositeSphericalPotential(dark_matter=NFWPotential(1e11, 8.0, 10.0, centre=_C0),
+                                        stars=PlummerPotential(1e8, 0.5, centre=_C0 + np.array([4.0, 0.0, 0.0])))
+        assert c._offsets[1] > 0.0
+        R, rng = 20.0, np.random.default_rng(5)
+        r_grid = np.concatenate([[0.0], np.geomspace(1e-6, R, 200001)])
+        cdf = np.cumsum(r_grid**3 * (-c._potential(r_grid)) ** 1.5)          # r² dr, dr ∝ r on the geometric grid
+        cdf /= cdf[-1]
+        r = np.interp(rng.uniform(size=40000), cdf, r_grid)
+        phi = c._potential(r)
+        v = np.sqrt(-2.0 * phi) * rng.uniform(size=r.size) ** (1.0 / 3.0)
+        w = np.exp(c.log_phase_space_fraction(phi + 0.5 * v**2, R))
+        np.testing.assert_allclose(np.quantile(w, [0.1, 0.5, 0.9]), [0.1, 0.5, 0.9], atol=0.01)
+
+    def test_offset_massive_cusp_is_concentric_and_its_dark_matter_inverts_cleanly(self):
+        # compact stars hold the bottom, the diffuse NFW cusp sits 0.54 kpc off: it pulls strongly there, so the rule keeps
+        # it concentric, and its own inversion has no shell-averaged kink (that gave negative f on the monopole pathway)
+        c = CompositeSphericalPotential(dark_matter=NFWPotential(1e11, 20.0, 10.0),
+                                        stars=HernquistPotential(3e9, 0.5, centre=np.array([0.5, 0.2, 0.0])))
+        np.testing.assert_array_equal(c._offsets, [0.0, 0.0])
+        E = c.central_potential() * (1.0 - np.geomspace(1e-7, 1.0 - 1e-7, 300))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            assert np.all(c.distribution_function(E, density="dark_matter") >= 0.0)
+

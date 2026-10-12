@@ -159,9 +159,27 @@ class TestTwoModelInversion:
         from roadrunner.physics.potentials import NFWPotential, PlummerPotential
         nfw = NFWPotential(1e11, 8.0, 10.0)
         E = nfw.central_potential() * (1.0 - np.geomspace(1e-6, 1e-1, 30))
-        with pytest.warns(RuntimeWarning, match="negative"):
+        with pytest.warns(ed.NegativeDistributionWarning, match="negative") as caught:
             f = ed.eddington_distribution_function(nfw, E, density=PlummerPotential(1e9, 0.5))
         assert np.all(f >= 0.0) and f[0] == 0.0
+        w = caught[0].message                    # where, how many, how deep, how much: for the snapshot summary
+        assert w.n == E.size and 0 < w.n_negative <= w.n and w.eps_range[1] <= 1.0
+        assert 0.0 < w.mass_fraction < 1e-2      # only the deepest orbits: the cored density's mass inside them
+
+    def test_snapshot_summary_merges_the_clipped_warnings(self):
+        import warnings
+        from roadrunner.pipeline.accretion_pipeline import _summarise_clipped
+        from roadrunner.physics.potentials import NFWPotential, PlummerPotential
+        nfw = NFWPotential(1e11, 8.0, 10.0)
+        E = nfw.central_potential() * (1.0 - np.geomspace(1e-6, 1e-1, 30))
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            for a in (0.5, 1.0):
+                ed.eddington_distribution_function(nfw, E, density=PlummerPotential(1e9, a))
+            warnings.warn("unrelated", UserWarning)
+        merged = _summarise_clipped(records)
+        assert [r.category for r in merged] == [UserWarning, ed.NegativeDistributionWarning]
+        assert "in 2 inversions" in str(merged[1].message) and "Where:" in str(merged[1].message)
 
 
 class TestSelfSimilarTables:

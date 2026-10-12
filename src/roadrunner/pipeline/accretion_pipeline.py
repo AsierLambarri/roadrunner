@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import shutil
@@ -22,6 +23,7 @@ from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_particles import HDF5ParticleWriter
 from roadrunner.io.logging import format_runtime
 from roadrunner.io.serialization import load_checkpoint, save_checkpoint
+from roadrunner.physics.distribution import NegativeDistributionWarning
 from roadrunner.physics.merger_tree import MergerTreeHandlerCSV
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.readers.snapshot import SnapshotReader
@@ -752,7 +754,8 @@ class AccretionPipeline:
         ----------
         snap_id : int
         records : tuple of warnings.WarningMessage
-            Must be called after the ``catch_warnings`` context that
+            The snapshot's :class:`NegativeDistributionWarning` s are merged into one
+            (:func:`_summarise_clipped`). Must be called after the ``catch_warnings`` context that
             produced it has exited, and on a copy rather than the
             live recorder list -- replaying while still inside the
             context re-triggers the recorder itself.
@@ -760,7 +763,7 @@ class AccretionPipeline:
             The original ``warnings.showwarning`` saved before
             entering the ``catch_warnings`` context.
         """
-        for record in records:
+        for record in _summarise_clipped(records):
             self._log_warning(
                 snap_id, record.category, record.message,
                 record.filename, record.lineno,
@@ -773,3 +776,36 @@ class AccretionPipeline:
                 )
             except Exception as exc:
                 print(f"WARNING: could not replay warning display: {exc}")
+
+
+def _summarise_clipped(records):
+    """A snapshot's warnings, its :class:`NegativeDistributionWarning` s merged into one summary.
+
+    The summary says where (each density and potential, with its count), what (Eddington's ``f``
+    clipped to 0), how many energies, how deep (``E / Φ(0)``) and how much (the largest and median
+    upper bound on the share of a density's mass at those energies).
+
+    Parameters
+    ----------
+    records : sequence of warnings.WarningMessage
+
+    Returns
+    -------
+    records : list of warnings.WarningMessage
+    """
+    clipped = [r for r in records if issubclass(r.category, NegativeDistributionWarning)]
+    if not clipped:
+        return list(records)
+    m = [r.message for r in clipped]
+    where = collections.Counter(f"{w.density} in {w.background}" for w in m)
+    frac = np.array([w.mass_fraction for w in m])
+    text = (f"Eddington's f was negative and clipped to 0 in {len(m)} inversions: "
+            f"{sum(w.n_negative for w in m)} of {sum(w.n for w in m)} energies, E / Φ(0) from "
+            f"{min(w.eps_range[0] for w in m):.3g} to {max(w.eps_range[1] for w in m):.3g}; at most "
+            f"{frac.max():.1e} (median {np.median(frac):.1e}) of a density's mass. Where: "
+            + "; ".join(f"{k} x{n}" for k, n in where.most_common(5))
+            + (f"; and {len(where) - 5} more" if len(where) > 5 else "")
+            + ". These densities have no isotropic equilibrium in their potentials at those depths.")
+    first = clipped[0]
+    summary = warnings.WarningMessage(text, NegativeDistributionWarning, first.filename, first.lineno)
+    return [r for r in records if r not in clipped] + [summary]
