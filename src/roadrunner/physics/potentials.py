@@ -20,7 +20,7 @@ its profile in private methods of the physical radius (``_potential(r)``,
 grids.
 Radii may be 0: every method evaluates its formula on the whole array and
 replaces the 0/0 or 0·∞ it meets at the centre by the limit there. The
-energy distribution and the phase-space fraction come from
+phase-space fraction and a density's ``dN/dw`` come from
 :class:`~roadrunner.physics.distribution.SphericalDistribution` unless a
 potential overrides them. Plummer and Hernquist read one set of tables per
 process shared by all their instances (:class:`SelfSimilarPotential`).
@@ -49,8 +49,6 @@ from roadrunner.physics.distribution import (
     SphericalDistribution,
     _cell,
     eddington_distribution_function,
-    nfw_energy_fraction,
-    nfw_log_energy_density,
     nfw_log_phase_space_fraction,
     profile_density,
     profile_potential,
@@ -153,8 +151,8 @@ class SphericalPotential(PotentialModel):
     trapezoid rule over the density; the potential at :attr:`x_min`, its centre),
     which a concrete potential overrides with its exact ones. The orbital time
     and the tidal denominator follow from them; a concrete potential overrides
-    one only with an exact closed form. The energy distribution and the
-    phase-space fraction, counted inside a radius ``r_max``, come from
+    one only with an exact closed form. The phase-space fraction and ``dN/dw``,
+    counted inside a radius ``r_max``, come from
     :class:`SphericalDistribution` (cached per ``r_max``), with ``f`` from
     :meth:`distribution_function`.
 
@@ -391,7 +389,7 @@ class SphericalPotential(PotentialModel):
         Generic: Eddington's inversion of :meth:`density` in :meth:`potential`
         (:func:`~roadrunner.physics.distribution.eddington_distribution_function`).
         A potential with a closed form overrides it, and one without a mass
-        distribution raises. It feeds the energy distribution ``N = f g``.
+        distribution raises. It feeds ``dN/dw`` (:meth:`log_phase_space_density`).
 
         Parameters
         ----------
@@ -410,46 +408,6 @@ class SphericalPotential(PotentialModel):
         if d is None:
             d = self._distributions[r_max] = SphericalDistribution(self, r_max)
         return d
-
-    def energy_fraction(self, E, r_max):
-        """Fraction of the mass inside ``r_max`` more bound than ``E``.
-
-        The potential's untruncated, isotropic profile (``f`` from
-        :meth:`distribution_function`) counted inside the sphere of radius
-        ``r_max``: uniform on ``(0, 1)`` for that mass itself. Generic
-        numerical tables (:class:`SphericalDistribution`) unless overridden.
-
-        Parameters
-        ----------
-        E : ndarray
-            Physical specific energies.
-        r_max : float
-            Counting radius (physical), the boundness search sphere.
-
-        Returns
-        -------
-        u : ndarray of float64
-        """
-        return self._distribution(r_max).energy_fraction(E)
-
-    def log_energy_density(self, E, r_max):
-        """``ln dN/dE``: energy distribution of the mass inside ``r_max``, per unit physical ``E``.
-
-        ``N = f g``, normalised over the bound energies (see
-        :meth:`energy_fraction`). Generic numerical tables unless overridden.
-
-        Parameters
-        ----------
-        E : ndarray
-            Physical specific energies.
-        r_max : float
-            Counting radius (physical).
-
-        Returns
-        -------
-        log_n : ndarray of float64
-        """
-        return self._distribution(r_max).log_energy_density(E)
 
     def log_phase_space_density(self, E, r_max):
         """``ln dN/dw``: the mass inside ``r_max`` per unit phase-space fraction ``w`` (:meth:`log_phase_space_fraction`).
@@ -502,7 +460,7 @@ def _self_similar_tables(cls):
 class SelfSimilarPotential(SphericalPotential):
     """A profile fixed up to its mass ``M`` and scale radius ``a``.
 
-    Inside a counting radius ``r_max`` its energy distribution and phase-space fraction depend
+    Inside a counting radius ``r_max`` its phase-space fraction depends
     only on ``c = r_max / a`` once energies are scaled by ``Φ₀``, so one set of tables per
     process (:func:`_self_similar_tables`, rows over ``SELF_SIMILAR_C``) serves every
     instance: no per-halo build. Outside that range of ``c`` the generic per-instance route is
@@ -515,34 +473,18 @@ class SelfSimilarPotential(SphericalPotential):
         """The length a composite compares this component's offset with (`CONCENTRIC_OFFSET`)."""
         return self.a
 
-    def _lookup(self, name, E, r_max, deep=False):
-        """Shared-table value ``name`` at physical energies ``E`` inside ``r_max``."""
-        phi0 = self.central_potential()
-        eps_kink = float(self._potential(np.array([r_max], dtype=np.float64))[0]) / phi0
-        return self_similar_lookup(getattr(_self_similar_tables(type(self)), name),
-                                   np.asarray(E, dtype=np.float64) / phi0, eps_kink, r_max / self.a, deep)
-
     def _tabulated(self, r_max):
         """Whether ``r_max / a`` lies inside the shared tables' rows."""
         return SELF_SIMILAR_C[0] <= r_max / self.a <= SELF_SIMILAR_C[-1]
-
-    def energy_fraction(self, E, r_max):
-        """Fraction of the mass inside ``r_max`` more bound than ``E``, from the shared tables (see :meth:`SphericalPotential.energy_fraction`)."""
-        if not self._tabulated(r_max):
-            return super().energy_fraction(E, r_max)
-        return self._lookup("cdf", E, r_max)
-
-    def log_energy_density(self, E, r_max):
-        """``ln dN/dE`` inside ``r_max``, per unit physical ``E``, from the shared tables: their density per unit ``eps`` minus ``ln |Φ₀|``."""
-        if not self._tabulated(r_max):
-            return super().log_energy_density(E, r_max)
-        return self._lookup("log_density", E, r_max) - np.log(-self.central_potential())
 
     def log_phase_space_fraction(self, E, r_max):
         """``ln w`` inside ``r_max``, from the shared tables (see :meth:`SphericalPotential.log_phase_space_fraction`)."""
         if not self._tabulated(r_max):
             return super().log_phase_space_fraction(E, r_max)
-        return self._lookup("log_volume_fraction", E, r_max, deep=True)
+        phi0 = self.central_potential()
+        eps_kink = float(self._potential(np.array([r_max], dtype=np.float64))[0]) / phi0
+        return self_similar_lookup(_self_similar_tables(type(self)), np.asarray(E, dtype=np.float64) / phi0,
+                                   eps_kink, r_max / self.a)
 
 
 class PlummerPotential(SelfSimilarPotential):
@@ -765,17 +707,9 @@ class KeplerPotential(PlummerPotential):
     def distribution_function(self, E):
         """Not defined: a point mass has no extended mass distribution, so no energy distribution.
 
-        The energy pair (:meth:`energy_fraction`, :meth:`log_energy_density`)
-        therefore raises too; the phase-space fraction has its own closed form.
+        :meth:`log_phase_space_density` therefore raises too; the phase-space fraction has its own
+        closed form.
         """
-        raise NotImplementedError("The Kepler potential has no energy distribution.")
-
-    def energy_fraction(self, E, r_max):
-        """Not defined: a point mass has no energy distribution (see :meth:`distribution_function`)."""
-        raise NotImplementedError("The Kepler potential has no energy distribution.")
-
-    def log_energy_density(self, E, r_max):
-        """Not defined: a point mass has no energy distribution (see :meth:`distribution_function`)."""
         raise NotImplementedError("The Kepler potential has no energy distribution.")
 
     def log_phase_space_fraction(self, E, r_max):
@@ -1043,49 +977,6 @@ class NFWPotential(SphericalPotential):
         A = np.log(1 + self.c) - self.c / (1 + self.c)
         return np.array([[PROFILE_NFW, self.G * self.M / A, self.Rs, 0.0]])
 
-    def energy_fraction(self, E, r_max):
-        """Exact (tabulated) fraction of the NFW mass inside ``r_max`` more bound than ``E``.
-
-        The per-process NFW tables
-        (:func:`~roadrunner.physics.distribution.nfw_energy_fraction`), read at
-        the scaled energy ``eps = E / Φ₀`` and the truncation ``c = r_max / Rs``.
-        In the tables ``c`` only bounds ``g``; the virial normalisation
-        ``A(c)`` is already carried by ``Φ₀``.
-
-        Parameters
-        ----------
-        E : ndarray
-            Physical specific energies.
-        r_max : float
-            Counting radius (physical).
-
-        Returns
-        -------
-        u : ndarray of float64
-        """
-        return nfw_energy_fraction(np.asarray(E, dtype=np.float64) / self.central_potential(), r_max / self.Rs)
-
-    def log_energy_density(self, E, r_max):
-        """Exact (tabulated) ``ln dN/dE`` of the NFW mass inside ``r_max``, per unit physical ``E``.
-
-        The tables give ``ln dN/dcal`` (``cal = 1 - E / Φ₀``, normalised on
-        ``[0, 1]``), and ``|dcal/dE| = 1 / |Φ₀|`` turns it into a density per
-        unit ``E``.
-
-        Parameters
-        ----------
-        E : ndarray
-            Physical specific energies.
-        r_max : float
-            Counting radius (physical).
-
-        Returns
-        -------
-        log_n : ndarray of float64
-        """
-        phi0 = self.central_potential()
-        return nfw_log_energy_density(np.asarray(E, dtype=np.float64) / phi0, r_max / self.Rs) - np.log(-phi0)
-
     def log_phase_space_fraction(self, E, r_max):
         """Exact (tabulated) ``ln w``: fraction of the NFW bound phase space inside ``r_max`` more bound than ``E``.
 
@@ -1181,7 +1072,7 @@ class ShellPotential(SphericalPotential):
     carried as a tabulated profile row (:data:`~roadrunner.physics.distribution.PROFILE_SHELL`,
     :meth:`profile`), so its potential and the q and g quadratures of its
     phase-space fraction are compiled, usable inside a composite; it has no
-    energy distribution: :meth:`distribution_function` and the energy pair raise.
+    energy distribution: :meth:`distribution_function` and :meth:`log_phase_space_density` raise.
 
     Parameters
     ----------
@@ -1315,7 +1206,7 @@ class ShellPotential(SphericalPotential):
     def distribution_function(self, E):
         """Not defined: the density is a windowed log-slope estimate, too noisy for ``d²ρ/dψ²``.
 
-        The energy pair therefore raises; the phase-space fraction, which
+        :meth:`log_phase_space_density` therefore raises; the phase-space fraction, which
         needs only the potential, is the generic one, with its q and g
         quadratures compiled through :meth:`profile`'s tabulated row.
         """
@@ -1402,8 +1293,8 @@ class _GroupDensity:
 
     Its radial density is the sum of its components' along the composite's pathways, about
     ``x_min``; :meth:`distribution_function` is Eddington's inversion of it in the composite's
-    potential, and the energy pair counts ``N = f g`` (``g`` of the composite) inside ``r_max``,
-    normalised to these groups' mass there (a :class:`SphericalDistribution` per ``r_max``, cached).
+    potential, and :meth:`log_phase_space_density` counts its ``dN/dw`` inside ``r_max``, normalised
+    to these groups' mass there (a :class:`SphericalDistribution` per ``r_max``, cached).
     Holding every component, it is the composite's own, self-consistent distribution.
 
     Parameters
@@ -1449,19 +1340,11 @@ class _GroupDensity:
         return eddington_distribution_function(self._composite, E, density=self)
 
     def _distribution(self, r_max):
-        """The cached :class:`SphericalDistribution` of its ``N = f g`` inside ``r_max``."""
+        """The cached :class:`SphericalDistribution` of its ``f`` inside ``r_max``."""
         d = self._distributions.get(r_max)
         if d is None:
             d = self._distributions[r_max] = SphericalDistribution(self._composite, r_max, self.distribution_function)
         return d
-
-    def energy_fraction(self, E, r_max):
-        """Fraction of its mass inside ``r_max`` more bound than ``E``."""
-        return self._distribution(r_max).energy_fraction(E)
-
-    def log_energy_density(self, E, r_max):
-        """``ln dN/dE`` of its mass inside ``r_max``, per unit physical ``E``."""
-        return self._distribution(r_max).log_energy_density(E)
 
     def log_phase_space_density(self, E, r_max):
         """``ln dN/dw`` of its mass inside ``r_max``, per unit fraction ``w`` of the composite's bound phase space there."""
@@ -1473,7 +1356,7 @@ class _TracerDensity(_GroupDensity):
 
     Its radial density is the model's own formula read about the composite's ``x_min`` (as a
     concentric component's); Eddington's inversion of it in the composite's potential and its
-    ``N = f g`` inside ``r_max`` are :class:`_GroupDensity`'s, normalised to the tracer's mass there.
+    ``dN/dw`` inside ``r_max`` are :class:`_GroupDensity`'s, normalised to the tracer's mass there.
 
     Parameters
     ----------
@@ -1532,8 +1415,8 @@ class CompositeSphericalPotential(SphericalPotential):
     own ``Φ₀`` when they coincide).
 
     The orbital time combines the components' own as ``t^-2 = Σ t_i^-2``, exact for
-    dynamical times (``t_i^-2 ∝ M_i(<r)``). :meth:`distribution_function`,
-    :meth:`energy_fraction` and :meth:`log_energy_density` take a ``density`` (a group's name):
+    dynamical times (``t_i^-2 ∝ M_i(<r)``). :meth:`distribution_function` and
+    :meth:`log_phase_space_density` take a ``density`` (a group's name):
     that group's density in the whole potential (the two-model Eddington inversion,
     :class:`_GroupDensity`), or a density model: that tracer's density about :attr:`x_min` in the
     whole potential, no part of it (:class:`_TracerDensity`, built on first use and kept until
@@ -1813,60 +1696,6 @@ class CompositeSphericalPotential(SphericalPotential):
         """
         return self._densities[density].distribution_function(E)
 
-    def energy_fraction(self, E, r_max, density=None):
-        """Fraction of a density's mass inside ``r_max`` more bound than ``E``.
-
-        Parameters
-        ----------
-        E : ndarray
-        r_max : float
-        density : str or density model, optional
-            A group's name: that group's density in the whole potential, normalised to its
-            own mass inside ``r_max``. The whole composite's when ``None`` or when the group
-            holds every component. Or a density model (``_density(r)``, e.g. a
-            :class:`HernquistPotential`): that tracer about :attr:`x_min` in the whole potential,
-            normalised to its own mass inside ``r_max``.
-
-        Returns
-        -------
-        u : ndarray of float64
-
-        Raises
-        ------
-        NotImplementedError
-            If a component of that group has no distribution function (Kepler, Shell).
-        AttributeError
-            If ``density`` is neither a group's name nor a density model.
-        """
-        return self._densities[density].energy_fraction(E, r_max)
-
-    def log_energy_density(self, E, r_max, density=None):
-        """``ln dN/dE`` of a density's mass inside ``r_max``, per unit physical ``E``.
-
-        Parameters
-        ----------
-        E : ndarray
-        r_max : float
-        density : str or density model, optional
-            A group's name: that group's density in the whole potential, normalised to its
-            own mass inside ``r_max``. The whole composite's when ``None`` or when the group
-            holds every component. Or a density model (``_density(r)``, e.g. a
-            :class:`HernquistPotential`): that tracer about :attr:`x_min` in the whole potential,
-            normalised to its own mass inside ``r_max``.
-
-        Returns
-        -------
-        log_n : ndarray of float64
-
-        Raises
-        ------
-        NotImplementedError
-            If a component of that group has no distribution function (Kepler, Shell).
-        AttributeError
-            If ``density`` is neither a group's name nor a density model.
-        """
-        return self._densities[density].log_energy_density(E, r_max)
-
     def log_phase_space_density(self, E, r_max, density=None):
         """``ln dN/dw`` of a density's mass inside ``r_max``, per unit fraction ``w`` of the whole bound phase space there.
 
@@ -1878,7 +1707,10 @@ class CompositeSphericalPotential(SphericalPotential):
         E : ndarray
         r_max : float
         density : str or density model, optional
-            As in :meth:`log_energy_density`.
+            A group's name: that group's density in the whole potential, normalised to its own mass
+            inside ``r_max``. The whole composite's when ``None`` or when the group holds every
+            component. Or a density model (``_density(r)``, e.g. a :class:`HernquistPotential`): that
+            tracer about :attr:`x_min` in the whole potential, normalised to its own mass inside ``r_max``.
 
         Returns
         -------

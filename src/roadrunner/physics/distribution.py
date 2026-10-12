@@ -2,14 +2,14 @@
 #
 # package:   roadrunner.physics
 # file:      distribution.py
-# brief:     Energy distribution and phase-space volume of spherical potentials.
+# brief:     Phase-space volume and distribution functions of spherical potentials.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez
 #
 #############################################################################
 
-"""Energy distribution and phase-space volume of spherical potentials.
+"""Phase-space volume and distribution functions of spherical potentials.
 
 Notation: ``energy`` (``E``) is always the physical specific orbital energy
 ``Φ + v²/2``, negative for bound particles. Scaled energies have their own
@@ -27,11 +27,11 @@ the boundness search sphere, ``search_factor`` virial radii):
 - Eddington distribution function of the untruncated profile
   ``f(E) = (1 / (√8 π²)) ∫_0^{ψ_E} (d²ρ/dψ²) dψ / sqrt(ψ_E - ψ)``,
   ``ψ = -Φ``, ``ψ_E = -E`` (no boundary term: ``ρ -> 0`` as ``ψ -> 0``);
-- energy distribution of the mass inside ``R``: ``N(E) = f(E) g(E)``,
-  normalised to 1 over the bound energies, so ``∫ N dE`` is the fraction of
-  that mass more bound than ``E``;
 - phase-space fraction ``w = q(E) / q(0)``: uniform on ``(0, 1]`` for
-  particles spread uniformly in the bound phase space inside ``R``.
+  particles spread uniformly in the bound phase space inside ``R``;
+- the mass inside ``R`` per unit ``w``: ``dN/dw = f(E) q(0) / ∫ f g dE``, the
+  distribution function over its mean on that phase space (its ratio to a
+  uniform phase-space background, ``1`` for the background itself).
 
 ``f`` describes the equilibrium profile, which extends beyond ``R``; ``g``
 and ``q`` count only what lies inside ``R``, the volume the pipeline looks
@@ -41,7 +41,7 @@ override them where exact forms exist. Self-similar profiles (Plummer,
 Hernquist) share one set of such tables per process, with rows over
 ``c = R / a`` (:func:`self_similar_tables`).
 
-The NFW tables below are those exact forms for NFW, in scaled units
+The NFW table below is the exact ``ln w`` for NFW, in scaled units
 ``G = Rs = 1``, ``phi(x) = -ln(1 + x) / x``. They take ``eps``, their
 truncation radius ``c`` is ``R / Rs``, and they are built once per process,
 one row per ``c`` of a grid. Each row has its own depth nodes, with the
@@ -68,7 +68,6 @@ with numba and parallel.
 
 import functools
 import warnings
-from typing import NamedTuple
 
 import numpy as np
 from numba import njit, prange
@@ -526,32 +525,6 @@ def _radius_of_energy(e):
     return np.interp(e, nfw_phi(_X), _X)
 
 
-def nfw_density_of_states(cal, c):
-    """Density of states ``g = 16 pi^2 int_0^{min(c, r_E)} x^2 sqrt(2 (E - phi)) dx``.
-
-    The substitution ``x = x_max (1 - w^2)`` removes the square-root
-    endpoint at the radial apocentre ``r_E``.
-
-    Parameters
-    ----------
-    cal : ndarray
-        Binding depths ``calE`` (scaled energy ``E = calE - 1``).
-    c : float or ndarray
-        Truncation radius (concentration); ``np.inf`` for none.
-        Broadcasts against ``cal``.
-
-    Returns
-    -------
-    g : ndarray
-        Broadcast shape of ``cal`` and ``c``.
-    """
-    e = np.asarray(cal, dtype=np.float64) - 1.0
-    x_max = np.minimum(c, _radius_of_energy(e))
-    x = x_max[..., None] * (1.0 - _W**2)
-    kin = np.sqrt(np.clip(2.0 * (e[..., None] - nfw_phi(x)), 0.0, None))
-    return 16.0 * np.pi**2 * np.sum(_WW * 2.0 * x_max[..., None] * _W * x**2 * kin, axis=-1)
-
-
 def nfw_phase_volume(cal, c):
     """Phase-space volume more bound than ``E`` inside ``x <= c``.
 
@@ -607,19 +580,6 @@ def _eddington_integral(b, depth, psi, d2):
     f = _eddington_kernel(np.ascontiguousarray(b).ravel(), np.ascontiguousarray(depth).ravel(),
                           np.ascontiguousarray(psi, dtype=np.float64), np.ascontiguousarray(d2, dtype=np.float64), _W, _WW)
     return f.reshape(b.shape)
-
-
-def _eddington(b):
-    """Eddington distribution function of the isotropic NFW profile at relative energies ``b = -E = 1 - calE``.
-
-    :func:`_eddington_integral` with ``ψ(0) = 1``. Accurate (to 1e-3) down
-    to ``b ~ 1e-8``, set by where ``_X`` ends.
-    """
-    psi = -nfw_phi(_X)                                    # decreasing in x
-    rho = 1.0 / (4.0 * np.pi * _X * (1.0 + _X) ** 2)
-    d2 = np.gradient(np.gradient(rho, psi), psi)
-    b = np.asarray(b, dtype=np.float64)
-    return _eddington_integral(b, 1.0 - b, psi[::-1], d2[::-1])
 
 
 def _depth_nodes(eps_kink, eps_last, n_deep, n_shallow):
@@ -683,54 +643,30 @@ def _nfw_nodes(c):
     return _depth_nodes(k, 1e-5 * k, *_NFW_NODES)
 
 
-class NFWEnergyTables(NamedTuple):
-    """NFW energy-distribution tables: one row per ``C_GRID`` value, on that row's nodes ``_nfw_nodes(c)``."""
-
-    log_density: np.ndarray          # log n(calE | c), normalised on [0, 1]
-    cdf: np.ndarray                  # u = F_c(calE), the mass fraction more bound
-    log_volume_fraction: np.ndarray  # log w = log q(calE | c) - log q(1 | c)
-
-
-_NFW_CHUNK = 2     # C_GRID rows per chunk (U8): caps the (chunk, n, 96) Eddington/g intermediates
+_NFW_CHUNK = 2     # C_GRID rows per chunk (U8): caps the (chunk, n, 96) phase-volume intermediates
 
 
 @functools.cache
-def nfw_energy_tables():
-    """Build the NFW energy-distribution tables (once per process), in chunks over ``C_GRID`` rows (U8).
+def nfw_phase_tables():
+    """Build the NFW ``ln w`` table (once per process), in chunks over ``C_GRID`` rows (U8).
 
-    Every step is row-wise (no sum or normalisation crosses rows: the node grid, the Eddington
-    and density-of-states quadratures, the cumulative mass and its per-row normalisation are all
-    taken one ``c`` at a time), so a :data:`_NFW_CHUNK`-row chunk goes through exactly the same
-    floating-point operations as the whole grid at once; the result is bit-identical to building
-    all of :data:`C_GRID` in one pass. Chunking only caps the size of the transient
-    ``(chunk, n, 96)`` Eddington/density-of-states arrays that otherwise peak at the whole grid's.
+    Every step is row-wise, so a :data:`_NFW_CHUNK`-row chunk goes through exactly the same
+    floating-point operations as the whole grid at once; chunking only caps the size of the
+    transient ``(chunk, n, 96)`` quadrature arrays.
 
     Returns
     -------
-    tables : NFWEnergyTables
-        Arrays of shape ``(len(C_GRID), n)``, on the nodes
-        ``_nfw_nodes(C_GRID)``.
+    log_w : ndarray of shape (len(C_GRID), n)
+        ``ln w = ln q(calE | c) - ln q(1 | c)`` on the nodes ``_nfw_nodes(C_GRID)``.
     """
-    n_nodes = sum(_NFW_NODES) + 1
-    log_n = np.empty((len(C_GRID), n_nodes))
-    cdf = np.empty((len(C_GRID), n_nodes))
-    log_w = np.empty((len(C_GRID), n_nodes))
+    log_w = np.empty((len(C_GRID), sum(_NFW_NODES) + 1))
     for lo in range(0, len(C_GRID), _NFW_CHUNK):
         c = C_GRID[lo:lo + _NFW_CHUNK]
-        eps = _nfw_nodes(c)
-        cal = 1.0 - eps
-        n = _eddington(eps) * nfw_density_of_states(cal, c[:, None])
-        seg = 0.5 * (n[:, 1:] + n[:, :-1]) * np.diff(eps, axis=1)
-        # mass more bound than each node: summed from the deepest, plus the power-law tail below it
-        tail = _deep_tail(n[:, -2:], cal[:, -2:])
-        row_cdf = np.concatenate([np.cumsum(seg[:, ::-1], axis=1)[:, ::-1], np.zeros((len(c), 1))], axis=1) + tail[:, None]
-        n /= row_cdf[:, :1]
-        row_cdf /= row_cdf[:, :1]
+        cal = 1.0 - _nfw_nodes(c)
         log_q = np.log(nfw_phase_volume(cal, c[:, None]))
         log_q_zero = np.log(nfw_phase_volume(np.ones(1), c[:, None]))     # E = 0
-        hi = lo + len(c)
-        log_n[lo:hi], cdf[lo:hi], log_w[lo:hi] = np.log(n), row_cdf, log_q - log_q_zero
-    return NFWEnergyTables(log_n, cdf, log_w)
+        log_w[lo:lo + len(c)] = log_q - log_q_zero
+    return log_w
 
 
 def _deep_tail(n, cal):
@@ -763,51 +699,6 @@ def _row(table, grid, c):
     return (1.0 - w) * table[j - 1] + w * table[j]
 
 
-def _lookup(table, eps, c):
-    """``table`` at scaled energies ``eps`` and concentration ``c``.
-
-    Linear in ``eps`` between the row's nodes (:func:`table_query`), held
-    at the end nodes beyond them; ``c`` is clipped to the grid.
-    """
-    c = np.clip(c, C_GRID[0], C_GRID[-1])
-    return table_query(eps, _nfw_nodes(c), _row(table, C_GRID, c))
-
-
-def nfw_energy_fraction(eps, c):
-    """Fraction ``u = F_c(calE)`` of the halo's mass more bound than ``eps``.
-
-    Parameters
-    ----------
-    eps : ndarray
-        Normalised energy ``eps = E / Phi_0`` (1 at the centre, 0 at ``E = 0``).
-    c : float
-        Concentration.
-
-    Returns
-    -------
-    u : ndarray
-        In ``[0, 1]``; uniform for the halo's own dark matter.
-    """
-    return _lookup(nfw_energy_tables().cdf, eps, c)
-
-
-def nfw_log_energy_density(eps, c):
-    """Log dark-matter energy distribution ``log dN/dcalE`` (normalised on [0, 1]).
-
-    Parameters
-    ----------
-    eps : ndarray
-        Normalised energy ``eps = E / Phi_0``.
-    c : float
-        Concentration.
-
-    Returns
-    -------
-    log_n : ndarray
-    """
-    return _lookup(nfw_energy_tables().log_density, eps, c)
-
-
 _CENTRAL_VOLUME_SLOPE = 4.5        # q ∝ calE^(9/2) near the NFW centre (phi ≈ -1 + x/2)
 
 
@@ -833,7 +724,7 @@ def nfw_log_phase_space_fraction(eps, c):
     """
     c = np.clip(c, C_GRID[0], C_GRID[-1])
     return table_query(np.atleast_1d(np.asarray(eps, dtype=np.float64)), _nfw_nodes(c),
-                       _row(nfw_energy_tables().log_volume_fraction, C_GRID, c), deep_slope=_CENTRAL_VOLUME_SLOPE)
+                       _row(nfw_phase_tables(), C_GRID, c), deep_slope=_CENTRAL_VOLUME_SLOPE)
 
 
 _SHALLOWEST = 1e-12                            # shallowest node of the generic tables: -E = 1e-12 |Φ(0)|
@@ -1044,16 +935,12 @@ def q_and_g(potential, profile, energy, x_max, ln_r1, inv_h, phi_off, dphi_off):
 
 
 class SphericalDistribution:
-    """Energy distribution and phase-space volume of a spherical potential inside ``r_max``.
+    """Phase-space volume of a spherical potential inside ``r_max``, and a density's distribution in it.
 
     It counts the potential's untruncated, isotropic profile inside the
     sphere of radius ``r_max`` (see the module docstring for the
-    definitions). It provides three quantities at any physical energy:
+    definitions). It provides two quantities at any physical energy:
 
-    - :meth:`energy_fraction`: the fraction of the mass inside ``r_max``
-      that is more bound than ``E``. It is uniform on ``(0, 1)`` for that
-      mass itself;
-    - :meth:`log_energy_density`: ``ln N(E)``, per unit ``E``;
     - :meth:`log_phase_space_fraction`: ``ln w(E)``. ``w`` is uniform on
       ``(0, 1]`` for particles spread uniformly in the bound phase space
       inside ``r_max``;
@@ -1070,7 +957,7 @@ class SphericalDistribution:
     The tables are built on first use, in float64:
     - the phase-space fraction needs ``q`` only, so it works for any
       potential;
-    - the energy pair also needs ``f`` (the potential's
+    - ``dN/dw`` also needs ``f`` (the potential's
       :meth:`distribution_function`, which raises for a potential without
       one) and ``g``.
 
@@ -1087,7 +974,7 @@ class SphericalDistribution:
     r_max : float
         Counting radius (physical).
     distribution_function : callable, optional
-        The f(E) whose N = f g is tabulated; the potential's own
+        The f(E) whose dN/dw is tabulated; the potential's own
         ``distribution_function`` when None. A composite's group passes
         Eddington's f of its density in the composite's potential, so N
         counts that group's mass inside r_max.
@@ -1102,7 +989,7 @@ class SphericalDistribution:
         self._eps = _depth_nodes(self._phi[-1] / self._phi[0], _SHALLOWEST, *_GENERIC_NODES)
         self._energies = self._phi[0] * self._eps                 # physical energies at the nodes
         self._log_w = None
-        self._log_density = self._cdf = self._log_volume_density = None
+        self._log_volume_density = None
         # U2: the offset rows' Φ̄, tabulated on self._r with Hermite slopes; the concentric rows stay exact
         self._profile, self._ln_r1, self._inv_h, self._phi_off, self._dphi_off = _offset_table(potential, self._r)
 
@@ -1147,64 +1034,25 @@ class SphericalDistribution:
             self._log_w = np.log(q) - np.log(q0[0])
         return self._log_w
 
-    def _energy_table(self):
-        """``ln N`` per unit ``E``, its cumulative from the deepest node and ``ln dN/dw``, built once.
+    def _volume_density_table(self):
+        """``ln dN/dw`` at the depth nodes, built once.
 
-        ``N = f g`` is normalised so that ``∫ N dE = 1``, with
-        ``dE = |Φ(0)| d eps``: over the nodes, plus the power-law tail deeper
-        than ``calE = 1e-6`` (:func:`_deep_tail`). Per unit ``w = q / q(0)``
-        (``dw/dE = g / q(0)``) it is ``dN/dw = N q(0) / g = f q(0) / ∫ f g dE``.
+        ``dN/dw = f q(0) / ∫ f g dE``: the mass ``∫ f g dE`` (``dE = |Φ(0)| d eps``) over the nodes,
+        plus the power-law tail deeper than ``calE = 1e-6`` (:func:`_deep_tail`).
 
         Returns
         -------
-        log_n, cdf, log_volume_density : ndarray of float64
+        log_volume_density : ndarray of float64
         """
-        if self._log_density is None:
+        if self._log_volume_density is None:
             f = np.asarray(self._distribution_function(self._energies), dtype=np.float64)
             _, g = self._q_and_g(self._energies)
             q0, _ = self._q_and_g(np.zeros(1))
             n = f * g
-            seg = -self._phi[0] * 0.5 * (n[1:] + n[:-1]) * np.diff(self._eps)
-            tail = -self._phi[0] * _deep_tail(n[-2:], 1.0 - self._eps[-2:])
-            cdf = np.concatenate((np.cumsum(seg[::-1])[::-1], [0.0])) + tail   # mass more bound than each node
+            mass = -self._phi[0] * (np.sum(0.5 * (n[1:] + n[:-1]) * np.diff(self._eps)) + _deep_tail(n[-2:], 1.0 - self._eps[-2:]))
             with np.errstate(divide="ignore"):
-                self._log_density = np.log(n / cdf[0])
-                self._log_volume_density = np.log(f * q0[0] / cdf[0])
-            self._cdf = cdf / cdf[0]
-        return self._log_density, self._cdf, self._log_volume_density
-
-    def energy_fraction(self, energy):
-        """Fraction of the mass inside ``r_max`` more bound than ``E``.
-
-        It is uniform on ``(0, 1)`` for that mass itself. It is held at 0 and
-        1 beyond the depth grid.
-
-        Parameters
-        ----------
-        energy : ndarray
-            Physical specific energies.
-
-        Returns
-        -------
-        u : ndarray of float64
-        """
-        return table_query(self._scaled(energy), self._eps, self._energy_table()[1])
-
-    def log_energy_density(self, energy):
-        """``ln N(E)``: energy distribution of the mass inside ``r_max``, per unit ``E``.
-
-        It is held at its end values beyond the depth grid.
-
-        Parameters
-        ----------
-        energy : ndarray
-            Physical specific energies.
-
-        Returns
-        -------
-        log_n : ndarray of float64
-        """
-        return table_query(self._scaled(energy), self._eps, self._energy_table()[0])
+                self._log_volume_density = np.log(f * q0[0] / mass)
+        return self._log_volume_density
 
     def log_phase_space_density(self, energy):
         """``ln dN/dw``: the mass inside ``r_max`` per unit phase-space fraction ``w`` (:meth:`log_phase_space_fraction`).
@@ -1222,7 +1070,7 @@ class SphericalDistribution:
         -------
         log_density : ndarray of float64
         """
-        return table_query(self._scaled(energy), self._eps, self._energy_table()[2])
+        return table_query(self._scaled(energy), self._eps, self._volume_density_table())
 
     def log_phase_space_fraction(self, energy):
         """``ln w = ln q(E) - ln q(0)``: fraction of the bound phase space inside ``r_max`` more bound than ``E``.
@@ -1251,23 +1099,12 @@ class SphericalDistribution:
 SELF_SIMILAR_C = np.geomspace(0.1, 1e4, 121)   # counting radius / scale radius of the self-similar table rows
 
 
-class SelfSimilarTables(NamedTuple):
-    """Tables of a self-similar profile: one row per ``SELF_SIMILAR_C`` value, on that row's generic nodes.
-
-    ``log_density`` is per unit ``eps = E / Φ₀`` (the reference has ``Φ₀ = -1``).
-    """
-
-    log_density: np.ndarray
-    cdf: np.ndarray
-    log_volume_fraction: np.ndarray
-
-
 def self_similar_tables(reference):
-    """Build the tables of a self-similar profile from a reference instance with ``G = M = a = 1``.
+    """Build the ``ln w`` table of a self-similar profile from a reference instance with ``G = M = a = 1``.
 
     Each row is the generic :class:`SphericalDistribution` of ``reference`` counted inside
     ``r_max = c`` (its scale radius is 1), so a halo of the same profile with scale radius ``a``
-    reads them at ``c = r_max / a`` and ``eps = E / Φ₀``. Its ``Φ₀`` must be ``-1``.
+    reads it at ``c = r_max / a`` and ``eps = E / Φ₀``. Its ``Φ₀`` must be ``-1``.
 
     Parameters
     ----------
@@ -1276,22 +1113,18 @@ def self_similar_tables(reference):
 
     Returns
     -------
-    tables : SelfSimilarTables
-        Arrays of shape ``(len(SELF_SIMILAR_C), n)``.
+    log_w : ndarray of shape (len(SELF_SIMILAR_C), n)
     """
-    rows = [SphericalDistribution(reference, c) for c in SELF_SIMILAR_C]
-    energy = [d._energy_table() for d in rows]
-    return SelfSimilarTables(np.array([e[0] for e in energy]), np.array([e[1] for e in energy]),
-                             np.array([d._phase_table() for d in rows]))
+    return np.array([SphericalDistribution(reference, c)._phase_table() for c in SELF_SIMILAR_C])
 
 
-def self_similar_lookup(table, eps, eps_kink, c, deep=False):
-    """``table`` of :func:`self_similar_tables` at scaled energies ``eps`` and ``c = r_max / a``.
+def self_similar_lookup(table, eps, eps_kink, c):
+    """``ln w`` of :func:`self_similar_tables` at scaled energies ``eps`` and ``c = r_max / a``.
 
     Rows are blended linearly in ``log c`` node by node (kink to kink); the nodes are those of
     the generic route for the kink ``eps_kink = Φ(r_max) / Φ₀``, and the value is linear in
-    ``eps`` between them (:func:`table_query`), held at the end nodes beyond them. With ``deep``
-    (for ``ln w``) the deepest values follow the power law through the two deepest nodes instead.
+    ``eps`` between them (:func:`table_query`), held at the shallowest node beyond it; the
+    deepest values follow the power law through the two deepest nodes.
 
     Parameters
     ----------
@@ -1301,7 +1134,6 @@ def self_similar_lookup(table, eps, eps_kink, c, deep=False):
     eps_kink : float
     c : float
         Inside ``SELF_SIMILAR_C``.
-    deep : bool, default=False
 
     Returns
     -------
@@ -1310,4 +1142,4 @@ def self_similar_lookup(table, eps, eps_kink, c, deep=False):
     nodes = _depth_nodes(eps_kink, _SHALLOWEST, *_GENERIC_NODES)
     row = _row(table, SELF_SIMILAR_C, c)
     return table_query(np.atleast_1d(np.asarray(eps, dtype=np.float64)), nodes, row,
-                       deep_slope=_node_slope(nodes, row) if deep else None)
+                       deep_slope=_node_slope(nodes, row))

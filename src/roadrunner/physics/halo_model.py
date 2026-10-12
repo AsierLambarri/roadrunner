@@ -39,7 +39,7 @@ class HaloModel:
     ``tree_centre * length_scale`` and ``tree_velocity``). The halo exposes the
     potential model's methods as one-line wrappers at catalogue coordinates:
     positions ``xyz`` are made physical (``length_scale``, float64), energies
-    ``E`` are physical and pass as they are, and the energy distributions are
+    ``E`` are physical and pass as they are, and the phase-space distributions are
     counted inside the halo's search sphere (``search_factor`` virial radii) —
     of the whole halo or, with ``density``, of one group or of a tracer density model in the whole potential.
     Particle-level results are returned in ``math_dtype()``, the energy
@@ -80,7 +80,7 @@ class HaloModel:
         ``1 / (1 + z)``.
     search_factor : float, default=1.0
         Multiple of the virial radius: the boundness search sphere and the
-        counting radius of the energy distributions.
+        counting radius of the phase-space distributions.
     """
 
     def __init__(
@@ -302,42 +302,6 @@ class HaloModel:
         """
         return self.potential_model.distribution_function(np.asarray(E, dtype=np.float64), density=density)
 
-    def energy_fraction(self, E: np.ndarray, density: str | PotentialModel | None = None) -> np.ndarray:
-        """Fraction of the halo's mass inside the search sphere more bound than the physical energy ``E``.
-
-        Parameters
-        ----------
-        E : ndarray
-        density : str or density model, optional
-            A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
-            potential. The whole halo when ``None``. Or a density model (e.g. a
-            :class:`~roadrunner.physics.potentials.HernquistPotential`): that tracer in the whole
-            potential, about the bottom of the well.
-
-        Returns
-        -------
-        u : ndarray of float64
-        """
-        return self.potential_model.energy_fraction(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
-
-    def log_energy_density(self, E: np.ndarray, density: str | PotentialModel | None = None) -> np.ndarray:
-        """``ln dN/dE``: energy distribution of the halo's mass inside the search sphere, per unit physical ``E``.
-
-        Parameters
-        ----------
-        E : ndarray
-        density : str or density model, optional
-            A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
-            potential. The whole halo when ``None``. Or a density model (e.g. a
-            :class:`~roadrunner.physics.potentials.HernquistPotential`): that tracer in the whole
-            potential, about the bottom of the well.
-
-        Returns
-        -------
-        log_n : ndarray of float64
-        """
-        return self.potential_model.log_energy_density(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
-
     def log_phase_space_density(self, E: np.ndarray, density: str | PotentialModel | None = None) -> np.ndarray:
         """``ln dN/dw``: a density's mass inside the search sphere per unit fraction ``w`` of its bound phase space.
 
@@ -348,7 +312,10 @@ class HaloModel:
         ----------
         E : ndarray
         density : str or density model, optional
-            As in :meth:`log_energy_density`.
+            A group of the potential model (e.g. ``"dark_matter"``): that group in the whole
+            potential. The whole halo when ``None``. Or a density model (e.g. a
+            :class:`~roadrunner.physics.potentials.HernquistPotential`): that tracer in the whole
+            potential, about the bottom of the well.
 
         Returns
         -------
@@ -357,9 +324,9 @@ class HaloModel:
         return self.potential_model.log_phase_space_density(np.asarray(E, dtype=np.float64), self._counting_radius(), density=density)
 
     def release_tables(self) -> None:
-        """Drop every cached energy/phase-space table of :attr:`potential_model` (U6).
+        """Drop every cached phase-space table of :attr:`potential_model` (U6).
 
-        Memory only: the next call to :meth:`energy_fraction`, :meth:`log_energy_density` or
+        Memory only: the next call to :meth:`log_phase_space_density` or
         :meth:`log_phase_space_fraction` rebuilds what it needs. A no-op for a single NFW
         (the per-process tables carry no per-halo state).
         """

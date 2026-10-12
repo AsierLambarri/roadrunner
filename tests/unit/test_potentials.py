@@ -194,10 +194,8 @@ class TestBindingEnergyInterface:
         assert isinstance(p, PotentialModel)
         assert p.central_potential() == -np.inf                     # no innermost particle yet
         assert p.central_potential(np.array([0.2, 0.0, 0.0])) == -p.G * p.M / 0.2   # unsoftened, at the innermost particle
-        for call in (lambda: p.energy_fraction(np.array([-0.5]), 1.0),
-                     lambda: p.log_energy_density(np.array([-0.5]), 1.0)):
-            with pytest.raises(NotImplementedError):
-                call()
+        with pytest.raises(NotImplementedError):
+            p.log_phase_space_density(np.array([-0.5]), 1.0)
         E = np.array([-1e4, -10.0, 0.0, 5.0])
         s = -0.5 * p.G * p.M / E[:2]
         np.testing.assert_array_equal(p.orbital_time(E, _xyz(np.ones(4))),
@@ -212,8 +210,6 @@ class TestBindingEnergyInterface:
         phi0 = -G_KM * 1e10 / (5.0 * (np.log(9.0) - 8.0 / 9.0))
         np.testing.assert_allclose(p.central_potential(), phi0)
         assert p.potential(_xyz([0.0]))[0] == p.central_potential()
-        u = p.energy_fraction(np.array([0.9, 0.5, 0.1]) * phi0, 40.0)
-        assert np.all((u > 0) & (u < 1)) and np.all(np.diff(u) > 0)
 
 
 class TestPhaseSpaceFraction:
@@ -291,7 +287,7 @@ class TestCompositeSphericalPotential:
             assert c.central_potential(_xyz([0.1])[0]) == p.central_potential(_xyz([0.1])[0])
             np.testing.assert_array_equal(c.profile(), p.profile())
             Eb = E[:3] * (1.0 if isinstance(p, KeplerPotential) else -p.central_potential() / 2e4)
-            for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):
+            for name in ("log_phase_space_density", "log_phase_space_fraction"):
                 if isinstance(p, KeplerPotential) and name != "log_phase_space_fraction":
                     with pytest.raises(NotImplementedError):
                         getattr(c, name)(Eb, R)
@@ -319,13 +315,11 @@ class TestCompositeSphericalPotential:
         v = np.sqrt(-2.0 * c.potential(_xyz(x))) * rng.uniform(size=x.size) ** (1.0 / 3.0)
         w = np.exp(c.log_phase_space_fraction(c.potential(_xyz(x)) + 0.5 * v**2, R))
         np.testing.assert_allclose(np.quantile(w, [0.1, 0.5, 0.9]), [0.1, 0.5, 0.9], atol=0.01)
-        u = c.energy_fraction(np.array([0.9, 0.5, 0.1]) * c.central_potential(), R)
-        assert np.all((u > 0) & (u < 1)) and np.all(np.diff(u) > 0)
-        # a component without f: the energy pair raises, the phase-space fraction does not
+        # a component without f: dN/dw raises, the phase-space fraction does not
         k = CompositeSphericalPotential(dark_matter=nfw, stars=KeplerPotential(1e10))
         assert not k.has_distribution
         with pytest.raises(NotImplementedError):
-            k.energy_fraction(np.array([-1e4]), R)
+            k.log_phase_space_density(np.array([-1e4]), R)
         assert np.all(k.log_phase_space_fraction(np.array([-1e4]), R) < 0)
         with pytest.raises(ValueError):
             CompositeSphericalPotential(dark_matter=nfw, stars=PlummerPotential(1e10, 0.5, G=1.0))
@@ -365,15 +359,15 @@ class TestCompositeAdd:
         np.testing.assert_array_equal(c.potential(xyz), both.potential(xyz))
         np.testing.assert_array_equal(c.orbital_time(None, xyz), both.orbital_time(None, xyz))
         E = np.array([0.9, 0.5, 0.1]) * c.central_potential()
-        for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):
+        for name in ("log_phase_space_density", "log_phase_space_fraction"):
             np.testing.assert_allclose(getattr(c, name)(E, R), getattr(both, name)(E, R), rtol=1e-12)
         # a composite whose cache is filled drops it on add: the third component is seen
         hernquist = HernquistPotential(1e9, 0.2)
-        before = c.energy_fraction(E, R)
+        before = c.log_phase_space_density(E, R)
         c.add("stars", hernquist)
         three = CompositeSphericalPotential(dark_matter=nfw, stars=[plummer, hernquist])
-        assert not np.array_equal(c.energy_fraction(E, R), before)
-        np.testing.assert_allclose(c.energy_fraction(E, R), three.energy_fraction(E, R), rtol=1e-12)
+        assert not np.array_equal(c.log_phase_space_density(E, R), before)
+        np.testing.assert_allclose(c.log_phase_space_density(E, R), three.log_phase_space_density(E, R), rtol=1e-12)
         c.add("stars", KeplerPotential(1e9))
         assert not c.has_distribution
         with pytest.raises(ValueError):
@@ -594,7 +588,7 @@ class TestCompositePathways:
         np.testing.assert_array_equal(c.profile()[:, 3], np.repeat(c._offsets, [1, len(shell.profile())]))
         np.testing.assert_allclose([profile_phi(c.profile(), x) for x in r], c._potential(r), rtol=1e-12)
         with pytest.raises(NotImplementedError):
-            shell.energy_fraction(np.array([-1.0]), 5.0)
+            shell.log_phase_space_density(np.array([-1.0]), 5.0)
 
     def test_radial_mass_with_concentric_shell(self):
         # PROFILE_SHELL in _row_mass (concentric): G M(<r) = -cell slope, exact
@@ -640,15 +634,14 @@ class TestGroupDensity:
                 f = c.distribution_function(phi * (1.0 - t**2), density="dark_matter")
                 rho = 4 * np.pi * np.sqrt(2.0) * (-phi) ** 1.5 * trapezoid(2 * t**2 * f, t)
                 np.testing.assert_allclose(rho, nfw._density(np.array([r]))[0], rtol=2e-3)
-            u = c.energy_fraction(E, R, density="dark_matter")
-        assert np.all((u > 0) & (u < 1)) and np.all(np.diff(u) > 0)
-        assert not np.allclose(u, c.energy_fraction(E, R))
+            n_dm = c.log_phase_space_density(E, R, density="dark_matter")
+        assert np.all(np.isfinite(n_dm)) and np.all(np.diff(n_dm) < 0)          # deeper is denser in w
+        assert not np.allclose(n_dm, c.log_phase_space_density(E, R))
         for whole in (CompositeSphericalPotential(dark_matter=nfw), CompositeSphericalPotential(dark_matter=[nfw, star])):
-            for name in ("energy_fraction", "log_energy_density"):
-                np.testing.assert_array_equal(getattr(whole, name)(E, R, density="dark_matter"), getattr(whole, name)(E, R))
+            np.testing.assert_array_equal(whole.log_phase_space_density(E, R, density="dark_matter"), whole.log_phase_space_density(E, R))
             np.testing.assert_array_equal(whole.distribution_function(E, density="dark_matter"), whole.distribution_function(E))
-        np.testing.assert_array_equal(CompositeSphericalPotential(dark_matter=nfw).energy_fraction(E, R, density="dark_matter"),
-                                      nfw.energy_fraction(E, R))
+        np.testing.assert_array_equal(CompositeSphericalPotential(dark_matter=nfw).log_phase_space_density(E, R, density="dark_matter"),
+                                      nfw.log_phase_space_density(E, R))
 
 
 class TestRelease:
@@ -659,12 +652,12 @@ class TestRelease:
         c = CompositeSphericalPotential(dark_matter=nfw, stars=pl)
         E, R = np.array([0.9, 0.5, 0.1]) * c.central_potential(), 80.0
         before_w = c.log_phase_space_fraction(E, R)
-        before_u = c.energy_fraction(E, R, density="dark_matter")
+        before_u = c.log_phase_space_density(E, R, density="dark_matter")
         assert c._distributions and c._densities["dark_matter"]._distributions
         c.release()
         assert not c._distributions and not c._densities["dark_matter"]._distributions
         np.testing.assert_array_equal(c.log_phase_space_fraction(E, R), before_w)
-        np.testing.assert_array_equal(c.energy_fraction(E, R, density="dark_matter"), before_u)
+        np.testing.assert_array_equal(c.log_phase_space_density(E, R, density="dark_matter"), before_u)
 
 
 class TestMultiComponentValidity:

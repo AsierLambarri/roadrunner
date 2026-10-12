@@ -98,10 +98,7 @@ class MockPotentialModel:
     def distribution_function(self, E):
         raise NotImplementedError
 
-    def energy_fraction(self, E, r_max):
-        raise NotImplementedError
-
-    def log_energy_density(self, E, r_max):
+    def log_phase_space_density(self, E, r_max):
         raise NotImplementedError
 
     def log_phase_space_fraction(self, E, r_max):

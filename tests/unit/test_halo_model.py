@@ -63,8 +63,7 @@ class TestPotential:
             np.testing.assert_allclose(halo.central_potential(), inner.central_potential() + star.potential(inner.centre[None])[0])
             assert halo.tree_mass == 1e12
             assert halo.binding_energy_scale() == -halo.central_potential()       # the true bottom of the summed well (D3)
-            u = halo.energy_fraction(np.array([-0.5]) * halo.binding_energy_scale())
-            assert np.all((u > 0) & (u < 1))
+            assert np.all(np.isfinite(halo.log_phase_space_density(np.array([-0.5]) * halo.binding_energy_scale())))
             # the halo holds its own frozen copy: adding to comp afterwards leaves it untouched
             comp.add("gas", PlummerPotential(M=1e7, a=0.2, centre=xcen * ls, G=4.3e-6))
             assert len(halo) == 2
@@ -206,11 +205,10 @@ class TestWrappers:
             np.testing.assert_allclose(halo.central_potential(), inner.central_potential())
             E = np.array([0.9, 0.5]) * inner.central_potential()
             R = 2.0 * RVR * ls
-            for name in ("energy_fraction", "log_energy_density", "log_phase_space_fraction"):
+            for name in ("log_phase_space_density", "log_phase_space_fraction"):
                 np.testing.assert_allclose(getattr(halo, name)(E), getattr(inner, name)(E, R), rtol=1e-12)
             np.testing.assert_allclose(halo.distribution_function(E), inner.distribution_function(E), rtol=1e-12)
-            for name in ("energy_fraction", "log_energy_density"):
-                np.testing.assert_array_equal(getattr(halo, name)(E, density="dark_matter"), getattr(inner, name)(E, R))
+            np.testing.assert_array_equal(halo.log_phase_space_density(E, density="dark_matter"), inner.log_phase_space_density(E, R))
             np.testing.assert_array_equal(halo.distribution_function(E, density="dark_matter"), inner.distribution_function(E))
             assert len(halo) == 1 and halo[0] is inner and list(halo) == [inner]
             star = PlummerPotential(M=1e9, a=0.5, centre=xcen * ls)
