@@ -66,6 +66,7 @@ CONCENTRIC_OFFSET = 0.1            # composite potentials: a component's offset 
 MONOPOLE_MAX_PULL = 0.3            # composite potentials: a component's pull at x_min, G M(<d)/d², over the bottom's slope K,
                                    # above which the tilt the monopole drops matters (it stays concentric); both thresholds
                                    # from a sweep of 48 NFW+Hernquist mock galaxies vs the exact phase-space volume (2026-10-12)
+STARS_ITERATIONS = 3               # Shell rebuilds of the stars' own potential in the boundness (M* converges by the 3rd)
 
 # ── Coresets ───────────────────────────────────────────────────────
 CORESET_ALPHA_BASE = 16

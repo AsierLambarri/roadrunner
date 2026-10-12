@@ -72,6 +72,7 @@ n_los: 15                       # Number of lines of sight for properties
 search_factor: 1.0              # Search radius multiplier (Rvir)
 comoving: true                  # Merger tree positions in comoving kpc (true)
                                 #   or physical kpc (false)
+stars: free                     # stars' own potential in the boundness: none | pinned | free
 
 # ── Centering ────────────────────────────────────────────────────────────────
 use_gmm_centers: true           # Use GMM-derived centers when available

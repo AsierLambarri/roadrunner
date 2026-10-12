@@ -16,89 +16,112 @@
 import numpy as np
 from scipy.spatial import KDTree
 
-from roadrunner._defaults import LOCAL_IDX, math_dtype
+from roadrunner._defaults import LOCAL_IDX, STARS_ITERATIONS, math_dtype
 from roadrunner.mixture._math import row_squared_norms
+from roadrunner.physics.halo_model import HaloModel, physical_length_factor, tree_potential
+from roadrunner.physics.potentials import CompositeSphericalPotential, ShellPotential
+from roadrunner.postprocessing.centering import ssc_center
 
 from roadrunner.threads import tree_workers
 
 
-def compute_halo_bound_particles(
-    halos: list,
-    particle_coordinates: np.ndarray,
-) -> list:
-    """Compute gravitational boundness for a list of halos.
+def stellar_composite(dark_matter, x, v, m, stars):
+    """Dark matter plus the stars it binds, self-consistently, and the neighbours' energies in it.
 
-    Uses a KD-tree to efficiently find particles within each halo's search
-    sphere (:attr:`HaloModel.search_factor` virial radii), then evaluates
-    boundness via the total specific orbital energy ``E = Φ + ½v²``. The
-    bound particles (``E < 0``) are stored on each halo via
-    :meth:`HaloModel.set_bound` with their physical energies and dynamical
-    times; the boundness ``b = -E / HaloModel.binding_energy_scale()`` (the
-    depth of the halo's well) is given on request by :meth:`HaloModel.get_bound`.
-    Each halo's ``inner_position`` (its innermost particle, where a point
-    mass's depth is taken) is set first.
-
-    For Keplerian potentials the dynamical time is computed from the
-    orbital semi-major axis derived from the orbital energy, giving
-    the correct timescale for elliptical orbits.  For NFW potentials
-    the instantaneous radius is used.
+    ``STARS_ITERATIONS`` times, a :class:`ShellPotential` of the particles bound so far joins the
+    dark matter and the neighbours are re-bound: ``"free"`` stars at their shrinking-sphere frame
+    (:func:`ssc_center`), ``"pinned"`` at the tree's; ``"none"``, or nothing bound, keeps the
+    dark matter alone.
 
     Parameters
     ----------
-    halos : list of HaloModel
-        Halos to evaluate.
-    particle_coordinates : ndarray of shape (n_particles, 6)
-        6-D phase-space coordinates.
+    dark_matter : SphericalPotential
+        The tree halo's potential (physical; its centre and velocity are the tree's).
+    x, v : ndarray of shape (n, 3)
+        Neighbours: absolute physical positions and velocities (km/s).
+    m : ndarray of shape (n,)
+        Neighbours' masses.
+    stars : {"none", "pinned", "free"}
+
+    Returns
+    -------
+    potential : CompositeSphericalPotential
+    E : ndarray of float64, shape (n,)
+        ``Φ + ½ |v - v_com|²``, as :meth:`HaloModel.compute_energy`.
+    """
+    energy = lambda p: p.potential(x) + 0.5 * row_squared_norms(v - p.com_velocity)
+    potential = CompositeSphericalPotential(dark_matter=dark_matter)
+    E = energy(potential)
+    for _ in range(STARS_ITERATIONS * (stars != "none")):
+        b = E < 0
+        if not b.any():
+            break
+        c, w = ssc_center(x[b], v[b], m[b]) if stars == "free" else (dark_matter.centre, dark_matter.velocity)
+        stellar = ShellPotential(x[b], m[b], G=dark_matter.G, centre=c, velocity=w)
+        potential = CompositeSphericalPotential(dark_matter=dark_matter, stars=stellar)
+        E = energy(potential)
+    return potential, E
+
+
+def compute_halo_bound_particles(rows, snap_data, config):
+    """Build every halo once, with the stars it binds, and store its bound particles.
+
+    The neighbours of each tree row (a KD-tree query inside ``search_factor`` virial radii)
+    are bound by :func:`stellar_composite`; the halo is built with that final potential and
+    stores its bound particles (physical energies and dynamical times), sorted by particle
+    index (C06).
+
+    Parameters
+    ----------
+    rows : list of mapping
+        The snapshot's merger-tree rows.
+    snap_data : SnapshotData
+        Particle positions and velocities (``data``) and masses (``mass``).
+    config : ProcessingConfig
+        ``halo_model``, ``comoving``, ``search_factor``, ``stars``.
 
     Returns
     -------
     halos : list of HaloModel
-        The same list with boundness data set on each halo.
     """
-    positions = particle_coordinates[:, :3]
-    velocities = particle_coordinates[:, 3:6]
+    positions, velocities = snap_data.data[:, :3], snap_data.data[:, 3:6]
     tree = KDTree(positions)
-
-    empty_indices = np.array([], dtype=LOCAL_IDX)
-    empty_values = np.array([], dtype=math_dtype())
-
-    for halo in halos:
+    halos = []
+    for row in rows:
+        ls = physical_length_factor(row["Redshift"], config.comoving)
+        centre = np.array([row["position_x"], row["position_y"], row["position_z"]])
         local = np.asarray(
-            tree.query_ball_point(
-                halo.tree_centre, r=halo.search_factor * halo.virial_radius, workers=tree_workers()
-            )
+            tree.query_ball_point(centre, r=config.search_factor * row["virial_radius"], workers=tree_workers()),
+            dtype=np.intp,
         )
-        if local.size == 0:
-            halo.set_bound(empty_indices, empty_values, empty_values)
-            continue
-
         pos, vel = positions[local], velocities[local]
-        # Where a point mass's well depth (the scale of HaloModel.get_bound's boundness) is taken.
-        halo.inner_position = pos[np.argmin(row_squared_norms(np.asarray(pos, dtype=np.float64) - halo.tree_centre))]
 
-        E = halo.compute_energy(pos, vel)
-
-        # Kepler: the period of the orbit with energy E (bound particles only, I03);
-        # otherwise the dynamical time at the instantaneous radius.
-        tdyns = halo.orbital_time(E, pos).astype(math_dtype(), copy=False)
+        potential, E = stellar_composite(
+            tree_potential(row, config.halo_model, ls),
+            np.asarray(pos, dtype=np.float64) * ls,
+            vel,
+            snap_data.mass[local],
+            config.stars,
+        )
+        halo = HaloModel(
+            potential,
+            centre,
+            [row["velocity_x"], row["velocity_y"], row["velocity_z"]],
+            row["virial_radius"],
+            int(row["Sub_tree_id"]),
+            row["Redshift"],
+            config.comoving,
+            config.search_factor,
+        )
+        if local.size:  # a point mass's depth is taken at the innermost neighbour
+            halo.inner_position = pos[np.argmin(row_squared_norms(np.asarray(pos, dtype=np.float64) - centre))]
 
         bound = E < 0
-        valid = local[bound]
-        if valid.size == 0:
-            halo.set_bound(empty_indices, empty_values, empty_values)
-        else:
-            # Sorted by particle index (C06): query_ball_point's own
-            # traversal order is unspecified, and everything downstream
-            # that consumes boundness by position (rather than by ID,
-            # like SparseCSC.to_dense or a set intersection) implicitly
-            # relies on a stable, predictable order. Sorting here once
-            # establishes that as a real invariant instead of leaving it
-            # to chance.
-            order = np.argsort(valid)
-            halo.set_bound(
-                valid[order].astype(LOCAL_IDX),
-                E[bound][order],
-                tdyns[bound][order],
-            )
-
+        order = np.argsort(local[bound])  # C06: sorted by particle index
+        halo.set_bound(
+            local[bound][order].astype(LOCAL_IDX),
+            E[bound][order].astype(math_dtype(), copy=False),
+            halo.orbital_time(E[bound], pos[bound])[order],
+        )
+        halos.append(halo)
     return halos

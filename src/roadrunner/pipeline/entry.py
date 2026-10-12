@@ -153,6 +153,7 @@ def _run(config, equiv_table, snapshot_reader):
         search_factor=config.search_factor,
         min_particles=config.min_particles,
         comoving=config.comoving,
+        stars=config.stars,
     )
     reduction_config = ReductionConfig(
         accretion_id=accretion_id,

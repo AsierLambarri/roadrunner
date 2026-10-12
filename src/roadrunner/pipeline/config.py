@@ -57,6 +57,7 @@ class RunConfig:
     search_factor: float = 1.0
     min_particles: int = 10
     comoving: bool = True
+    stars: str = "free"
 
     birth_window_factor: float = 5.0
     enforce_initial_hosts: bool = True
@@ -94,6 +95,9 @@ class RunConfig:
 
         if self.reader_type not in ("yt", "npz", "pdata"):
             raise ValueError(f"reader_type must be 'yt', 'npz', or 'pdata', got '{self.reader_type}'")
+
+        if self.stars not in ("none", "pinned", "free"):
+            raise ValueError(f"stars must be 'none', 'pinned' or 'free', got '{self.stars}'")
 
         unknown = set(self.cosmology) - {f.name for f in dataclasses.fields(Cosmology)}
         if unknown:

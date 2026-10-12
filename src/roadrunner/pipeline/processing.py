@@ -13,7 +13,6 @@ from roadrunner.clustering.segmentation import HaloSegmenter
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.constants import DYN_TIME_FACTOR
 from roadrunner.physics.halo_ensemble import HaloEnsemble
-from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.timescales import compute_particle_dynamical_timescales
 
 
@@ -31,21 +30,29 @@ class ProcessingConfig:
         Minimum particles for a group to be kept.
     comoving : bool, default=True
         Whether coordinates are in comoving kpc.
+    stars : str, default='free'
+        Stars' own potential in the boundness: "none", "pinned" or "free".
     """
     halo_model: str = "kepler"
     search_factor: float = 1.0
     min_particles: int = 10
     comoving: bool = True
+    stars: str = "free"            # stars' own potential in the boundness: "none", "pinned" or "free"
+
+    def __post_init__(self):
+        if self.stars not in ("none", "pinned", "free"):
+            raise ValueError(f"stars must be 'none', 'pinned' or 'free', got '{self.stars}'")
 
 
-def bound_ensemble(particle_coords, snap_df, config) -> tuple[HaloEnsemble, list]:
+def bound_ensemble(snap_data, snap_df, config) -> tuple[HaloEnsemble, list]:
     """Halos of a snapshot with boundness, ownership resolved, and their overlap groups (largest first).
 
     The assigner's input: :func:`process_snapshot` calls it before ``assign``.
 
     Parameters
     ----------
-    particle_coords : ndarray of shape (n_particles, 6)
+    snap_data : SnapshotData
+        Particle data for this snapshot.
     snap_df : DataFrame
         Merger-tree data for this snapshot.
     config : ProcessingConfig
@@ -57,12 +64,7 @@ def bound_ensemble(particle_coords, snap_df, config) -> tuple[HaloEnsemble, list
     groups : list of list of int
         Overlap groups of populated halos (ensemble indices), largest first.
     """
-    ensemble = HaloEnsemble([
-        HaloModel.from_snapshot_row(row, model=config.halo_model, comoving=config.comoving,
-                                    search_factor=config.search_factor)
-        for row in snap_df.to_dict("records")
-    ])
-    compute_halo_bound_particles(ensemble, particle_coords)
+    ensemble = HaloEnsemble(compute_halo_bound_particles(snap_df.to_dict("records"), snap_data, config))
 
     # Ownership compares the boundness b = -E / scale across halos: the depth in each halo's own well.
     csc_b, _ = ensemble.get_particles(scaled_energies=True)
@@ -134,7 +136,7 @@ def process_snapshot(
         The assignment result from the assigner.
     """
     particle_coords = snap_data.data
-    ensemble, groups = bound_ensemble(particle_coords, snap_df, config)
+    ensemble, groups = bound_ensemble(snap_data, snap_df, config)
 
     result = assigner.assign(
         ensemble, particle_coords, groups,

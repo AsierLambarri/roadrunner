@@ -29,6 +29,7 @@ from roadrunner.clustering.assignment.plausibility import (
     errani_scale,
     make_plausibility,
 )
+from roadrunner._mcf_types import SnapshotData
 from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.mixture._math import row_l1_normalize
 from roadrunner.physics.boundness import compute_halo_bound_particles
@@ -43,6 +44,7 @@ from roadrunner.physics.potentials import (
     PlummerPotential,
 )
 from roadrunner.physics.scaler import StandardScaler
+from roadrunner.pipeline.processing import ProcessingConfig
 
 
 def _old_rank_transform(values):
@@ -62,17 +64,37 @@ def _nfw_halo(xcen, vel, M, rvir, c, sid):
                      sub_tree_id=sid, redshift=0.0, comoving=False)
 
 
+def _snap(coords):
+    n = coords.shape[0]
+    return SnapshotData(
+        index=np.arange(n, dtype=np.uint64), mass=np.ones(n),
+        position=coords[:, :3], velocity=coords[:, 3:6],
+        redshift=0.0, time=0.0,
+    )
+
+
+def _nfw_row(xcen, vel, M, rvir, c, sid):
+    return {
+        "Sub_tree_id": sid,
+        "position_x": xcen[0], "position_y": xcen[1], "position_z": xcen[2],
+        "velocity_x": vel[0], "velocity_y": vel[1], "velocity_z": vel[2],
+        "mass": M, "virial_radius": rvir, "scale_radius": rvir / c, "Redshift": 0.0,
+    }
+
+
 def _two_nfw_halos(seed=3):
     """A host and a satellite whose bound sets overlap, with boundness computed."""
     rng = np.random.default_rng(seed)
-    host = _nfw_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, 10.0, 1)
-    sat = _nfw_halo([15, 0, 0], [0, 50, 0], 1e10, 25.0, 12.0, 2)
+    rows = [
+        _nfw_row([0, 0, 0], [0, 0, 0], 1e11, 60.0, 10.0, 1),
+        _nfw_row([15, 0, 0], [0, 50, 0], 1e10, 25.0, 12.0, 2),
+    ]
     coords = np.vstack([
         np.hstack([rng.normal(0, 5, (300, 3)), rng.normal(0, 30, (300, 3))]),
         np.hstack([rng.normal([15, 0, 0], 1.5, (200, 3)), rng.normal([0, 50, 0], 10, (200, 3))]),
     ])
-    halos = HaloEnsemble([host, sat])
-    compute_halo_bound_particles(halos, coords)
+    config = ProcessingConfig(halo_model="nfw", comoving=False, stars="none")
+    halos = HaloEnsemble(compute_halo_bound_particles(rows, _snap(coords), config))
     return halos, coords
 
 
@@ -221,17 +243,28 @@ def _kepler_halo(xcen, vel, M, rvir, sid):
                      sub_tree_id=sid, redshift=0.0, comoving=False)
 
 
+def _kepler_row(xcen, vel, M, rvir, sid):
+    return {
+        "Sub_tree_id": sid,
+        "position_x": xcen[0], "position_y": xcen[1], "position_z": xcen[2],
+        "velocity_x": vel[0], "velocity_y": vel[1], "velocity_z": vel[2],
+        "mass": M, "virial_radius": rvir, "scale_radius": rvir / 10.0, "Redshift": 0.0,
+    }
+
+
 def _two_kepler_halos(seed=3):
     """Kepler host and satellite with overlapping bound sets, boundness computed."""
     rng = np.random.default_rng(seed)
-    host = _kepler_halo([0, 0, 0], [0, 0, 0], 1e11, 60.0, 1)
-    sat = _kepler_halo([15, 0, 0], [0, 50, 0], 1e10, 25.0, 2)
+    rows = [
+        _kepler_row([0, 0, 0], [0, 0, 0], 1e11, 60.0, 1),
+        _kepler_row([15, 0, 0], [0, 50, 0], 1e10, 25.0, 2),
+    ]
     coords = np.vstack([
         np.hstack([rng.normal(0, 5, (300, 3)), rng.normal(0, 30, (300, 3))]),
         np.hstack([rng.normal([15, 0, 0], 1.5, (200, 3)), rng.normal([0, 50, 0], 10, (200, 3))]),
     ])
-    halos = HaloEnsemble([host, sat])
-    compute_halo_bound_particles(halos, coords)
+    config = ProcessingConfig(halo_model="kepler", comoving=False, stars="none")
+    halos = HaloEnsemble(compute_halo_bound_particles(rows, _snap(coords), config))
     return halos, coords
 
 
@@ -373,11 +406,17 @@ class TestKinematicPlausibility:
                             h.tree_velocity + v_esc * rng.uniform(size=(n, 1)) ** (1 / 3) * _unit(rng, n)])
         u2 = escape_speed_fraction(h, np.arange(n), coords)
         assert kstest(u2 ** 1.5, "uniform").pvalue > 1e-3
-        ens = HaloEnsemble([h])
-        compute_halo_bound_particles(ens, coords)
-        rows, E, _ = h.get_bound()
-        e_over_phi = E.astype(float) / h.potential(h.tree_centre + np.array([[r, 0.0, 0.0]]))[0]
-        np.testing.assert_allclose(1.0 - u2[rows], e_over_phi, rtol=1e-4, atol=1e-5)
+        tree_row = {
+            "Sub_tree_id": 1,
+            "position_x": xcen[0], "position_y": xcen[1], "position_z": xcen[2],
+            "velocity_x": vbulk[0], "velocity_y": vbulk[1], "velocity_z": vbulk[2],
+            "mass": 1e11, "virial_radius": 60.0, "scale_radius": 6.0, "Redshift": z,
+        }
+        config = ProcessingConfig(halo_model=model, comoving=comoving, stars="none")
+        halo = compute_halo_bound_particles([tree_row], _snap(coords), config)[0]
+        idx, E, _ = halo.get_bound()
+        e_over_phi = E.astype(float) / halo.potential(halo.tree_centre + np.array([[r, 0.0, 0.0]]))[0]
+        np.testing.assert_allclose(1.0 - u2[idx], e_over_phi, rtol=1e-4, atol=1e-5)
 
     def test_member_model_normalisation_moment_and_null(self):
         for m in (0.01, 0.1, 0.3, 0.59):

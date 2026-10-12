@@ -6,9 +6,11 @@ Both should produce identical bound-particle indices and energies.
 import numpy as np
 from scipy.spatial import KDTree
 
+from roadrunner._mcf_types import SnapshotData
 from roadrunner.physics.constants import G_KM
 from roadrunner.physics.boundness import compute_halo_bound_particles
 from roadrunner.physics.halo_model import HaloModel
+from roadrunner.pipeline.processing import ProcessingConfig
 
 
 def old_boundness(halos, particle_coordinates, search_factor=1.0):
@@ -70,6 +72,24 @@ def _make_halo(position, velocity, mass, rvir, rs, hid, redshift=0.1,
     )
 
 
+def _row(position, velocity, mass, rvir, rs, hid, redshift=0.1):
+    return {
+        "Sub_tree_id": hid,
+        "position_x": position[0], "position_y": position[1], "position_z": position[2],
+        "velocity_x": velocity[0], "velocity_y": velocity[1], "velocity_z": velocity[2],
+        "mass": mass, "virial_radius": rvir, "scale_radius": rs, "Redshift": redshift,
+    }
+
+
+def _snap(coords):
+    n = coords.shape[0]
+    return SnapshotData(
+        index=np.arange(n, dtype=np.uint64), mass=np.ones(n),
+        position=coords[:, :3], velocity=coords[:, 3:6],
+        redshift=0.0, time=0.0,
+    )
+
+
 class TestBoundnessRegression:
     def test_kepler_same_indices_and_energies(self):
         rng = np.random.default_rng(42)
@@ -85,15 +105,14 @@ class TestBoundnessRegression:
             _make_halo(np.array([20.0, 10.0, 5.0]), np.array([30.0, 0.0, 0.0]),
                        5e9, 30.0, 3.0, 2),
         ]
-        halos_new = [
-            _make_halo(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 0.0]),
-                       1e10, 50.0, 5.0, 1, search_factor=2.0),
-            _make_halo(np.array([20.0, 10.0, 5.0]), np.array([30.0, 0.0, 0.0]),
-                       5e9, 30.0, 3.0, 2, search_factor=2.0),
+        rows_new = [
+            _row(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 0.0]), 1e10, 50.0, 5.0, 1),
+            _row(np.array([20.0, 10.0, 5.0]), np.array([30.0, 0.0, 0.0]), 5e9, 30.0, 3.0, 2),
         ]
+        config_new = ProcessingConfig(halo_model="kepler", search_factor=2.0, stars="none")
 
         old_result = old_boundness(halos_old, coords, search_factor=2.0)
-        new_result = compute_halo_bound_particles(halos_new, coords)
+        new_result = compute_halo_bound_particles(rows_new, _snap(coords), config_new)
 
         for h_old, h_new in zip(old_result, new_result):
             i_old, e_old, t_old = h_old.get_bound()
@@ -129,15 +148,14 @@ class TestBoundnessRegression:
             _make_halo(np.array([-10.0, 15.0, 0.0]), np.array([-5.0, 10.0, 0.0]),
                        8e9, 40.0, 6.0, 2, model="nfw"),
         ]
-        halos_new = [
-            _make_halo(np.array([5.0, -3.0, 2.0]), np.array([10.0, 0.0, 5.0]),
-                       2e10, 60.0, 8.0, 1, model="nfw"),
-            _make_halo(np.array([-10.0, 15.0, 0.0]), np.array([-5.0, 10.0, 0.0]),
-                       8e9, 40.0, 6.0, 2, model="nfw"),
+        rows_new = [
+            _row(np.array([5.0, -3.0, 2.0]), np.array([10.0, 0.0, 5.0]), 2e10, 60.0, 8.0, 1),
+            _row(np.array([-10.0, 15.0, 0.0]), np.array([-5.0, 10.0, 0.0]), 8e9, 40.0, 6.0, 2),
         ]
+        config_new = ProcessingConfig(halo_model="nfw", stars="none")
 
         old_result = old_boundness(halos_old, coords)
-        new_result = compute_halo_bound_particles(halos_new, coords)
+        new_result = compute_halo_bound_particles(rows_new, _snap(coords), config_new)
 
         for h_old, h_new in zip(old_result, new_result):
             i_old, e_old, t_old = h_old.get_bound()

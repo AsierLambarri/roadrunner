@@ -542,6 +542,7 @@ class AccretionPipeline:
                 "halo_model": self.orchestrator.processing_config.halo_model,
                 "n_los": self.orchestrator.reduction_config.n_los,
                 "search_factor": self.orchestrator.processing_config.search_factor,
+                "stars": self.orchestrator.processing_config.stars,
                 # Any ParticleAssigner may be plugged in; one without the
                 # attribute does not mass-weight.
                 "mass_weighting": getattr(self.orchestrator.assigner, "mass_weighting", False),

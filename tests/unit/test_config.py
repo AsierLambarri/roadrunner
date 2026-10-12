@@ -27,6 +27,7 @@ class TestRunConfigDefaults:
         assert c.ptype == "star"
         assert c.unit_base is None
         assert c.assign_fields is None
+        assert c.stars == "free"
 
     def test_fields_default_factory(self):
         c1 = RunConfig()
@@ -108,3 +109,12 @@ class TestPlausibilityConfig:
         assert RunConfig(halo_model="nfw", plausibility="phase").plausibility == "phase"
         for hm in ("kepler", "nfw"):
             assert RunConfig(halo_model=hm, plausibility="kinematic").plausibility == "kinematic"
+
+
+class TestStarsConfig:
+    def test_default_and_validation(self):
+        assert RunConfig().stars == "free"
+        for value in ("none", "pinned", "free"):
+            assert RunConfig(stars=value).stars == value
+        with pytest.raises(ValueError, match="stars must be"):
+            RunConfig(stars="nope")

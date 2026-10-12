@@ -376,51 +376,29 @@ class HaloModel:
         E = self.potential_model.potential(self._physical(xyz)) + 0.5 * row_squared_norms(v)
         return E.astype(math_dtype(), copy=False)
 
-    @classmethod
-    def from_snapshot_row(cls, row, model="kepler", comoving=True, search_factor=1.0):
-        """Construct a HaloModel from a merger-tree row.
 
-        The potential is centred on the row's position, converted to physical
-        (``length_scale``), and moves with the row's velocity; its scale radius
-        is the row's, converted likewise
-        (``Rs`` and ``c = r_vir / r_s`` for NFW, ``a`` for Plummer and
-        Hernquist; a Kepler point mass needs neither).
+def tree_potential(row, model, length_scale):
+    """The tree halo's potential (dark matter): physical, at the row's centre and velocity.
 
-        Parameters
-        ----------
-        row : pandas.Series
-            Row from the merger tree with position, velocity, mass, etc.
-        model : str, default='kepler'
-            Potential model name.
-        comoving : bool, default=True
-            Whether coordinates are comoving.
-        search_factor : float, default=1.0
-            Multiple of the virial radius: the boundness search sphere.
+    Parameters
+    ----------
+    row : mapping
+        Merger-tree row (position, velocity, mass, virial and scale radius).
+    model : str
+        Potential family (``POTENTIAL_MODELS``).
+    length_scale : float
+        Catalogue-to-physical length factor (:func:`physical_length_factor`).
 
-        Returns
-        -------
-        halo : HaloModel
-        """
-        tree_centre = np.array([
-            row["position_x"], row["position_y"], row["position_z"],
-        ], dtype=math_dtype())
-        tree_velocity = np.array([
-            row["velocity_x"], row["velocity_y"], row["velocity_z"],
-        ], dtype=math_dtype())
-        ls = physical_length_factor(row["Redshift"], comoving)
-        scale = row["scale_radius"] * ls
-        kwargs = {"M": row["mass"], "G": G_KM, "centre": tree_centre.astype(np.float64) * ls,
-                  "velocity": tree_velocity.astype(np.float64)}
-        kwargs.update({"nfw": {"Rs": scale, "c": row["virial_radius"] / row["scale_radius"]},
-                       "plummer": {"a": scale}, "hernquist": {"a": scale}}.get(model.lower(), {}))
-        inner = get_potential(model, **kwargs)
-        return cls(
-            potential=inner,
-            tree_centre=tree_centre,
-            tree_velocity=tree_velocity,
-            virial_radius=float(row["virial_radius"]),
-            sub_tree_id=int(row["Sub_tree_id"]),
-            redshift=float(row["Redshift"]),
-            comoving=comoving,
-            search_factor=search_factor,
-        )
+    Returns
+    -------
+    potential : SphericalPotential
+    """
+    scale = row["scale_radius"] * length_scale
+    kwargs = {
+        "nfw": {"Rs": scale, "c": row["virial_radius"] / row["scale_radius"]},
+        "plummer": {"a": scale},
+        "hernquist": {"a": scale},
+    }.get(model.lower(), {})
+    centre = np.array([row["position_x"], row["position_y"], row["position_z"]], dtype=np.float64)
+    velocity = np.array([row["velocity_x"], row["velocity_y"], row["velocity_z"]], dtype=np.float64)
+    return get_potential(model, M=row["mass"], G=G_KM, centre=centre * length_scale, velocity=velocity, **kwargs)
