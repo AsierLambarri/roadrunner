@@ -18,7 +18,8 @@ from :meth:`HaloModel.get_bound` (never the scaled boundness). Every model is
 computed per halo, before the groups are fit, and exposes the same interface:
 
 - ``prepare(halos, coords)``: α of every bound pair of this snapshot;
-- ``column_values(column_id)``: α of the columns of a group's matrix;
+- ``column_values(column_id)``: α^β of the columns of a group's matrix (β the
+  ``tempering``: 1 leaves α as is, 0 gives every bound halo the same prior);
 - ``update(resp_map, weights)``: refit after the snapshot (between
   snapshots, never inside EM);
 - ``state`` / ``set_state``: checkpoint round trip.
@@ -193,11 +194,14 @@ class _Plausibility:
     literature_rhalf : {"kravtsov", "stars"}, default="kravtsov"
         The stellar half-mass radius ``r_1/2`` its literature prior reads (:data:`LITERATURE_RHALF`);
         unused by ``"rank"``.
+    tempering : float, default=1.0
+        β: the fit reads α^β (:meth:`column_values`).
     """
 
     name = ""
 
-    def __init__(self, literature_rhalf="kravtsov"):
+    def __init__(self, literature_rhalf="kravtsov", tempering=1.0):
+        self.tempering = float(tempering)
         self._half_mass_radius = LITERATURE_RHALF[literature_rhalf]
         self._alpha: dict[int, np.ndarray] = {}
         self._t: dict[int, tuple[np.ndarray, np.ndarray]] = {}
@@ -246,7 +250,7 @@ class _Plausibility:
         raise NotImplementedError
 
     def column_values(self, column_id):
-        """α of each column of a group's boundness matrix.
+        """α^β (β the ``tempering``) of each column of a group's boundness matrix: the fit's only read of α.
 
         Parameters
         ----------
@@ -258,11 +262,12 @@ class _Plausibility:
         values : list of ndarray of math_dtype
             Parallel to the columns' (index-sorted) bound particles; empty
             for halos without boundness (empty columns). α is computed in
-            float64, from the halos' float64 distributions, and cast here
+            float64, from the halos' float64 distributions, tempered there
+            (after the floor and the cap; β = 1 is exact) and cast here
             once: the boundary to ``math_dtype()``.
         """
         md = math_dtype()
-        return [self._alpha.get(int(s), _EMPTY).astype(md, copy=False) for s in column_id]
+        return [(self._alpha.get(int(s), _EMPTY) ** self.tempering).astype(md, copy=False) for s in column_id]
 
     def update(self, resp_map, weights=None):
         """Refit after a snapshot (no-op here).
@@ -364,8 +369,8 @@ class EnergyPlausibility(_Plausibility):
 
     name = "energy"
 
-    def __init__(self, literature_rhalf="kravtsov"):
-        super().__init__(literature_rhalf)
+    def __init__(self, literature_rhalf="kravtsov", tempering=1.0):
+        super().__init__(literature_rhalf, tempering)
         self._edges: np.ndarray | None = None
         self._log_density: np.ndarray | None = None
 
@@ -510,8 +515,8 @@ class PhaseSpacePlausibility(_Plausibility):
 
     name = "phase"
 
-    def __init__(self, literature_rhalf="kravtsov"):
-        super().__init__(literature_rhalf)
+    def __init__(self, literature_rhalf="kravtsov", tempering=1.0):
+        super().__init__(literature_rhalf, tempering)
         self._mu: float | None = None
         self._sd: float | None = None
         self._sd_min = 0.0
@@ -662,8 +667,8 @@ class KinematicPlausibility(_Plausibility):
 
     name = "kinematic"
 
-    def __init__(self, literature_rhalf="kravtsov"):
-        super().__init__(literature_rhalf)
+    def __init__(self, literature_rhalf="kravtsov", tempering=1.0):
+        super().__init__(literature_rhalf, tempering)
         self._m_pool: float | None = None
         self._m: dict[int, float] = {}
 
@@ -726,7 +731,7 @@ PLAUSIBILITY_MODELS = {"rank": RankPlausibility, "energy": EnergyPlausibility, "
                         "kinematic": KinematicPlausibility}
 
 
-def make_plausibility(name, literature_rhalf="kravtsov"):
+def make_plausibility(name, literature_rhalf="kravtsov", tempering=1.0):
     """Instantiate a plausibility model by name.
 
     Parameters
@@ -735,6 +740,8 @@ def make_plausibility(name, literature_rhalf="kravtsov"):
         ``"rank"``, ``"energy"``, ``"phase"`` or ``"kinematic"``.
     literature_rhalf : str, default="kravtsov"
         ``r_1/2`` of the literature priors (:data:`LITERATURE_RHALF`): ``"kravtsov"`` or ``"stars"``.
+    tempering : float, default=1.0
+        β: the fit reads α^β.
 
     Returns
     -------
@@ -746,4 +753,4 @@ def make_plausibility(name, literature_rhalf="kravtsov"):
         raise ValueError(f"Unknown plausibility {name!r}. Choose from: {list(PLAUSIBILITY_MODELS)}")
     if literature_rhalf not in LITERATURE_RHALF:
         raise ValueError(f"Unknown literature_rhalf {literature_rhalf!r}. Choose from: {list(LITERATURE_RHALF)}")
-    return model(literature_rhalf)
+    return model(literature_rhalf, tempering)

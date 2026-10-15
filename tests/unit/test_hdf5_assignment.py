@@ -119,6 +119,26 @@ class TestHDF5AssignmentWriter:
             assert np.isnan(grp["boundness"][3])
             np.testing.assert_array_equal(grp["boundness_valid"][:], [True, True, True, False])
 
+    def test_log_alpha_joined_by_particle_id(self, tmp_dir):
+        """log_alpha is written parallel to log_resp, joined by row like the boundness."""
+        os.makedirs(tmp_dir, exist_ok=True)
+        w = HDF5AssignmentWriter(tmp_dir)
+        resp_csc = SparseCSC(
+            [np.array([0, 1, 2], dtype=np.uint64)],
+            [np.array([0.2, 0.3, 0.5], dtype=np.float32)],
+            column_id=np.array([1], dtype=np.int64),
+        )
+        rows = [np.array([2, 0, 1], dtype=np.uint64)]
+        result = AssignmentResult(
+            particle_df=pd.DataFrame({"array_index": np.arange(3, dtype=np.uint64), "Sub_tree_id": [1, 1, 1]}),
+            responsibilities=resp_csc, fitted_parameters={1: {}}, statistics={"groups": 1},
+        )
+        w.write_snapshot(0, 13.0, result,
+                         SparseCSC(rows, [np.array([0.1, 0.2, 0.3], dtype=np.float32)], column_id=np.array([1])),
+                         alpha_csc=SparseCSC(rows, [np.array([2.0, 3.0, 4.0])], column_id=np.array([1])))
+        with h5py.File(os.path.join(tmp_dir, "assignment", "snapshot0000.hdf5"), "r") as hf:
+            np.testing.assert_allclose(hf["galaxies"]["1"]["log_alpha"][:], np.log([3.0, 4.0, 2.0]), rtol=1e-6)
+
     def test_timescales(self, tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
         w = HDF5AssignmentWriter(tmp_dir)

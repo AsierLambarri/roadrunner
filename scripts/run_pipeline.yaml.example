@@ -68,6 +68,7 @@ reg_covar: 1e-6                 # Regularization for covariance
 # ── Physics ──────────────────────────────────────────────────────────────────
 halo_model: kepler              # kepler, nfw
 plausibility: rank              # Latent prior: rank, energy (nfw/plummer/hernquist), phase, kinematic
+tempering: 1.0                  # beta: the fit reads the plausibility as alpha**beta (1: as is; 0: flat)
 literature_rhalf: kravtsov       # r½ of the literature priors: kravtsov (0.015 Rvir) | stars (the halo's stars)
 n_los: 15                       # Number of lines of sight for properties
 search_factor: 1.0              # Search radius multiplier (Rvir)

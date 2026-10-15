@@ -145,6 +145,7 @@ def _run(config, equiv_table, snapshot_reader):
         mass_weighting=config.mass_weighting,
         plausibility=config.plausibility,
         literature_rhalf=config.literature_rhalf,
+        tempering=config.tempering,
         n_svi_iters=config.svi_iters,
         batch_size=config.svi_batch_size,
     )

@@ -1,3 +1,4 @@
+import json
 import os
 
 import numpy as np
@@ -642,11 +643,15 @@ def test_plausibility_checkpoint_resume(tmp_path, halo_model, plausibility):
     assert state is not None
     same_state(state, pipeline.orchestrator.assigner.plausibility.state)
 
+    with h5py.File(os.path.join(str(tmp_path), "catalogue.hdf5"), "r") as hf:
+        assert json.loads(hf["header/config"][()])["tempering"] == 1.0
     with h5py.File(os.path.join(str(tmp_path), "assignment", "snapshot0000.hdf5"), "r") as hf:
         for gid, grp in hf["galaxies"].items():
             b = grp["boundness"][:][grp["boundness_valid"][:]]
             assert grp.attrs["energy_scale"] > 0
             assert np.all(b > 0)
+            log_alpha = grp["log_alpha"][:]                # floored alpha > 0, one per responsibility
+            assert log_alpha.shape == grp["log_resp"].shape and np.all(np.isfinite(log_alpha))
             if halo_model == "nfw":
                 assert np.all(b < 1)                      # NFW boundness is E / Phi_0
 

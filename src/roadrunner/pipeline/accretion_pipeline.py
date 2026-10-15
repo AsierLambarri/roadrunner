@@ -18,6 +18,7 @@ from roadrunner._exceptions import RestartError
 from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
 from roadrunner.randomness import consumer_seed, random_seed
 from roadrunner.threads import thread_budget
+from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.io.hdf5_assignment import HDF5AssignmentWriter
 from roadrunner.io.hdf5_catalogue import HDF5CatalogueWriter
 from roadrunner.io.hdf5_particles import HDF5ParticleWriter
@@ -549,6 +550,7 @@ class AccretionPipeline:
                 # attribute does not mass-weight.
                 "mass_weighting": getattr(self.orchestrator.assigner, "mass_weighting", False),
                 "plausibility": getattr(self._plausibility(), "name", None),
+                "tempering": getattr(self._plausibility(), "tempering", None),
                 "seed": self._base_seed,
                 "threads": thread_budget(),
             },
@@ -639,10 +641,14 @@ class AccretionPipeline:
                 )
 
                 bound_csc, _ = snap_result.ensemble.get_particles(scaled_energies=True)
+                plaus = self._plausibility()
                 self.assign_writer.write_snapshot(
                     snap_id, snap_data.time, snap_result.result, bound_csc,
                     energy_scales=dict(zip(snap_result.ensemble.sub_tree_ids.tolist(),
                                            snap_result.ensemble.energy_scales.tolist())),
+                    alpha_csc=None if plaus is None else SparseCSC(
+                        bound_csc.column_indices, plaus.column_values(bound_csc.column_id),
+                        column_id=bound_csc.column_id),
                 )
 
             elapsed = time.time() - t_start

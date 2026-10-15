@@ -129,8 +129,24 @@ class TestRankPlausibility:
         for name in PLAUSIBILITY_MODELS:                 # every model takes the same constructor arguments
             assert make_plausibility(name)._half_mass_radius is kravtsov_half_mass_radius
             assert make_plausibility(name, "stars")._half_mass_radius is stars_half_mass_radius
-        a = XGMMAssigner(verbose=0, plausibility="phase", literature_rhalf="stars")
+        a = XGMMAssigner(verbose=0, plausibility="phase", literature_rhalf="stars", tempering=0.5)
         assert a.plausibility._half_mass_radius is stars_half_mass_radius
+        assert a.plausibility.tempering == 0.5
+
+    @pytest.mark.parametrize("name", list(PLAUSIBILITY_MODELS))
+    def test_tempering_reads_alpha_to_the_beta(self, name):
+        """column_values gives alpha**beta: beta = 1 exactly alpha, 0.5 its root, 0 ones."""
+        alpha = np.array([1e-8, 0.3, 4.0, np.exp(50.0)])
+        for beta, want in ((1.0, alpha), (0.5, np.sqrt(alpha)), (0.0, np.ones(4))):
+            p = make_plausibility(name, tempering=beta)
+            p._alpha = {7: alpha}
+            got = p.column_values(np.array([7, 8]))
+            np.testing.assert_allclose(got[0], want.astype(math_dtype()), rtol=1e-6)
+            assert got[1].size == 0
+        np.testing.assert_array_equal(make_plausibility(name).column_values(np.array([7]))[0].size, 0)
+        p = make_plausibility(name)
+        p._alpha = {7: alpha}
+        np.testing.assert_array_equal(p.column_values(np.array([7]))[0], alpha.astype(math_dtype()))   # beta = 1: exact
 
 
 class TestEnergyPlausibility:

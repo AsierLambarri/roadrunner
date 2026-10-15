@@ -50,6 +50,7 @@ class RunConfig:
     halo_model: str = "kepler"
     plausibility: str = "rank"
     literature_rhalf: str = "kravtsov"
+    tempering: float = 1.0          # beta: the fit reads the plausibility as alpha**beta (1: as is; 0: flat)
     cov_type: str = "full"
     max_iter: int = 10
     tol: float = 1e-2
@@ -129,11 +130,13 @@ class RunConfig:
 
         for field_name in (
             "tol", "reg_covar", "search_factor",
-            "birth_window_factor", "float_atol", "ssc_alpha",
+            "birth_window_factor", "float_atol", "ssc_alpha", "tempering",
         ):
             val = getattr(self, field_name, None)
             if val is not None:
                 object.__setattr__(self, field_name, float(val))
+        if not 0.0 <= self.tempering < float("inf"):
+            raise ValueError(f"tempering must be finite and >= 0, got {self.tempering}")
 
         if self.selection_snapshot is not None:
             object.__setattr__(self, "selection_snapshot",

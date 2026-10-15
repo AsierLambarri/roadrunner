@@ -13,8 +13,8 @@
 
 """HDF5 writer for per-snapshot assignment data.
 
-Writes log-responsibilities, fitted mixture parameters, hard labels,
-boundness values, and particle timescales to per-snapshot HDF5 files.
+Writes log-responsibilities, log-plausibilities, fitted mixture parameters,
+hard labels, boundness values, and particle timescales to per-snapshot HDF5 files.
 """
 
 import os
@@ -28,8 +28,8 @@ from roadrunner._defaults import COSMOLOGY_GROUP
 from roadrunner.cosmology import current_cosmology
 
 
-def _aligned_boundness(resp_rows, bound_rows, bound_values, dtype):
-    """Join boundness values onto responsibility rows, by particle ID.
+def _aligned_values(resp_rows, bound_rows, bound_values, dtype):
+    """Join per-pair values (boundness, log plausibility) onto responsibility rows, by particle ID.
 
     ``resp_rows`` and ``bound_rows`` are two independently-ordered
     particle-index arrays for the same galaxy -- see C06: nothing
@@ -45,7 +45,7 @@ def _aligned_boundness(resp_rows, bound_rows, bound_values, dtype):
     resp_rows : ndarray of int
         Particle indices in the order they'll be written (target order).
     bound_rows : ndarray of int
-        Particle indices boundness values are keyed by (any order).
+        Particle indices the values are keyed by (any order).
     bound_values : ndarray
         Values parallel to ``bound_rows``.
     dtype : numpy.dtype
@@ -135,7 +135,7 @@ class HDF5AssignmentWriter:
         return select_float_dtype(max_abs, self._float_atol, msg=what, stacklevel=3)
 
     def write_snapshot(self, snapshot_id, time,
-                       assignment_result, boundness_csc, energy_scales=None):
+                       assignment_result, boundness_csc, energy_scales=None, alpha_csc=None):
         """Write a snapshot's assignment data to an HDF5 file.
 
         The run's cosmology is written as the ``header/cosmology`` group's
@@ -155,6 +155,10 @@ class HDF5AssignmentWriter:
             Binding energy scale per galaxy, written as the group attribute
             ``energy_scale`` (``E = -boundness * energy_scale``;
             :meth:`HaloModel.binding_energy_scale`, ``-Phi_0`` for a single NFW).
+        alpha_csc : SparseCSC, optional
+            Plausibility of every bound pair as the fit read it, α^β (same layout
+            as ``boundness_csc``), written per galaxy as ``log_alpha`` parallel to
+            ``log_resp``: the E-step is ``log r = log N + log pi + log alpha - log Z``.
         """
         path = self._snap_path(snapshot_id)
         with h5py.File(path, "w") as hf:
@@ -193,13 +197,20 @@ class HDF5AssignmentWriter:
                 gid: j for j, gid in enumerate(boundness_csc.column_id)
             }
 
+            if alpha_csc is not None:
+                with np.errstate(divide="ignore"):
+                    log_alpha = [np.log(np.asarray(v, dtype=np.float64)) for v in alpha_csc.column_values]
+                alpha_dtype = (self._pick_float_dtype(np.concatenate(log_alpha), "(log plausibility)")
+                               if log_alpha else np.float32)
+                alpha_col_by_gid = {gid: j for j, gid in enumerate(alpha_csc.column_id)}
+
             for j, gid in enumerate(all_gids):
                 resp_idx = resp_csc.column_indices[j]
 
                 col = bound_col_by_gid.get(gid)
                 bound_rows = boundness_csc.column_indices[col] if col is not None else np.array([], dtype=resp_idx.dtype)
                 bound_raw_vals = boundness_csc.column_values[col] if col is not None else np.array([])
-                bound_vals, bound_valid = _aligned_boundness(
+                bound_vals, bound_valid = _aligned_values(
                     resp_idx, bound_rows, bound_raw_vals, bound_dtype,
                 )
 
@@ -223,7 +234,7 @@ class HDF5AssignmentWriter:
                 )
                 grp.create_dataset(
                     "boundness",
-                    data=bound_vals,  # already bound_dtype from _aligned_boundness
+                    data=bound_vals,  # already bound_dtype from _aligned_values
                     compression="gzip",
                 )
                 grp.create_dataset(
@@ -231,6 +242,18 @@ class HDF5AssignmentWriter:
                     data=bound_valid,
                     compression="gzip",
                 )
+                if alpha_csc is not None:
+                    col = alpha_col_by_gid.get(gid)
+                    grp.create_dataset(
+                        "log_alpha",
+                        data=_aligned_values(
+                            resp_idx,
+                            alpha_csc.column_indices[col] if col is not None else np.array([], dtype=resp_idx.dtype),
+                            log_alpha[col] if col is not None else np.array([]),
+                            alpha_dtype,
+                        )[0],
+                        compression="gzip",
+                    )
 
                 params = assignment_result.fitted_parameters.get(int(gid), {})
                 mean = params.get("mean")

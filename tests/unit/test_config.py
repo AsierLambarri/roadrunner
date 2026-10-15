@@ -115,6 +115,16 @@ class TestStarsConfig:
             RunConfig(stars="nope")
 
 
+class TestTemperingConfig:
+    def test_default_and_validation(self):
+        assert RunConfig().tempering == 1.0
+        assert RunConfig(tempering="0.5").tempering == 0.5
+        assert RunConfig(tempering=0).tempering == 0.0
+        for bad in (-0.1, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="tempering must be"):
+                RunConfig(tempering=bad)
+
+
 class TestLiteratureRhalfConfig:
     def test_default_and_validation(self):
         assert RunConfig().literature_rhalf == "kravtsov"
