@@ -1,0 +1,134 @@
+"""Unit tests of the evaluation rules (evaluate/): alignment, run.log, warnings, spikes, mass steps, transfers."""
+import numpy as np
+import pandas as pd
+
+from evaluate.load import ABSENT, on
+from evaluate.soundness import read_runlog, read_warnings, spikes
+from evaluate.stability import relation, steps
+
+
+def test_on_reads_sorted_ids_and_marks_absent():
+    ids = np.array([2, 5, 9])
+    assert on(np.array([1, 2, 9, 10]), ids, np.array([20, 50, 90])).tolist() == [ABSENT, 20, 90, ABSENT]
+
+
+def test_read_runlog_keeps_last_row_of_a_resumed_snapshot(tmp_path):
+    head = "RUNTIME SNAP REDSHIFT LOAD PROCESS REDUCTION BOUND UNASSIGNED AVG_CONF"
+    text = "\n".join(["-halo_model: nfw", head, "-" * 40,
+                      "00:01:00.000 0 5.0 1.0 2.0 -- 10 3 --",
+                      "00:02:00.000 1 4.0 1.0 2.0 -- 20 4 0.9",
+                      head, "-" * 40,
+                      "00:03:00.000 1 4.0 1.0 2.0 -- 20 5 0.95",
+                      "", "--- Run complete ---"])
+    (tmp_path / "run.log").write_text(text)
+    log = read_runlog(tmp_path / "run.log")
+    assert log.index.tolist() == [0, 1]
+    assert log.at[1, "UNASSIGNED"] == 5 and np.isnan(log.at[0, "AVG_CONF"])
+
+
+def test_read_warnings_types_and_snapshots(tmp_path):
+    (tmp_path / "warnings.log").write_text(
+        "[2026-10-12 17:22:28] Snapshot 6: UserWarning: Numerical issue — retrying with double. (/x/gmm.py:651)\n---\n"
+        "[2026-10-12 17:30:00] Snapshot 7: NegativeDistributionWarning: Eddington's f was negative and clipped to 0 "
+        "in 2 inversions: at most 3.0e-03 (median 1.0e-04) of a density's mass. (/x/distribution.py:863)\n---\n")
+    w = read_warnings(tmp_path / "warnings.log")
+    assert w["snap"].tolist() == [6, 7]
+    assert w["type"].iloc[1].startswith("NegativeDistributionWarning: Eddington's f was negative and clipped to # in #")
+
+
+def test_spikes_flags_one_outlier_only():
+    x = pd.Series(np.full(30, 0.99))
+    x[15] = 0.5
+    assert np.flatnonzero(spikes(x).to_numpy()).tolist() == [15]
+
+
+def test_steps_tell_spikes_from_persistent_steps():
+    M = pd.DataFrame([[1.0, 1.0, 10.0, 1.1, 1.0, 1.0],      # spike at 2, its return leg at 3 is not a step
+                      [1.0, 1.0, 10.0, 10.0, 10.0, 10.0],   # persistent step at 2
+                      [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]])      # no step above x2
+    spike, persist = steps(M)
+    assert np.argwhere(spike).tolist() == [[0, 2]]
+    assert np.argwhere(persist).tolist() == [[1, 2]]
+
+
+def test_relation_classes():
+    hosts = {7: {1}, 8: {1, 7}}
+    assert relation(7, 1, hosts, ends=set()) == "stripping"
+    assert relation(1, 8, hosts, ends=set()) == "capture"
+    assert relation(7, 8, hosts, ends=set()) == "capture"        # 7 hosts 8
+    assert relation(8, 9, hosts, ends=set()) == "swap"
+    assert relation(8, -1, hosts, ends=set()) == "unbound"
+    assert relation(-1, 8, hosts, ends=set()) == "rebound"
+    assert relation(8, 1, hosts, ends={8}) == "merger"
+
+
+def test_log_gauss_matches_scipy():
+    from scipy.stats import multivariate_normal
+    from evaluate.model import log_gauss
+    rng = np.random.default_rng(1)
+    A = rng.normal(size=(6, 6))
+    cov, mean, x = A @ A.T + 6 * np.eye(6), rng.normal(size=6), rng.normal(size=(50, 6))
+    np.testing.assert_allclose(log_gauss(x, mean, cov), multivariate_normal(mean, cov).logpdf(x), rtol=1e-10)
+
+
+def test_weighted_spearman_with_equal_weights_is_spearman():
+    from scipy.stats import spearmanr
+    from evaluate.model import wspearman
+    rng = np.random.default_rng(2)
+    a, b = rng.normal(size=200), rng.normal(size=200)
+    np.testing.assert_allclose(wspearman(a, b, np.ones(200)), spearmanr(a, b)[0], rtol=1e-12)
+
+
+def test_contested_pairs_recover_alpha_up_to_a_constant_per_pair():
+    """D_alpha = Delta log alpha + (C_k - C_j): correlation with the stored Delta log alpha is 1."""
+    from evaluate.model import contested_pairs, pair_table
+    rng = np.random.default_rng(3)
+    n = 60
+    logN = rng.normal(size=(n, 2))
+    log_alpha = 0.5 * logN + rng.normal(size=(n, 2))
+    C = np.array([1.0, -2.0])                               # per-galaxy E-step constants
+    w = logN + C + log_alpha
+    log_resp = w - np.logaddexp(w[:, 0], w[:, 1])[:, None]
+    p = {"row": np.repeat(np.arange(n), 2).astype(float), "galaxy": np.tile([5.0, 3.0], n),
+         "log_resp": log_resp.ravel(), "log_alpha": log_alpha.ravel()}
+    (k, j, dG, dA, dLa), counts = contested_pairs(p, logN.ravel())
+    assert counts == (n, 0) and set(k) == {3} and set(j) == {5}
+    np.testing.assert_allclose(dA - dLa, C[1] - C[0])       # galaxy 3 minus galaxy 5
+    t = pair_table(k, j, dG, dA, dLa, s=0)
+    np.testing.assert_allclose(t["rho stored"], 1.0)
+    assert t["n"].iloc[0] == n
+
+
+def test_best_is_the_renormalised_argmax():
+    from evaluate.model import best
+    rows = np.array([1, 0, 1, 0, 1])
+    g = np.array([7, 7, 8, 8, 9])
+    x = np.log(np.array([0.2, 0.9, 0.5, 0.1, 0.3]))
+    r, k, top = best(rows, g, x)
+    assert r.tolist() == [0, 1] and k.tolist() == [7, 8]
+    np.testing.assert_allclose(top, [0.9, 0.5])
+
+
+def test_sweep_reads_back_report_scores(tmp_path):
+    from evaluate.report import Report
+    from evaluate.sweep import read_scores
+    rep = Report("t", "run", verdict=False)
+    rep.score("a long score name: with words", 0.25)
+    rep.score("count", 7)
+    rep.table("table", "  x 1")
+    rep.write(tmp_path / "r.txt")
+    assert read_scores(tmp_path / "r.txt") == {"a long score name: with words": 0.25, "count": 7}
+
+
+def test_disc_tag_keeps_the_disc_and_drops_the_halo():
+    from evaluate.compare import disc_tag
+    rng = np.random.default_rng(4)
+    n = 4000
+    R, phi = rng.uniform(0.1, 5.0, n), rng.uniform(0, 2 * np.pi, n)
+    disc = np.c_[R * np.cos(phi), R * np.sin(phi), rng.normal(0, 0.1, n),
+                 -100 * np.sin(phi), 100 * np.cos(phi), np.zeros(n)]          # rotating about z
+    halo = np.c_[rng.normal(0, 3.0, (500, 3)), rng.normal(0, 50.0, (500, 3))]
+    X = np.vstack([disc, halo])
+    tag = disc_tag(X, np.ones(len(X)), np.r_[np.ones(n, bool), np.zeros(500, bool)], np.zeros(len(X), bool),
+                   np.zeros(3), np.zeros(3), rh=2.0)
+    assert tag[:n].mean() > 0.8 and tag[n:].mean() < 0.3
