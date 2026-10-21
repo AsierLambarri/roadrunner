@@ -1,59 +1,111 @@
 """Point 2: the assignments are stable in time.
 
-Masses are hard-label masses (the assignment itself), not the catalogue's Mtot
-(infall list x bound set). A galaxy is present at s when it labels >= 1 particle,
-resolved with >= 100, major with >= 1000. A star is old at s when it was first
-seen >= 1 Gyr before; a newborn at s when first seen at s. Snapshot steps are
-consecutive entries of the run's snapshot list; ages count from its first
-snapshot (with --snaps, from the first one evaluated).
+    python3 evaluate/stability.py --path RUN [--particles DIR] [--workers N] [--snaps A:B]
 
-2.1 continuity: a gap is 1-3 snapshots without the galaxy between two present
-    ones, "dropped" when the tree has the galaxy there (else "tree gap", counted
-    only); a premature end is a last present snapshot more than one before the
-    tree branch's last. FAIL for a major galaxy before the gap / at the end,
-    FLAG for a resolved one. SCORE: dropped gaps per 1000 resolved galaxy-snapshots.
-2.2 mass histories (resolved at both ends of a step): a step is |log10 M(s)/M(s-1)|
-    > log10 2; a spike is a step that returns within 25% of M(s-1) at s+1..s+3.
-    A persistent step is explained by star formation (the newborns it labels at
-    s weigh >= half the gain) or by a tree merger into the galaxy at s-1..s+1
-    whose progenitor's last mass is >= half the gain (growth), by the galaxy's
-    own branch ending within 3 snapshots (drop), or labelled "pericentre" (drop
-    of a main-host satellite at a local minimum of its distance to the main
-    host within +-2 snapshots) or "tree incomplete" (its own tree rows at s-1, s
-    have no uid). A spike's return legs are neither spikes nor steps. FAIL: a spike in a major
-    galaxy, an unexplained step of the main host; FLAG: any other spike or
-    unexplained step. SCORE: per 100 resolved histories, and mass-weighted.
-2.3 old-star flicker: L(s-1) = a, L(s) != a, L(s+j) = a for some j in 1..3 (-1 is a
-    label). SCORE: median and max over snapshots with >= 1e4 old stars of the
-    flickering share of the old mass; FLAG a snapshot above max(5 x median, 1e-4).
-2.4 permanent transfers of old stars: L(s-1) = a, L(s) = b != a, L(s+1..s+3) = b;
-    classes merger (a's branch ends at s-1 or s), unbound (b = -1), rebound
-    (a = -1), stripping (b among a's hosts), capture (a among b's hosts), swap.
-    A satellite's hosts: every more massive halo it is bound to inside its R_vir.
-    SCORE: median capture share of the old mass of hosts, median swap share;
-    FLAG a snapshot whose capture share is above max(5 x median, 1e-4).
-2.5 newborns: kept when L(s+1) = L(s+2) = L(s). SCORE: kept mass share,
-    overall, main host, satellites, other centrals.
+Masses are hard-label masses (the assignment itself), not the catalogue's Mtot (infall list x bound
+set). A galaxy is present at s when it labels >= 1 particle, resolved with >= 100, major with >= 1000;
+it is bound at s when it has bound stars (stored pairs, i.e. it was fitted). A star is old at s when it
+is present at the last snapshot >= 1 Gyr before, a newborn at s when absent from the previous snapshot:
+its first appearance, as stars persist once formed (ages count from the run's first snapshot; with
+--snaps, from the first one evaluated). Windows are times, not snapshot counts: "within T after s"
+holds every snapshot with t_s < t <= t_s + T, and always at least the next one; a change itself is
+between consecutive snapshots (s-1 -> s). The exchange at s is the mass of the particles labelled a at
+s-1 and b != a at s, per (a, b).
+
+Symptoms (each a candidate finding):
+2.1 gaps: snapshots where a galaxy is absent between two present ones while the tree has its halo
+    (where the tree lacks it too, the gap is not ours and is left out), of any length, for galaxies
+    with N >= 10 particles just before (the pipeline's fragment size). A label gap keeps bound stars at
+    every missing snapshot (the mixture gave them to others): FLAG, "absorbed by a neighbour" when one
+    galaxy took >= half of its members, else "label gap". A bound gap has no bound star at some
+    missing snapshot: the members' centroid there is compared with the tree halo's centre; beyond
+    R_vir at any of them, "the tree lost the stars": FLAG; within R_vir at all of them, "bound gap with
+    members in place": FAIL when N >= 100 and >= 2 snapshots are unbound, FLAG otherwise; without
+    particle data to place them, "bound gap with members not located": FLAG.
+2.2 mass histories (resolved at both ends of a step): a step is |log10 M(s) / M(s-1)| > log10 2; a
+    spike is a step that comes back within 25% of M(s-1) within 300 Myr (its return legs are neither
+    spikes nor steps). A persistent step is explained, in this order, by "tree incomplete" (the
+    galaxy's own tree rows at s-1 or s have no uid), star formation (the newborns it labels at s weigh
+    >= half the gain), a merger (a tree merger into it within +-150 Myr whose progenitor's last mass is
+    >= half the gain), "merging" (a drop, its own branch ending within 300 Myr) or "pericentre" (a drop
+    of a satellite of any host at its smallest distance to its most massive host within +-200 Myr,
+    with snapshots on both sides); the last four override the first. Spikes and unexplained steps are
+    symptoms: "exchange between interacting galaxies" when other galaxies (not -1) give or take >= half
+    of the change in the exchange at s, else "unexplained". A spike of a major galaxy, or an
+    unexplained step of the main host: FAIL if unexplained, FLAG if an exchange; any other: FLAG.
+2.3 old-star flicker: L(s-1) = a, L(s) = b != a, back to a within 300 Myr (-1 is a label).
+2.4 permanent transfers of old stars: L(s-1) = a, L(s) = b != a, b throughout the next 300 Myr.
+    A change a -> b is: merger (a's branch ends at s-1 or s); unbound / rebound (b / a is -1);
+    stripping (b among a's hosts) or capture (a among b's hosts), together "related"; swap
+    ("unrelated"). Related and unrelated changes are split by boundness: "contested" when the star was
+    bound to both galaxies at s-1 or at s (a choice of the mixture), "forced" when only to one (its
+    boundness changed). A satellite's hosts: every more massive halo it is bound to inside its R_vir
+    (the tree's relations).
+    SCORE: median and max, over snapshots with >= 1e4 old stars, of the share of the old mass that
+    flickers / transfers, in all and per class and cell; the capture share of the hosts' old mass.
+    Symptom (FLAG): a snapshot whose flicker share, capture share, or unrelated flicker or transfer
+    share is above max(5 x its median, 1e-4); it involves the pair (a, b) carrying > half of it.
+2.5 newborns: kept when labelled as at s throughout the next 150 Myr. SCORE: kept mass share, overall,
+    main host, satellites, other centrals.
+A snapshot without the previous one, or without a full 300 Myr after it, gets no 2.3-2.5 window.
+
+Episodes (report.py): one finding per physical cause. Two symptoms are linked when they are within
+100 Myr or in adjacent snapshots and share a galaxy (its own, or a partner that gave or took >= half of
+the symptom's mass), or, both without galaxies, come from the same check; the linked symptoms form one
+episode, reported once with all its symptoms, as FAIL if any of them is a FAIL, else FLAG, under its
+cause (that of a FAIL symptom, else the first present of: the tree lost the stars, bound gap with
+members in place, bound gap with members not located, absorbed by a neighbour, label gap, exchange
+between interacting galaxies, unexplained, share spike). SCORE: episodes by cause.
+
+Writes evaluation/stability.txt and .log; plots/run/: stability_masses.pdf (host and largest
+galaxies), stability_shares.pdf (2.3-2.5 against time), stability_episodes.pdf (episodes by cause
+against time); plots/g<id>/stability_mass.pdf (its mass history and symptoms) for the plotted galaxies.
 """
+import sys
+from pathlib import Path
+
+if __package__ in (None, ""):                   # run as a file: make the repository root importable
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
-from evaluate.load import ABSENT, MAJOR, RESOLVED, UNASSIGNED, mergers, on
+from evaluate import cli, plots
+from evaluate.load import (ABSENT, MAJOR, OLD_GYR, RESOLVED, UNASSIGNED, Run, member, mergers, newborn,
+                           on, pool, seen_before)
 from evaluate.report import Report
 
-OLD_GYR = 1.0
-LOG_JUMP, LOG_BACK, AHEAD = np.log10(2.0), np.log10(1.25), 3
+RETURN_GYR, STAY_GYR, KEEP_GYR = 0.3, 0.3, 0.15   # 2.2 spikes and 2.3 flicker, 2.4 transfers, 2.5 newborns
+MERGER_GYR, MERGING_GYR, PERI_GYR = 0.15, 0.3, 0.2  # 2.2 explanations: +-, after, +-
+WINDOW_GYR = max(RETURN_GYR, STAY_GYR, KEEP_GYR)   # 2.3-2.5 read this far ahead
+LOG_JUMP, LOG_BACK = np.log10(2.0), np.log10(1.25)
+GAP_FAIL, GAP_FLAG = 100, 10                        # 2.1: particles just before a gap
+PARTNER = 0.5                                       # share of a symptom's mass that makes a partner
 MIN_OLD = 1e4
 SPIKE_FACTOR, SHARE_FLOOR = 5.0, 1e-4
 POS = ["position_x", "position_y", "position_z"]
-FLICKER_CLASS = {"stripping": "host<->satellite", "capture": "host<->satellite", "unbound": "<->unbound",
-                 "rebound": "<->unbound", "swap": "other", "merger": "merger"}
 TRANSFERS = ["merger", "unbound", "rebound", "stripping", "capture", "swap"]
+CELLS = ["contested related", "forced related", "contested unrelated", "forced unrelated"]
 NEWBORN = ["all", "main host", "satellites", "other centrals"]
+SHARES = {
+    "flicker": "2.3 flicker",
+    "flicker unrelated": "2.3 unrelated flicker",
+    "transfer unrelated": "2.4 unrelated transfer",
+    "capture of host old mass": "2.4 capture",
+}
+CAUSES = [
+    "the tree lost the stars", "bound gap with members in place", "bound gap with members not located",
+    "absorbed by a neighbour", "label gap", "exchange between interacting galaxies", "unexplained",
+    "share spike",
+]
+COLOR = dict(zip(CAUSES, ["C0", "C1", "C2", "C4", "C5", "C6", "C8", "C7"]))   # no red: red is kept for FAIL
 
+
+# --- label changes ------------------------------------------------------------------------------
 
 def relation(a, b, hosts, ends):
     """Relation of a label change a -> b at a snapshot (see 2.4); ``hosts``: satellite -> its hosts."""
@@ -79,116 +131,266 @@ def classify(a, b, hosts, ends):
     return rel[inv.ravel()]
 
 
-def steps(M):
-    """Spikes and persistent steps of a (galaxy x snapshot) mass table, NaN where not resolved.
+def cells(cls, contested):
+    """2.4 cell of each change: contested / forced x related / unrelated ('' for merger, unbound, rebound)."""
+    related, unrelated = np.isin(cls, ["stripping", "capture"]), cls == "swap"
+    conditions = [related & contested, related & ~contested, unrelated & contested, unrelated & ~contested]
+    return np.select(conditions, CELLS, "")
 
-    A spike's return legs (its steps at s+1..s+j, back by s+j) are neither spikes nor steps.
-    """
+
+def ahead(t, k, T):
+    """Indices of the snapshots within ``T`` after the k-th (``t_k < t <= t_k + T``), at least the next one."""
+    end = np.searchsorted(t, t[k] + T, side="right")
+    return np.arange(k + 1, min(max(end, k + 2), t.size))
+
+
+def within(A, dt, T):
+    """The rows of ``A`` (window snapshots, times ``dt`` after s, ascending) within ``T``; at least the first."""
+    return A[:max(1, int((dt <= T).sum()))]
+
+
+def candidates(run, s, factor):
+    """Sorted keys ``id x factor + galaxy`` of the (particle, galaxy) pairs bound at ``s`` (stored pairs)."""
+    p = run.pairs(s)
+    ids = run.row_labels(s)[0][p["row"].astype(np.int64)]
+    if ids.size and int(ids.max()) >= np.iinfo(np.int64).max // factor:
+        raise OverflowError(f"particle IDs up to {ids.max()} x {factor} galaxy slots overflow int64 keys")
+    return np.sort(ids * factor + p["galaxy"].astype(np.int64))
+
+
+def exchange(ids, lab, m, prev):
+    """Mass per (a, b), a != b, of the particles labelled a at the previous snapshot and b now."""
+    a = on(ids, *prev)
+    moved = (a != ABSENT) & (a != lab)
+    return pd.DataFrame({"a": a[moved], "b": lab[moved], "m": m[moved]}).groupby(["a", "b"])["m"].sum()
+
+
+def partners(flow, G, change):
+    """Galaxies (not -1) exchanging with ``G`` in ``flow``, toward the sign of ``change``: their total
+    mass, and the galaxies carrying >= PARTNER of |change|."""
+    if flow is None or flow.empty:
+        return 0.0, set()
+    df = flow.reset_index()
+    if change > 0:
+        side = df[(df["b"] == G) & (df["a"] >= 0)]
+        other = side["a"]
+    else:
+        side = df[(df["a"] == G) & (df["b"] >= 0)]
+        other = side["b"]
+    big = set(other[side["m"] >= PARTNER * abs(change)].astype(int).tolist())
+    return float(side["m"].sum()), big
+
+
+# --- verdicts -----------------------------------------------------------------------------------
+
+def steps(M, t):
+    """Spikes and persistent steps of a (galaxy x snapshot) mass table, NaN where not resolved; ``t`` the
+    snapshots' times. A spike's return legs (its steps up to the return) are neither spikes nor steps."""
     lm = np.log10(M.to_numpy(np.float64))
-    S = lm.shape[1]
     step = np.zeros(lm.shape, bool)
     step[:, 1:] = np.abs(lm[:, 1:] - lm[:, :-1]) > LOG_JUMP
     spike, leg = np.zeros_like(step), np.zeros_like(step)
-    for j in range(1, AHEAD + 1):
-        back = np.zeros_like(step)
-        back[:, 1:S - j] = np.abs(lm[:, 1 + j:] - lm[:, :S - 1 - j]) < LOG_BACK     # M(s+j) vs M(s-1)
-        new = step & back & ~spike
-        spike |= new
-        for i in range(1, j + 1):
-            leg[:, i:] |= new[:, :S - i]
+    for c in range(1, lm.shape[1]):
+        open_ = step[:, c] & ~leg[:, c]
+        for j in ahead(t, c, RETURN_GYR):
+            back = open_ & (np.abs(lm[:, j] - lm[:, c - 1]) < LOG_BACK)
+            spike[:, c] |= back
+            leg[:, c + 1:j + 1] |= back[:, None]
+            open_ &= ~back
     return spike, step & ~spike & ~leg
 
 
-def by_size(rep, n, check, what):
-    """FAIL for a major galaxy, FLAG for a resolved one, nothing below."""
-    if n >= MAJOR:
-        rep.fail(check, what)
-    elif n >= RESOLVED:
-        rep.flag(check, what)
+def gap_verdict(n0, bound_missing, place, partner_share):
+    """2.1 severity and cause of a gap.
+
+    ``bound_missing`` is the number of snapshots without bound stars; ``place`` where the members were
+    then: "in" (within R_vir of the tree centre at all of them), "out" (beyond at some) or None (not
+    located); ``partner_share`` the largest share one galaxy took of the members.
+    """
+    if bound_missing == 0:
+        return "FLAG", "absorbed by a neighbour" if partner_share >= PARTNER else "label gap"
+    if place is None:
+        return "FLAG", "bound gap with members not located"
+    if place == "out":
+        return "FLAG", "the tree lost the stars"
+    severity = "FAIL" if n0 >= GAP_FAIL and bound_missing >= 2 else "FLAG"
+    return severity, "bound gap with members in place"
 
 
-def window(run, k, first, t_first, hosts, ends, pair_mass):
-    """2.3-2.5 at the k-th snapshot of the run: one row of shares."""
-    sn = run.snaps
-    s = sn[k]
-    ids, lab = run.labels(s)
-    L = np.stack([on(ids, *run.labels(sn[k - 1]))] + [lab]
-                 + [on(ids, *run.labels(sn[k + j])) for j in range(1, AHEAD + 1)])
+# --- one 2.3-2.5 window ---------------------------------------------------------------------------
+
+def window(run, k, t, labs, cands, H, ends, pair_mass, factor):
+    """2.3-2.5 at the k-th snapshot of the run (``H``: its satellite -> hosts): one row of shares, with
+    the pair dominating each share; adds the flickering pairs to ``pair_mass``."""
+    s = run.snaps[k]
+    ids, b = labs[k]
+    nxt = ahead(t, k, WINDOW_GYR)
+    dt = t[nxt] - t[k]
+    a = on(ids, *labs[k - 1])
+    A = np.stack([on(ids, *labs[j]) for j in nxt])
     m = np.nan_to_num(run.masses(s))
-    present = (L != ABSENT).all(0)
-    old = present & (run.time[s] - t_first[ids] >= OLD_GYR)
-    a, b, later = L[0], L[1], L[2:]
+
+    present = (a != ABSENT) & (A != ABSENT).all(0)
+    old = present & seen_before(run, s, ids, OLD_GYR)
     moved = old & (b != a)
-    flick = moved & (later == a).any(0)
-    stay = moved & (later == b).all(0)
-    H = hosts[s]
-    m_old = max(m[old].sum(), 1e-300)                 # no old stars: shares 0, and the snapshot is out of scope (n_old)
-    row = {"snap": s, "t": run.time[s], "n_old": int(old.sum()), "flicker": m[flick].sum() / m_old}
+    flick = moved & (within(A, dt, RETURN_GYR) == a).any(0)
+    stay = moved & (within(A, dt, STAY_GYR) == b).all(0)
+    contested = member(cands[k - 1], ids * factor + b) | member(cands[k], ids * factor + a)
+    m_old = max(m[old].sum(), 1e-300)            # no old stars: shares 0, and the snapshot is out of scope
+    row = {"snap": s, "t": t[k], "n_old": int(old.sum())}
 
-    fc = pd.Series(classify(a[flick], b[flick], H, ends), dtype=object).map(FLICKER_CLASS).to_numpy()
-    for c in set(FLICKER_CLASS.values()):
-        row[f"flicker {c}"] = m[flick][fc == c].sum() / m_old
-    pairs = pd.DataFrame({"a": a[flick], "b": b[flick], "m": m[flick]}).groupby(["a", "b"])["m"].agg(["sum", "size"])
-    for (x, y), v in pairs.iterrows():
-        acc = pair_mass.setdefault((int(x), int(y)), [0.0, 0, 0, FLICKER_CLASS[relation(int(x), int(y), H, ends)]])
-        acc[0] += v["sum"]; acc[1] += int(v["size"]); acc[2] += 1
+    def share(col, sel, norm):
+        """The share of ``sel`` in ``norm``, and the pair carrying most of it with its part."""
+        row[col] = m[sel].sum() / norm
+        pm = pd.DataFrame({"a": a[sel], "b": b[sel], "m": m[sel]}).groupby(["a", "b"])["m"].sum()
+        row[f"{col} pair"] = tuple(int(x) for x in pm.idxmax()) if pm.size else None
+        row[f"{col} pair part"] = float(pm.max() / pm.sum()) if pm.size else 0.0
 
-    tc = classify(a[stay], b[stay], H, ends)
-    for c in TRANSFERS:
-        row[c] = m[stay][tc == c].sum() / m_old
-    hosting = old & np.isin(a, np.array(sorted(set().union(*H.values())), np.int64))
-    row["capture of host old mass"] = m[stay][tc == "capture"].sum() / max(m[hosting].sum(), 1e-300)
+    for name, sel in (("flicker", flick), ("transfer", stay)):
+        cls = np.full(ids.size, "", dtype=object)
+        cls[sel] = classify(a[sel], b[sel], H, ends)
+        cell = np.full(ids.size, "", dtype=object)
+        cell[sel] = cells(cls[sel], contested[sel])
+        row[name] = m[sel].sum() / m_old
+        row.update({f"{name} {c}": m[sel & (cls == c)].sum() / m_old for c in TRANSFERS})
+        row.update({f"{name} {c}": m[sel & (cell == c)].sum() / m_old for c in CELLS})
+        share(f"{name} unrelated", sel & (cls == "swap"), m_old)
+        if name == "flicker":
+            share("flicker", sel, m_old)
+        else:
+            hosting = old & np.isin(a, np.array(sorted(set().union(*H.values())), np.int64))
+            share("capture of host old mass", sel & (cls == "capture"), max(m[hosting].sum(), 1e-300))
 
-    nb = (first[ids] == s) & (L[1:4] != ABSENT).all(0) & (b != UNASSIGNED)
-    kept = nb & (later[0] == b) & (later[1] == b)
+    fl = pd.DataFrame({"a": a[flick], "b": b[flick], "m": m[flick], "mc": m[flick] * contested[flick]})
+    for (x, y), v in fl.groupby(["a", "b"])[["m", "mc"]].agg(["sum", "size"]).iterrows():
+        acc = pair_mass.setdefault((int(x), int(y)), [0.0, 0.0, 0, 0, relation(int(x), int(y), H, ends)])
+        acc[0] += v[("m", "sum")]
+        acc[1] += v[("mc", "sum")]
+        acc[2] += int(v[("m", "size")])
+        acc[3] += 1
+
+    keep = within(A, dt, KEEP_GYR)
+    nb = ~member(labs[k - 1][0], ids) & (keep != ABSENT).all(0) & (b != UNASSIGNED)
+    kept = nb & (keep == b).all(0)
     sat = np.isin(b, np.array(list(H), np.int64))
-    for name, sel in zip(NEWBORN, (nb, nb & (b == run.host), nb & sat, nb & (b != run.host) & ~sat)):
+    kinds = (nb, nb & (b == run.host), nb & sat, nb & (b != run.host) & ~sat)
+    for name, sel in zip(NEWBORN, kinds):
         row[f"newborn {name}"], row[f"newborn kept {name}"] = m[sel].sum(), m[kept & sel].sum()
     return row
 
 
-def evaluate(run, out):
-    rep = Report("Point 2, stable in time", run.name)
-    sn = run.snaps
-    tree_last = run.tree.groupby("Sub_tree_id")["Snapshot"].max()
-    tree_has = set(zip(run.tree["Sub_tree_id"].astype(int), run.tree["Snapshot"]))
-    no_uid = set(zip(run.tree.loc[run.tree["uid"].isna(), "Sub_tree_id"].astype(int),
-                     run.tree.loc[run.tree["uid"].isna(), "Snapshot"]))
-    merge = mergers(run.tree)
+# --- the workers ----------------------------------------------------------------------------------
 
-    first = np.full(0, -1, np.int64)                    # first-seen snapshot by particle ID
-    time_of = np.array([run.time.get(s, np.nan) for s in range(int(sn.max()) + 1)])
-    N, M, NB, Mcat, pos, hosts, rows, pair_mass = {}, {}, {}, {}, {}, {}, [], {}
-    for k, s in enumerate(sn):
-        ids, lab = run.labels(s)
-        if ids.max() >= first.size:
-            first = np.concatenate([first, np.full(int(ids.max()) + 1 - first.size, -1, np.int64)])
-        first[ids] = np.where(first[ids] < 0, s, first[ids])
-        m = np.nan_to_num(run.masses(s))
-        g, inv = np.unique(lab, return_inverse=True)
-        N[s] = pd.Series(np.bincount(inv), index=g)
-        M[s] = pd.Series(np.bincount(inv, weights=m), index=g)
-        NB[s] = pd.Series(np.bincount(inv, weights=m * (first[ids] == s)), index=g)
-        gal = run.galaxies(s)
-        Mcat[s], pos[s], hosts[s] = gal["Mtot"], gal[POS], run.hosts(s)
-        w = k - AHEAD                                   # the window at sn[w] needs sn[w-1 .. w+3]: all read by now
-        if w >= 1:
-            ends = set(tree_last.index[tree_last.isin([sn[w - 1], sn[w]])].astype(int))
-            rows.append(window(run, w, first, time_of[np.maximum(first, 0)], hosts, ends, pair_mass))
+_W = {}                                 # a worker's run and what its tasks share
+
+
+def _init(path, source, snaps, factor, tree_last):
+    run = Run(path, particles=source)
+    run.snaps = snaps
+    _W.update(run=run, t=np.array([run.time[s] for s in snaps]), factor=factor, tree_last=tree_last)
+
+
+def _snapshot(k):
+    """Phase A in a worker, at the k-th snapshot: per-galaxy counts, masses and newborn masses, the
+    catalogue masses and positions, hosts, the fitted galaxies, and the exchange from the previous one."""
+    run = _W["run"]
+    s = run.snaps[k]
+    ids, lab = run.labels(s)
+    m = np.nan_to_num(run.masses(s))
+    g, inv = np.unique(lab, return_inverse=True)
+    inv = inv.ravel()
+    gal = run.galaxies(s)
+    flow = exchange(ids, lab, m, run.labels(run.snaps[k - 1])) if k else None
+    return (
+        pd.Series(np.bincount(inv), index=g),
+        pd.Series(np.bincount(inv, weights=m), index=g),
+        pd.Series(np.bincount(inv, weights=m * newborn(run, s, ids)), index=g),
+        gal["Mtot"], gal[POS], run.hosts(s), run.fitted(s), flow,
+    )
+
+
+def _windows(ks):
+    """Phase B in a worker: the 2.3-2.5 windows of a run of consecutive snapshots, reading each once."""
+    run, t, factor, tree_last = _W["run"], _W["t"], _W["factor"], _W["tree_last"]
+    sn = run.snaps
+    labs, cands, rows, pair_mass = {}, {}, [], {}
+    for k in ks:
+        for j in [k - 1, k, *ahead(t, k, WINDOW_GYR)]:
+            if j not in labs:
+                labs[j] = run.labels(sn[j])
+        for j in (k - 1, k):
+            if j not in cands:
+                cands[j] = candidates(run, sn[j], factor)
+        for j in [j for j in labs if j < k - 1]:
+            del labs[j]
+        for j in [j for j in cands if j < k - 1]:
+            del cands[j]
+        ends = set(tree_last.index[tree_last.isin([sn[k - 1], sn[k]])].astype(int))
+        rows.append(window(run, k, t, labs, cands, run.hosts(sn[k]), ends, pair_mass, factor))
+    return rows, pair_mass
+
+
+# --- the point ------------------------------------------------------------------------------------
+
+def evaluate(run, out, workers=1):
+    rep = Report("Point 2, stable in time", run.name, point="2", causes=CAUSES)
+    sn = run.snaps
+    t = np.array([run.time[s] for s in sn])
+    tree = run.tree.set_index(["Snapshot", "Sub_tree_id"])
+    tree_last = run.tree.groupby("Sub_tree_id")["Snapshot"].max()
+    tree_has = set(tree.index.tolist())
+    no_uid = set(zip(run.tree.loc[run.tree["uid"].isna(), "Snapshot"],
+                     run.tree.loc[run.tree["uid"].isna(), "Sub_tree_id"].astype(int)))
+    merge = mergers(run.tree)
+    merge = merge.assign(t=merge["snapshot"].map(run.time))
+    factor = int(run.tree["Sub_tree_id"].max()) + 3   # key slots: galaxies 0 .. max; labels -1, -2 hit none
+
+    # phase A: per snapshot
+    init = (run.path, run.source, sn, factor, tree_last)
+    N, M, NB, Mcat, pos, hosts, bound, exch = {}, {}, {}, {}, {}, {}, {}, {}
+    for k, part in enumerate(pool(_snapshot, range(sn.size), workers, _init, init, desc="2 snapshots")):
+        s = sn[k]
+        N[s], M[s], NB[s], Mcat[s], pos[s], hosts[s], bound[s], exch[k] = part
+
+    # phase B: the 2.3-2.5 windows, in chunks of consecutive snapshots (each re-reads ~6 snapshots)
+    ks = [k for k in range(1, sn.size) if t[-1] >= t[k] + WINDOW_GYR]
+    chunks = [c for c in np.array_split(ks, 2 * max(workers, 1)) if c.size]
+    rows, pair_mass = [], {}
+    for part_rows, part_pairs in pool(_windows, chunks, workers, _init, init, desc="2.3-2.5 window chunks"):
+        rows += part_rows
+        for key, v in part_pairs.items():           # chunks in time order: the first relation met is kept
+            acc = pair_mass.setdefault(key, [0.0, 0.0, 0, 0, v[4]])
+            for i in range(4):
+                acc[i] += v[i]
+
     N = pd.DataFrame(N).drop(index=UNASSIGNED, errors="ignore").reindex(columns=sn)
     M = pd.DataFrame(M).drop(index=UNASSIGNED, errors="ignore").reindex(columns=sn)
     NB = pd.DataFrame(NB).reindex(index=M.index, columns=sn).fillna(0.0)
     Mcat = pd.DataFrame(Mcat).reindex(columns=sn)
     W = pd.DataFrame(rows).set_index("snap")
 
-    continuity(run, N, tree_has, tree_last, rep)
+    # phase C: the verdicts
+    gaps(run, t, N, tree, tree_has, bound, exch, rep)
     Mres = M.where(N >= RESOLVED)
-    events = mass_steps(run, Mres, M, N, NB, merge, tree_last, no_uid, pos, hosts, rep)
+    events = mass_steps(run, t, Mres, M, N, NB, merge, tree, tree_last, no_uid, pos, hosts, exch, rep)
+    cat_spikes = steps(Mcat.reindex(Mres.index).where(N >= RESOLVED), t)[0].sum()
     rep.score("2.2 catalogue Mtot spikes per 100 resolved histories",
-              100.0 * steps(Mcat.reindex(Mres.index).where(N >= RESOLVED))[0].sum() / max(n_histories(Mres), 1))
+              100.0 * cat_spikes / max(n_histories(Mres), 1))
     label_shares(W, pair_mass, rep)
-    plot_masses(run, Mres, Mcat, events, out / "stability_masses.png")
-    plot_shares(run, W, out / "stability_labels.png")
+
+    # plots
+    named = rep.episodes()
+    marks = {}
+    for t0, t1, cause, fail, galaxies in rep.history:
+        for g in galaxies:
+            marks.setdefault(g, []).append((t0, t1, cause, fail))
+    plot_masses(run, Mres, Mcat, events, plots.run_plot(out, "stability_masses"))
+    plot_shares(run, W, plots.run_plot(out, "stability_shares"))
+    plot_episodes(run, rep.history, plots.run_plot(out, "stability_episodes"))
+    items = [(plots.galaxy_plot(out, g, "stability_mass"), g, t, M.loc[g].to_numpy(),
+              Mcat.loc[g].to_numpy() if g in Mcat.index else np.full(t.size, np.nan), marks.get(g, []))
+             for g in plots.chosen(run.host, N.max(axis=1).dropna().to_dict(), named) if g in M.index]
+    plots.per_galaxy(_draw_mass, items, workers, desc="2 galaxy plots")
     rep.write(out / "stability.txt")
     return rep
 
@@ -199,132 +401,221 @@ def n_histories(Mres):
     return int((r[:, 1:] & r[:, :-1]).any(axis=1).sum())
 
 
-def continuity(run, N, tree_has, tree_last, rep):
-    """2.1."""
+def centroid(run, s, ids, m):
+    """Mass-weighted centre of the particles ``ids`` at ``s`` (NaN without particle data or when none
+    is there)."""
+    if run.pdata is None:
+        return np.full(3, np.nan)
+    pid, X, _ = run.particles_by_id(s)
+    pos = np.minimum(np.searchsorted(pid, ids), pid.size - 1)
+    here = pid[pos] == ids
+    if not here.any():
+        return np.full(3, np.nan)
+    return np.average(X[pos[here], :3], axis=0, weights=m[here])
+
+
+def gaps(run, t, N, tree, tree_has, bound, exch, rep):
+    """2.1 symptoms."""
     sn = run.snaps
     n = N.fillna(0).to_numpy()
-    dropped = 0
-    for i, G in enumerate(N.index.astype(int)):
+    for i, G in enumerate(tqdm(N.index.astype(int), desc="2.1 gaps", disable=not sys.stderr.isatty())):
         p = np.flatnonzero(n[i] >= 1)
         for k0, k1 in zip(p[:-1], p[1:]):
-            gap = sn[k0 + 1:k1]
-            if 2 <= k1 - k0 <= AHEAD + 1 and any((G, int(s)) in tree_has for s in gap):
-                dropped += n[i, k0] >= RESOLVED
-                by_size(rep, n[i, k0], "2.1 dropped gap (major FAIL, resolved FLAG)",
-                        f"galaxy {G}: absent at {list(map(int, gap))}, {int(n[i, k0])} particles before")
-        if p.size and p[-1] < sn.size - 1 and G in tree_last.index and sn[p[-1]] < tree_last[G] - 1:
-            by_size(rep, n[i, p[-1]], "2.1 premature end (major FAIL, resolved FLAG)",
-                    f"galaxy {G}: last at {int(sn[p[-1]])} with {int(n[i, p[-1]])} particles, tree to {int(tree_last[G])}")
-    rep.score("2.1 dropped gaps per 1000 resolved galaxy-snapshots", 1000.0 * dropped / max(int((n >= RESOLVED).sum()), 1))
+            missing = [k for k in range(k0 + 1, k1) if (int(sn[k]), G) in tree_has]
+            n0 = n[i, k0]
+            if not missing or n0 < GAP_FLAG:
+                continue
+
+            ids0, lab0 = run.labels(sn[k0])
+            mine = ids0[lab0 == G]
+            m0 = run.masses(sn[k0])[lab0 == G]
+            flow = exch.get(missing[0])
+            if flow is not None and G in flow.index.get_level_values("a"):
+                took = flow.xs(G, level="a")
+                took = took[took.index >= 0]
+            else:
+                took = pd.Series(dtype=float)
+            partner, part = (int(took.idxmax()), float(took.max() / np.nansum(m0))) if took.size else (None, 0.0)
+
+            unbound = [k for k in missing if G not in bound[sn[k]]]
+            d = np.array([
+                np.linalg.norm(centroid(run, sn[k], mine, m0) - tree.loc[(int(sn[k]), G)][POS].to_numpy(float))
+                / tree.loc[(int(sn[k]), G)]["virial_radius"]
+                for k in unbound
+            ])
+            place = None if not np.isfinite(d).all() else "in" if (d <= 1.0).all() else "out"
+            severity, cause = gap_verdict(n0, len(unbound), place, part)
+            text = (f"gap of {G} at {[int(sn[k]) for k in missing]} ({1e3 * (t[k1] - t[k0]):.0f} Myr "
+                    f"between its present snapshots; {int(n0)} particles before; {len(unbound)} snapshots "
+                    f"without bound stars; largest taker {partner} with {part:.0%})")
+            rep.symptom("2.1 gap", severity, text, s0=int(sn[k0]), s1=int(sn[k1]), t0=t[k0], t1=t[k1],
+                        galaxies={G} | ({partner} if part >= PARTNER else set()), cause=cause)
 
 
-def mass_steps(run, Mres, M, N, NB, merge, tree_last, no_uid, pos, hosts, rep):
-    """2.2; returns the events for the plot."""
+def mass_steps(run, t, Mres, M, N, NB, merge, tree, tree_last, no_uid, pos, hosts, exch, rep):
+    """2.2 scores and symptoms; returns the events for the overview plot."""
     sn = list(run.snaps)
-    spike, persist = steps(Mres)
+    spike, persist = steps(Mres, t)
     events = []
+
+    def change(G, k, kind, major):
+        gi = Mres.index.get_loc(G)
+        m0, m1 = Mres.iat[gi, k - 1], Mres.iat[gi, k]
+        total, big = partners(exch.get(k), G, m1 - m0)
+        exchanged = total >= PARTNER * abs(m1 - m0)
+        severity = "FAIL" if major and not exchanged else "FLAG"
+        cause = "exchange between interacting galaxies" if exchanged else "unexplained"
+        text = (f"{kind} of {G} at {sn[k]}: {m0:.3g} -> {m1:.3g} "
+                f"({total / abs(m1 - m0):.0%} from / to other galaxies)")
+        rep.symptom(f"2.2 {kind}", severity, text, s0=sn[k - 1], s1=sn[k], t0=t[k - 1], t1=t[k],
+                    galaxies={G} | big, cause=cause)
+
     for gi, k in zip(*np.nonzero(spike)):
         G = int(Mres.index[gi])
         events.append((G, sn[k], "spike"))
-        (rep.fail if N.at[G, sn[k - 1]] >= MAJOR else rep.flag)(
-            "2.2 spike (major FAIL)", f"galaxy {G} at {sn[k]}: {Mres.iat[gi, k - 1]:.3g} -> {Mres.iat[gi, k]:.3g}")
+        change(G, k, "spike", N.at[G, sn[k - 1]] >= MAJOR)
+
     reasons = {}
     for gi, k in zip(*np.nonzero(persist)):
         G, s = int(Mres.index[gi]), sn[k]
         m0, m1 = Mres.iat[gi, k - 1], Mres.iat[gi, k]
         why = "unexplained"
-        if (G, s) in no_uid or (G, sn[k - 1]) in no_uid:
+        if (s, G) in no_uid or (sn[k - 1], G) in no_uid:
             why = "tree incomplete"
         if m1 > m0 and NB.at[G, s] >= 0.5 * (m1 - m0):
             why = "star formation"
         elif m1 > m0:
-            near = merge[(merge["into"] == G) & merge["snapshot"].between(sn[k - 1], sn[min(k + 1, len(sn) - 1)])]
-            gain = [M.loc[p, :s].dropna().iloc[-1] for p in near["progenitor"] if p in M.index and M.loc[p, :s].notna().any()]
+            near = merge[(merge["into"] == G) & ((merge["t"] - t[k]).abs() <= MERGER_GYR)]
+            gain = [M.loc[p, :s].dropna().iloc[-1] for p in near["progenitor"]
+                    if p in M.index and M.loc[p, :s].notna().any()]
             if any(x >= 0.5 * (m1 - m0) for x in gain):
                 why = "merger"
-        elif G in tree_last.index and tree_last[G] <= sn[min(k + AHEAD, len(sn) - 1)]:
+        elif G in tree_last.index and run.time.get(int(tree_last[G]), np.inf) <= t[k] + MERGING_GYR:
             why = "merging"
-        elif run.host in hosts[s].get(G, ()):
-            d = []
-            for j in range(max(k - 2, 0), min(k + 3, len(sn))):
-                p = pos[sn[j]]
-                d.append(np.linalg.norm(p.loc[G].to_numpy(float) - p.loc[run.host].to_numpy(float))
-                         if G in p.index and run.host in p.index else np.nan)
-            if np.isfinite(d).all() and np.argmin(d) == k - max(k - 2, 0):
+        elif hosts[s].get(G):
+            host = max(hosts[s][G], key=lambda h: tree["mass"].get((s, h), 0.0))
+            js = np.flatnonzero(np.abs(t - t[k]) <= PERI_GYR)
+            d = [np.linalg.norm(pos[sn[j]].loc[G].to_numpy(float) - pos[sn[j]].loc[host].to_numpy(float))
+                 if G in pos[sn[j]].index and host in pos[sn[j]].index else np.nan
+                 for j in js]
+            if js[0] < k < js[-1] and np.isfinite(d).all() and js[np.argmin(d)] == k:
                 why = "pericentre"
         reasons[why] = reasons.get(why, 0) + 1
         if why == "unexplained":
             events.append((G, s, "step"))
-            (rep.fail if G == run.host else rep.flag)("2.2 unexplained step (main host FAIL)", f"galaxy {G} at {s}: {m0:.3g} -> {m1:.3g}")
+            change(G, k, "unexplained step", G == run.host)
+
     nh = max(n_histories(Mres), 1)
     total = np.nansum(Mres.to_numpy())
     prev = Mres.shift(1, axis=1)
+    step_mass = sum(Mres.at[G, sn[sn.index(s) - 1]] for G, s, e in events if e == "step")
     rep.score("2.2 spikes per 100 resolved histories", 100.0 * spike.sum() / nh)
     rep.score("2.2 unexplained steps per 100 resolved histories", 100.0 * reasons.get("unexplained", 0) / nh)
     rep.score("2.2 spikes, mass-weighted", float(np.nansum(prev.to_numpy()[spike]) / total))
-    rep.score("2.2 unexplained steps, mass-weighted",
-              float(sum(Mres.at[G, sn[sn.index(s) - 1]] for G, s, e in events if e == "step") / total))
-    rep.table("2.2 persistent steps by explanation", "\n".join(f"  {k:16s} {v}" for k, v in sorted(reasons.items())) or "  (none)")
+    rep.score("2.2 unexplained steps, mass-weighted", float(step_mass / total))
+    rep.table("2.2 persistent steps by explanation",
+              "\n".join(f"  {k:16s} {v}" for k, v in sorted(reasons.items())) or "  (none)")
     return events
 
 
 def label_shares(W, pair_mass, rep):
-    """2.3-2.5 scores and flags."""
+    """2.3-2.5 scores and tables, and the share spikes as symptoms."""
     inscope = W[W["n_old"] >= MIN_OLD]
-    for col, check in (("flicker", "2.3 flicker"), ("capture of host old mass", "2.4 capture")):
+    for col, check in SHARES.items():
         x = inscope[col]
         med = float(x.median())
         rep.score(f"{check} share, median", med)
         rep.score(f"{check} share, max", float(x.max()))
-        thr = max(SPIKE_FACTOR * med, SHARE_FLOOR)
-        for s in x.index[x > thr]:
-            rep.flag(f"{check} share above max(5 x median, 1e-4)", f"snapshot {s}: {x[s]:.2e}")
-    rep.score("2.4 swap share of old mass, median", float(inscope["swap"].median()))
+        for s in x.index[x > max(SPIKE_FACTOR * med, SHARE_FLOOR)]:
+            pair, part = inscope.at[s, f"{col} pair"], inscope.at[s, f"{col} pair part"]
+            text = f"{check} share {x[s]:.2e} at {s} (median {med:.2e}); pair {pair} carries {part:.0%}"
+            rep.symptom(f"{check} share spike", "FLAG", text, s0=int(s), t0=inscope.at[s, "t"],
+                        galaxies=set(pair) - {UNASSIGNED} if part > PARTNER else set(), cause="share spike")
+
+    rep.score("2.4 swap share of old mass, median", float(inscope["transfer swap"].median()))
     for c in NEWBORN:
-        rep.score(f"2.5 newborn mass kept, {c}", float(W[f"newborn kept {c}"].sum() / max(W[f"newborn {c}"].sum(), 1e-300)))
-    rep.table("2.3 flicker share of old mass by relation (median over snapshots)",
-              "\n".join(f"  {c:20s} {inscope[f'flicker {c}'].median():.2e}" for c in sorted(set(FLICKER_CLASS.values()))))
-    rep.table("2.4 permanent transfers, share of old mass (median / max over snapshots)",
-              "\n".join(f"  {c:12s} {inscope[c].median():.2e} / {inscope[c].max():.2e}" for c in TRANSFERS))
+        kept = W[f"newborn kept {c}"].sum() / max(W[f"newborn {c}"].sum(), 1e-300)
+        rep.score(f"2.5 newborn mass kept, {c}", float(kept))
+    for name, title in (("flicker", "2.3 flicker"), ("transfer", "2.4 permanent transfers")):
+        rep.table(f"{title}, share of old mass (median / max over snapshots)",
+                  "\n".join(f"  {c:20s} {inscope[f'{name} {c}'].median():.2e} / "
+                            f"{inscope[f'{name} {c}'].max():.2e}" for c in TRANSFERS + CELLS))
     top = sorted(pair_mass.items(), key=lambda kv: -kv[1][0])[:10]
-    rep.table("2.3 top flickering pairs (a -> b -> a): mass, particles, snapshots, relation",
-              "\n".join(f"  {a:>8d} -> {b:>8d}  {v[0]:10.3g} {v[1]:9d} {v[2]:5d}  {v[3]}" for (a, b), v in top) or "  (none)")
+    rep.table("2.3 top flickering pairs (a -> b -> a): mass, contested share, particles, snapshots, relation",
+              "\n".join(f"  {a:>8d} -> {b:>8d}  {v[0]:10.3g} {v[1] / v[0]:6.3f} {v[2]:9d} {v[3]:5d}  {v[4]}"
+                        for (a, b), v in top) or "  (none)")
 
 
-def plot_masses(run, Mres, Mcat, events, png):
-    peak = Mres.max(axis=1).drop(index=run.host, errors="ignore").sort_values(ascending=False)
-    show = [run.host] * (run.host in Mres.index) + list(peak.index[:8])
-    t = np.array([run.time[s] for s in Mres.columns])
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for i, G in enumerate(show):
-        c = f"C{i % 10}"
-        ax.semilogy(t, Mres.loc[G], color=c, lw=1.0, label=str(G))
-        if G in Mcat.index:
-            ax.semilogy(t, Mcat.loc[G], color=c, lw=0.6, ls="--")
-        for G2, s, e in events:
-            if G2 == G:
-                ax.plot(run.time[s], Mres.at[G, s], "x" if e == "spike" else "o", color="C3", ms=6, mfc="none")
-    ax.set_xlabel("t [Gyr]")
-    ax.set_ylabel("M [hard labels]; dashed: catalogue Mtot")
-    ax.set_title(f"{run.name}: main host + 8 largest (red x spike, o unexplained step)")
-    ax.legend(fontsize=7, ncol=3)
-    fig.tight_layout()
-    fig.savefig(png, dpi=110)
-    plt.close(fig)
-
-
-def plot_shares(run, W, png):
+def plot_shares(run, W, pdf):
+    """2.3-2.5 against time: shares of the old mass that change label, and newborns kept."""
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    for c in ["flicker", "capture of host old mass", "stripping", "swap", "unbound"]:
+    for c in ["flicker", "flicker unrelated", "capture of host old mass", "transfer stripping",
+              "transfer unrelated"]:
         a1.semilogy(W["t"], W[c].clip(lower=1e-7), lw=0.9, label=c)
     a1.set_ylabel("share of old mass")
     a1.legend(fontsize=8)
     for c in NEWBORN[:3]:
         a2.plot(W["t"], W[f"newborn kept {c}"] / W[f"newborn {c}"], lw=0.9, label=c)
-    a2.set_ylabel("newborn mass kept 2 snapshots")
+    a2.set_ylabel(f"newborn mass kept {1e3 * KEEP_GYR:.0f} Myr")
     a2.set_xlabel("t [Gyr]")
     a2.legend(fontsize=8)
     fig.suptitle(f"{run.name}: label stability")
-    fig.tight_layout()
-    fig.savefig(png, dpi=110)
-    plt.close(fig)
+    plots.save(fig, pdf)
+
+
+def plot_episodes(run, history, pdf):
+    """Episodes by cause against time (stacked, per 0.5 Gyr); FAIL episodes as red triangles."""
+    df = pd.DataFrame([h[:4] for h in history], columns=["t", "t1", "cause", "fail"]).dropna(subset=["t"])
+    edges = np.arange(0.0, max(run.time.values()) + 0.5, 0.5)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    bottom = np.zeros(edges.size - 1)
+    for cause in CAUSES:
+        n = np.histogram(df.loc[df["cause"] == cause, "t"], bins=edges)[0]
+        if n.any():
+            ax.bar(edges[:-1], n, width=0.5, bottom=bottom, align="edge", color=COLOR[cause], label=cause)
+            bottom += n
+    ax.plot(df.loc[df["fail"], "t"], np.zeros(int(df["fail"].sum())), "^", color="C3", mec="k", ms=10,
+            clip_on=False, zorder=5, label="FAIL episode")
+    ax.set_xlabel("t [Gyr]")
+    ax.set_ylabel("episodes per 0.5 Gyr")
+    ax.set_title(f"{run.name}: point 2 episodes by cause")
+    ax.legend(fontsize=7)
+    plots.save(fig, pdf)
+
+
+def _draw_mass(item):
+    """A galaxy's label mass and catalogue Mtot against time, with its episodes (one PDF).
+
+    Each episode is one shaded span (a line when it lasts one instant), coloured by its cause as in
+    stability_episodes.pdf; FAIL episodes are hatched and edged in red.
+    """
+    path, g, t, M, Mcat, marks = item
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    ax.semilogy(t, np.where(M > 0, M, np.nan), "o-", color="k", ms=2.5, lw=0.9, label="hard-label mass")
+    ax.semilogy(t, np.where(Mcat > 0, Mcat, np.nan), "--", color="0.5", lw=0.8, label="catalogue Mtot")
+    shown = set()
+    for t0, t1, cause, fail in marks:
+        color = COLOR.get(cause, "C9")
+        label = None if cause in shown else cause
+        shown.add(cause)
+        if t1 > t0:
+            ax.axvspan(t0, t1, fc=color, alpha=0.3, label=label,
+                       ec="C3" if fail else "none", lw=1.5, hatch="//" if fail else None)
+        else:
+            ax.axvline(t0, color="C3" if fail else color, lw=2.0 if fail else 1.0, label=label)
+    ax.set_xlabel("t [Gyr]")
+    ax.set_ylabel("stellar mass")
+    n_fail = sum(m[3] for m in marks)
+    ax.set_title(f"galaxy {g}: point 2, {len(marks)} episodes ({n_fail} FAIL, hatched red)")
+    ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+    plots.save(fig, path)
+
+
+def main():
+    args = cli.arguments(__doc__)
+    run, out = cli.start("stability", args)
+    evaluate(run, out, workers=args.workers)
+
+
+if __name__ == "__main__":                      # spawned workers import this file, never run it
+    main()

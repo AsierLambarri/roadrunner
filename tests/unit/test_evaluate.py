@@ -46,9 +46,11 @@ def test_steps_tell_spikes_from_persistent_steps():
     M = pd.DataFrame([[1.0, 1.0, 10.0, 1.1, 1.0, 1.0],      # spike at 2, its return leg at 3 is not a step
                       [1.0, 1.0, 10.0, 10.0, 10.0, 10.0],   # persistent step at 2
                       [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]])      # no step above x2
-    spike, persist = steps(M)
+    spike, persist = steps(M, 0.1 * np.arange(6))           # 100 Myr apart: the return window holds 3 snapshots
     assert np.argwhere(spike).tolist() == [[0, 2]]
     assert np.argwhere(persist).tolist() == [[1, 2]]
+    spike, persist = steps(M, 0.2 * np.arange(6))           # 200 Myr apart: only the next one; row 0 still returns at once
+    assert np.argwhere(spike).tolist() == [[0, 2]]
 
 
 def test_relation_classes():
@@ -156,6 +158,26 @@ def test_halo_ratios_read_the_position_and_velocity_blocks():
     cov = np.diag([4.0, 1.0, 1.0, 900.0, 100.0, 100.0])
     np.testing.assert_allclose(halo_ratios(cov, np.zeros(6), r_vir=2.0, v_max=10.0), (1.0, 9.0))
     np.testing.assert_allclose(halo_ratios(np.full(6, 4.0), np.zeros(6), r_vir=2.0, v_max=1.0), (1.0, 4.0))
+
+
+def test_ahead_is_a_time_window_of_at_least_one_snapshot():
+    from evaluate.stability import ahead
+    t = np.array([0.0, 0.05, 0.1, 0.4, 0.45, 1.0])
+    assert ahead(t, 0, 0.3).tolist() == [1, 2]
+    assert ahead(t, 3, 0.3).tolist() == [4]
+    assert ahead(t, 4, 0.3).tolist() == [5]                 # nothing within 300 Myr: the next one
+    assert ahead(t, 5, 0.3).tolist() == []
+
+
+def test_gap_verdict():
+    from evaluate.stability import gap_verdict
+    assert gap_verdict(500, 0, None, 0.8) == ("FLAG", "absorbed by a neighbour")
+    assert gap_verdict(500, 0, None, 0.2) == ("FLAG", "label gap")
+    assert gap_verdict(500, 2, "out", 0.0) == ("FLAG", "the tree lost the stars")
+    assert gap_verdict(500, 2, "in", 0.0) == ("FAIL", "bound gap with members in place")
+    assert gap_verdict(500, 1, "in", 0.0) == ("FLAG", "bound gap with members in place")
+    assert gap_verdict(50, 3, "in", 0.0) == ("FLAG", "bound gap with members in place")
+    assert gap_verdict(500, 2, None, 0.0) == ("FLAG", "bound gap with members not located")
 
 
 def test_episodes_link_by_galaxy_check_and_time():
