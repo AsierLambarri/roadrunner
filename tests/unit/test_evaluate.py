@@ -144,6 +144,20 @@ def test_report_lists_every_item_with_minus_one(monkeypatch):
     assert "item 9" in rep.text() and "item 10" not in rep.text() and "... and 5 more" in rep.text()
 
 
+def test_has_cycle():
+    from evaluate.soundness import has_cycle
+    assert not has_cycle({1: {2, 3}, 2: {3}, 4: set()})
+    assert has_cycle({1: {2}, 2: {3}, 3: {1}})
+    assert has_cycle({1: {2}, 2: {1}, 5: {6}})
+
+
+def test_halo_ratios_read_the_position_and_velocity_blocks():
+    from evaluate.soundness import halo_ratios
+    cov = np.diag([4.0, 1.0, 1.0, 900.0, 100.0, 100.0])
+    np.testing.assert_allclose(halo_ratios(cov, np.zeros(6), r_vir=2.0, v_max=10.0), (1.0, 9.0))
+    np.testing.assert_allclose(halo_ratios(np.full(6, 4.0), np.zeros(6), r_vir=2.0, v_max=1.0), (1.0, 4.0))
+
+
 def test_episodes_link_by_galaxy_check_and_time():
     from evaluate.report import Report
     rep = Report("t", "run", point="2", causes=["a cause"])
