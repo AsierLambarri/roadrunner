@@ -93,8 +93,10 @@ def test_contested_pairs_recover_alpha_up_to_a_constant_per_pair():
     log_resp = w - np.logaddexp(w[:, 0], w[:, 1])[:, None]
     p = {"row": np.repeat(np.arange(n), 2).astype(float), "galaxy": np.tile([5.0, 3.0], n),
          "log_resp": log_resp.ravel(), "log_alpha": log_alpha.ravel()}
-    (k, j, dG, dA, dLa), counts = contested_pairs(p, logN.ravel(), np.ones(2 * n, bool))
+    ids = 100 + np.arange(n)
+    (k, j, dG, dA, dLa, pid), counts = contested_pairs(p, logN.ravel(), np.ones(2 * n, bool), ids)
     assert counts == (n, 0) and set(k) == {3} and set(j) == {5}
+    np.testing.assert_array_equal(pid, ids)
     np.testing.assert_allclose(dA - dLa, C[1] - C[0])       # galaxy 3 minus galaxy 5
     t = pair_table(k, j, dG, dA, dLa, s=0, t=0.0)
     np.testing.assert_allclose(t["rho stored"], 1.0)
@@ -249,3 +251,22 @@ def test_alpha_share_of_the_decision_adds_up():
     t = pair_table(np.zeros(100), np.ones(100), dG, dA, np.full(100, np.nan), s=0, t=0.0)
     vG, vA, cov = np.var(dG), np.var(dA), np.cov(dG, dA, bias=True)[0, 1]
     np.testing.assert_allclose(t["v"].iloc[0], (vA + cov) / np.var(dG + dA))
+
+
+def test_autocorrelation_ignores_per_snapshot_constants_and_recovers_rho():
+    """ac_alpha = Pearson(D_alpha(s), D_alpha(s')) is invariant to C_k - C_j (a constant per snapshot,
+    added to every particle of a pair), and recovers a known correlation."""
+    from evaluate.model import autocorr_table
+    rng = np.random.default_rng(6)
+    n = 2000
+    k, j, pid = np.zeros(n), np.ones(n), np.arange(n)
+    dG1 = rng.normal(size=n)
+    dG2 = dG1 + rng.normal(scale=0.01, size=n)            # near-perfect: ac_G ~ 1
+    dA1 = rng.normal(size=n)
+    rho = 0.6
+    dA2 = rho * dA1 + np.sqrt(1 - rho ** 2) * rng.normal(size=n)
+    t0 = autocorr_table(k, j, pid, dG1, dA1, k, j, pid, dG2, dA2, s=0, t=0.0)
+    shifted = autocorr_table(k, j, pid, dG1, dA1 + 3.0, k, j, pid, dG2, dA2 - 7.0, s=0, t=0.0)
+    assert t0["n"].iloc[0] == n and t0["ac_G"].iloc[0] > 0.99
+    np.testing.assert_allclose(t0["ac_alpha"].iloc[0], rho, atol=0.03)
+    np.testing.assert_allclose(t0["ac_alpha"], shifted["ac_alpha"])
