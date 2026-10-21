@@ -48,6 +48,13 @@ Symptoms (each a candidate finding):
 2.5 newborns: kept when labelled as at s throughout the next 150 Myr. SCORE: kept mass share, overall,
     main host, satellites, other centrals.
 A snapshot without the previous one, or without a full 300 Myr after it, gets no 2.3-2.5 window.
+2.6 label-mass noise (measurement only, no symptoms): white noise on a galaxy's label mass makes
+    successive increments of log10 Mres anti-correlated (lag-1 autocorrelation -0.5 for pure noise, ~0
+    for smooth growth); -gamma_1, the lag-1 autocovariance of the increments over resolved snapshots
+    three at a time, is a lower bound on the noise variance (sigma_noise = sqrt(max(-gamma_1, 0)), in
+    dex). Triples including a snapshot within MERGER_GYR of a tree merger into the galaxy are left out
+    (a merger is a real step); galaxies need >= MIN_NOISE_PAIRS kept pairs. SCORE: galaxies measured,
+    median sigma_noise and rho_1; a table by the galaxy's median resolved mass.
 
 Episodes (report.py): one finding per physical cause. Two symptoms are linked when they are within
 100 Myr or in adjacent snapshots and share a galaxy (its own, or a partner that gave or took >= half of
@@ -59,7 +66,8 @@ between interacting galaxies, unexplained, share spike). SCORE: episodes by caus
 
 Writes evaluation/stability.txt and .log; plots/run/: stability_masses.pdf (host and largest
 galaxies), stability_shares.pdf (2.3-2.5 against time), stability_episodes.pdf (episodes by cause
-against time); plots/g<id>/stability_mass.pdf (its mass history and symptoms) for the plotted galaxies.
+against time), stability_noise.pdf (2.6 sigma_noise by mass and in time); plots/g<id>/stability_mass.pdf
+(its mass history and symptoms) for the plotted galaxies.
 """
 import sys
 from pathlib import Path
@@ -86,6 +94,9 @@ LOG_JUMP, LOG_BACK = np.log10(2.0), np.log10(1.25)
 GAP_FAIL, GAP_FLAG = 100, 10                        # 2.1: particles just before a gap
 PARTNER = 0.5                                       # share of a symptom's mass that makes a partner
 MIN_OLD = 1e4
+MIN_NOISE_PAIRS = 10                                # 2.6: minimum kept increment pairs per galaxy
+MASS_BINS = [0.0, 1e7, 1e8, 1e9, np.inf]
+MASS_LABELS = ["<1e7", "1e7-1e8", "1e8-1e9", ">1e9"]
 SPIKE_FACTOR, SHARE_FLOOR = 5.0, 1e-4
 POS = ["position_x", "position_y", "position_z"]
 TRANSFERS = ["merger", "unbound", "rebound", "stripping", "capture", "swap"]
@@ -377,6 +388,8 @@ def evaluate(run, out, workers=1):
     rep.score("2.2 catalogue Mtot spikes per 100 resolved histories",
               100.0 * cat_spikes / max(n_histories(Mres), 1))
     label_shares(W, pair_mass, rep)
+    noise, noise_pooled = label_noise(Mres, t, merge)
+    noise_report(noise, rep)
 
     # plots
     named = rep.episodes()
@@ -387,8 +400,11 @@ def evaluate(run, out, workers=1):
     plot_masses(run, Mres, Mcat, events, plots.run_plot(out, "stability_masses"))
     plot_shares(run, W, plots.run_plot(out, "stability_shares"))
     plot_episodes(run, rep.history, plots.run_plot(out, "stability_episodes"))
+    plot_noise(run, noise, noise_pooled, plots.run_plot(out, "stability_noise"))
     items = [(plots.galaxy_plot(out, g, "stability_mass"), g, t, M.loc[g].to_numpy(),
-              Mcat.loc[g].to_numpy() if g in Mcat.index else np.full(t.size, np.nan), marks.get(g, []))
+              Mcat.loc[g].to_numpy() if g in Mcat.index else np.full(t.size, np.nan), marks.get(g, []),
+              noise.at[g, "sigma_noise"] if g in noise.index else None,
+              noise.at[g, "rho_1"] if g in noise.index else None)
              for g in plots.chosen(run.host, N.max(axis=1).dropna().to_dict(), named) if g in M.index]
     plots.per_galaxy(_draw_mass, items, workers, desc="2 galaxy plots")
     rep.write(out / "stability.txt")
@@ -546,6 +562,85 @@ def label_shares(W, pair_mass, rep):
                         for (a, b), v in top) or "  (none)")
 
 
+def label_noise(Mres, t, merge):
+    """2.6 label-mass noise: per galaxy, the lag-1 autocovariance of consecutive log10 Mres increments
+    over triples of resolved snapshots (merger triples excluded); and the pooled, centred products for
+    the noise-in-time plot.
+
+    Returns a (galaxy-indexed) table of sigma_noise, rho_1, n_pairs, median_mass, and a table of (t, p)
+    pairs (p: a centred product, t: its triple's middle snapshot) to pool in time.
+    """
+    G = Mres.index.to_numpy()
+    y = np.log10(Mres.to_numpy(np.float64))
+    d = y[:, 1:] - y[:, :-1]                            # increments, one between each pair of snapshots
+    pair_ok = np.isfinite(d[:, :-1]) & np.isfinite(d[:, 1:])   # both increments of a triple resolved
+
+    row = {g: i for i, g in enumerate(G)}
+    near = np.zeros((G.size, t.size), bool)
+    for into, tm in zip(merge["into"], merge["t"]):
+        i = row.get(int(into))
+        if i is not None:
+            near[i] |= np.abs(t - tm) <= MERGER_GYR
+    clean = pair_ok & ~(near[:, :-2] | near[:, 1:-1] | near[:, 2:])   # none of the triple's snapshots near
+
+    rows, products = [], []
+    for i, g in enumerate(G):
+        c = np.flatnonzero(clean[i])
+        if c.size < MIN_NOISE_PAIRS:
+            continue
+        d0, d1 = d[i, c], d[i, c + 1]
+        mu = np.concatenate([d0, d1]).mean()
+        gamma0 = np.mean(np.concatenate([(d0 - mu) ** 2, (d1 - mu) ** 2]))
+        gamma1 = np.mean((d0 - mu) * (d1 - mu))
+        rows.append((g, float(np.sqrt(max(-gamma1, 0.0))), float(gamma1 / gamma0) if gamma0 > 0 else np.nan,
+                     c.size, float(np.nanmedian(Mres.loc[g].to_numpy(np.float64)))))
+        products.append(pd.DataFrame({"t": t[c + 1], "p": (d0 - mu) * (d1 - mu)}))
+
+    noise = pd.DataFrame(rows, columns=["galaxy", "sigma_noise", "rho_1", "n_pairs", "median_mass"])
+    pooled = pd.concat(products, ignore_index=True) if products else pd.DataFrame(columns=["t", "p"])
+    return noise.set_index("galaxy"), pooled
+
+
+def noise_report(noise, rep):
+    """2.6 scores and the table by median resolved mass (measurement only: no symptoms)."""
+    rep.score("2.6 label-mass noise: galaxies measured", int(noise.shape[0]))
+    if noise.empty:
+        return
+    rep.score("2.6 median sigma_noise (dex)", float(noise["sigma_noise"].median()))
+    rep.score("2.6 median rho_1", float(noise["rho_1"].median()))
+    bin_ = pd.cut(noise["median_mass"], MASS_BINS, labels=MASS_LABELS, right=False)
+    lines = []
+    for label in MASS_LABELS:
+        sub = noise[bin_ == label]
+        lines.append(f"  {label:10s} n={sub.shape[0]:4d}  rho_1 {sub['rho_1'].median():7.3f}  "
+                      f"sigma {sub['sigma_noise'].median():8.3g}  p90 {sub['sigma_noise'].quantile(0.9):8.3g}"
+                      if sub.shape[0] else f"  {label:10s} n=   0")
+    rep.table("2.6 label-mass noise by median stellar mass", "\n".join(lines))
+
+
+# --- plots ----------------------------------------------------------------------------------------
+
+def plot_masses(run, Mres, Mcat, events, pdf):
+    """The main host and the 8 largest galaxies: label mass, catalogue Mtot, spikes and unexplained steps."""
+    peak = Mres.max(axis=1).drop(index=run.host, errors="ignore").sort_values(ascending=False)
+    show = [run.host] * (run.host in Mres.index) + list(peak.index[:8])
+    t = np.array([run.time[s] for s in Mres.columns])
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for i, G in enumerate(show):
+        c = f"C{i % 10}"
+        ax.semilogy(t, Mres.loc[G], color=c, lw=1.0, label=str(G))
+        if G in Mcat.index:
+            ax.semilogy(t, Mcat.loc[G], color=c, lw=0.6, ls="--")
+        for G2, s, e in events:
+            if G2 == G:
+                ax.plot(run.time[s], Mres.at[G, s], "x" if e == "spike" else "o", color="C3", ms=6, mfc="none")
+    ax.set_xlabel("t [Gyr]")
+    ax.set_ylabel("M [hard labels]; dashed: catalogue Mtot")
+    ax.set_title(f"{run.name}: main host + 8 largest (red x spike, o unexplained step)")
+    ax.legend(fontsize=7, ncol=3)
+    plots.save(fig, pdf)
+
+
 def plot_shares(run, W, pdf):
     """2.3-2.5 against time: shares of the old mass that change label, and newborns kept."""
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
@@ -583,13 +678,32 @@ def plot_episodes(run, history, pdf):
     plots.save(fig, pdf)
 
 
+def plot_noise(run, noise, pooled, pdf):
+    """2.6: sigma_noise per galaxy against its median mass, coloured by rho_1; the pooled sigma(t)."""
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.5))
+    if not noise.empty:
+        sc = a1.scatter(noise["median_mass"], noise["sigma_noise"], c=noise["rho_1"], cmap="coolwarm",
+                        vmin=-1.0, vmax=0.0, s=14)
+        fig.colorbar(sc, ax=a1, label="rho_1")
+    a1.set_xscale("log")
+    a1.set_xlabel("galaxy's median resolved mass")
+    a1.set_ylabel("sigma_noise [dex]")
+    if not pooled.empty:
+        mean_p = pooled.groupby(np.floor(pooled["t"]).astype(int))["p"].mean()
+        a2.plot(mean_p.index + 0.5, np.sqrt((-mean_p).clip(lower=0.0)), "o-", color="C0", lw=1.0, ms=3)
+    a2.set_xlabel("t [Gyr]")
+    a2.set_ylabel("pooled sigma_noise(t) [dex]")
+    fig.suptitle(f"{run.name}: 2.6 label-mass noise")
+    plots.save(fig, pdf)
+
+
 def _draw_mass(item):
     """A galaxy's label mass and catalogue Mtot against time, with its episodes (one PDF).
 
     Each episode is one shaded span (a line when it lasts one instant), coloured by its cause as in
     stability_episodes.pdf; FAIL episodes are hatched and edged in red.
     """
-    path, g, t, M, Mcat, marks = item
+    path, g, t, M, Mcat, marks, sigma_noise, rho_1 = item
     fig, ax = plt.subplots(figsize=(11, 4.8))
     ax.semilogy(t, np.where(M > 0, M, np.nan), "o-", color="k", ms=2.5, lw=0.9, label="hard-label mass")
     ax.semilogy(t, np.where(Mcat > 0, Mcat, np.nan), "--", color="0.5", lw=0.8, label="catalogue Mtot")
@@ -606,7 +720,8 @@ def _draw_mass(item):
     ax.set_xlabel("t [Gyr]")
     ax.set_ylabel("stellar mass")
     n_fail = sum(m[3] for m in marks)
-    ax.set_title(f"galaxy {g}: point 2, {len(marks)} episodes ({n_fail} FAIL, hatched red)")
+    noise_txt = f", sigma_noise {sigma_noise:.2g} dex, rho_1 {rho_1:.2f}" if sigma_noise is not None else ""
+    ax.set_title(f"galaxy {g}: point 2, {len(marks)} episodes ({n_fail} FAIL, hatched red){noise_txt}")
     ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1.0))
     plots.save(fig, path)
 

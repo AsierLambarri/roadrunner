@@ -180,6 +180,25 @@ def test_gap_verdict():
     assert gap_verdict(500, 2, None, 0.0) == ("FLAG", "bound gap with members not located")
 
 
+def test_label_noise_recovers_sigma_and_drops_merger_triples():
+    from evaluate.stability import label_noise
+    rng = np.random.default_rng(6)
+    n, dt, sigma = 200, 0.1, 0.05
+    t = dt * np.arange(n)
+    trend = np.linspace(6.0, 6.3, n)                           # smooth growth, 0.3 dex over the run
+    y = trend + rng.normal(0.0, sigma, n)                      # white label noise on top
+    Mres = pd.DataFrame([10.0 ** y], index=[1], columns=np.arange(n))
+    no_merge = pd.DataFrame({"into": [], "t": []})
+    noise, pooled = label_noise(Mres, t, no_merge)
+    assert abs(noise.at[1, "sigma_noise"] - sigma) / sigma < 0.2
+    assert -0.6 < noise.at[1, "rho_1"] < -0.4
+    n_pairs = int(noise.at[1, "n_pairs"])
+
+    merged = pd.DataFrame({"into": [1], "t": [t[100]]})       # a merger mid-run drops nearby triples
+    noise_m, _ = label_noise(Mres, t, merged)
+    assert noise_m.at[1, "n_pairs"] < n_pairs
+
+
 def test_episodes_link_by_galaxy_check_and_time():
     from evaluate.report import Report
     rep = Report("t", "run", point="2", causes=["a cause"])
