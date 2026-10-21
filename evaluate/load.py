@@ -271,17 +271,6 @@ def aligned(cats, particles, s):
     return ids[keep], X[keep], m[keep], L[:, keep], float(keep.mean())
 
 
-def first_seen(run, last):
-    """First snapshot in which each particle ID appears, up to ``last`` (-1 for IDs not seen)."""
-    first = np.full(0, -1, np.int64)
-    for s in run.snaps[run.snaps <= last]:
-        ids = run.ids(s)
-        if ids.max() >= first.size:
-            first = np.concatenate([first, np.full(int(ids.max()) + 1 - first.size, -1, np.int64)])
-        first[ids] = np.where(first[ids] < 0, s, first[ids])
-    return first
-
-
 def member(keys, q):
     """Whether each of ``q`` is in the sorted ``keys``."""
     if keys.size == 0:

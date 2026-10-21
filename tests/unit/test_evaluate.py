@@ -93,10 +93,10 @@ def test_contested_pairs_recover_alpha_up_to_a_constant_per_pair():
     log_resp = w - np.logaddexp(w[:, 0], w[:, 1])[:, None]
     p = {"row": np.repeat(np.arange(n), 2).astype(float), "galaxy": np.tile([5.0, 3.0], n),
          "log_resp": log_resp.ravel(), "log_alpha": log_alpha.ravel()}
-    (k, j, dG, dA, dLa), counts = contested_pairs(p, logN.ravel())
+    (k, j, dG, dA, dLa), counts = contested_pairs(p, logN.ravel(), np.ones(2 * n, bool))
     assert counts == (n, 0) and set(k) == {3} and set(j) == {5}
     np.testing.assert_allclose(dA - dLa, C[1] - C[0])       # galaxy 3 minus galaxy 5
-    t = pair_table(k, j, dG, dA, dLa, s=0)
+    t = pair_table(k, j, dG, dA, dLa, s=0, t=0.0)
     np.testing.assert_allclose(t["rho stored"], 1.0)
     assert t["n"].iloc[0] == n
 
@@ -212,3 +212,21 @@ def test_ages_from_presence():
     assert newborn(run, 2, q).tolist() == [True, False, False, False]
     assert seen_before(run, 2, q, 1.0).tolist() == [False, False, True, True]     # present at snapshot 0
     assert newborn(run, 0, q).all() and not seen_before(run, 0, q, 1.0).any()
+
+
+def test_resolved_groups_need_ten_particles_per_galaxy():
+    from evaluate.model import resolved
+    rows = np.r_[np.arange(5), np.arange(5), [10, 11, 12]]           # 1, 2 share 5 particles; 3 alone
+    gal = np.r_[np.full(5, 1), np.full(5, 2), np.full(3, 3)]
+    assert resolved({"row": rows, "galaxy": gal}).tolist() == [False] * 10 + [True] * 3
+    rows = np.r_[np.arange(25), np.arange(25)]                         # 25 >= 10 x 2: resolved
+    assert resolved({"row": rows, "galaxy": np.r_[np.full(25, 1), np.full(25, 2)]}).all()
+
+
+def test_alpha_share_of_the_decision_adds_up():
+    from evaluate.model import pair_table
+    rng = np.random.default_rng(5)
+    dG, dA = rng.normal(size=100), rng.normal(size=100)
+    t = pair_table(np.zeros(100), np.ones(100), dG, dA, np.full(100, np.nan), s=0, t=0.0)
+    vG, vA, cov = np.var(dG), np.var(dA), np.cov(dG, dA, bias=True)[0, 1]
+    np.testing.assert_allclose(t["v"].iloc[0], (vA + cov) / np.var(dG + dA))
