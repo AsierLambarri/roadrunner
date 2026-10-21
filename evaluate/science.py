@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from evaluate.load import ABSENT, aligned, common_snaps, on
+from evaluate.load import ABSENT, Run, aligned, common_snaps, on, open_catalogue, pool
 from evaluate.report import Report
 
 MAJOR_PROGENITOR, MIN_MASS, SAT_LEVELS, N_TRACK = 0.01, 1e6, (1e6, 1e7, 1e8), 8
@@ -38,7 +38,22 @@ def log_ratio(a, b):
         return np.where((a > 0) & (b > 0), np.log10(a / b), np.nan)
 
 
-def evaluate(cats, particles, out, every=10):
+_W = {}                                 # a worker's catalogues and particle run
+
+
+def _init(paths, path, source, track):
+    _W.update(cats=[open_catalogue(p) for p in paths], particles=Run(path, particles=source), track=track)
+
+
+def _history(s):
+    """5.4 at ``s`` in a worker: (catalogue, galaxy, snapshot, hard-label mass) of the tracked galaxies."""
+    cats, track = _W["cats"], _W["track"]
+    _, _, m, L, _ = aligned(cats, _W["particles"], s)
+    return [(c.name, int(g), int(s), float(M)) for c, lab in zip(cats, L)
+            for g, M in label_mass(lab, m).reindex(track).fillna(0.0).items()]
+
+
+def evaluate(cats, particles, out, every=10, workers=1):
     rep = Report("Goal 5, science outputs", " / ".join(c.name for c in cats), verdict=False)
     snaps = common_snaps(cats, particles)
     last = snaps[-1]
@@ -88,13 +103,10 @@ def evaluate(cats, particles, out, every=10):
 
     # 5.4
     track = [ref.host] + list(S[ref.name].sort_values(ascending=False).index[:N_TRACK])
-    rows = []
-    for s in sorted(set(snaps[::every]) | {last}):
-        ids_s, _, m_s, L_s, _ = aligned(cats, particles, s)
-        for c, lab in zip(cats, L_s):
-            for g, M in label_mass(lab, m_s).reindex(track).fillna(0.0).items():
-                rows.append((c.name, int(g), int(s), float(M)))
-        print(f"snapshot {s}", flush=True)
+    todo = [int(s) for s in sorted(set(snaps[::every]) | {last})]
+    rows = [r for part in pool(_history, todo, workers, _init,
+                               ([c.path for c in cats], particles.path, particles.source, track),
+                               desc="5.4 histories") for r in part]
     H = pd.DataFrame(rows, columns=["catalogue", "galaxy", "snap", "mass"]).pivot_table(
         index=["galaxy", "snap"], columns="catalogue", values="mass")
     for c in cats[1:]:

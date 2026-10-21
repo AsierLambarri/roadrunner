@@ -2,9 +2,10 @@
 the first (the reference), on the particles every catalogue holds, every --every-th common snapshot
 with >= 1e5 of them.
 
-6.1 agreement: mass share of particles with the reference's hard label: all, old (first seen >= 1 Gyr
-    before), newborn (first seen at s), contested (>= 2 candidates in the first roadrunner run's stored
-    pairs); median over snapshots, and the curve against time.
+6.1 agreement: mass share of particles with the reference's hard label: all, old (present >= 1 Gyr
+    before), newborn (absent from the previous snapshot), contested (>= 2 candidates in the first
+    roadrunner run's stored pairs); median over snapshots, and the curve against time. Ages come from the
+    particle data: stars persist once formed, so presence is first appearance.
 6.2 mass movers: mass the reference labels a and the other labels b != a, summed over the measured
     snapshots; the ten largest (a, b) with their relation in the reference at the first snapshot met
     (stripping: b among a's hosts; capture: a among b's hosts; unbound / rebound: b / a is -1; swap).
@@ -12,7 +13,7 @@ with >= 1e5 of them.
     its rh in the reference catalogue), inside / outside the host's disc, the reference label's kind
     (main host, satellite, other central, unassigned) and hard-label stellar mass, newborn / old. The
     disc: |z| < 3 h_z and R < R_90 in the frame of the angular momentum of the host's stars within 3 rh;
-    h_z the median |z|, R_90 the 90th percentile of R of its young stars (first seen < 0.5 Gyr before)
+    h_z the median |z|, R_90 the 90th percentile of R of its young stars (absent 0.5 Gyr before)
     within 3 rh, or of all of them there when fewer than 100 are young.
 6.4 galaxy properties: galaxies in both catalogues with >= 1e6 in both: median log10 ratio (other /
     reference), median and 90th percentile of |log10 ratio| of the catalogue's Mtot, rh and sigma, and of
@@ -24,12 +25,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from evaluate.load import Run, UNASSIGNED, aligned, common_snaps, first_seen
+from evaluate.load import OLD_GYR, Run, UNASSIGNED, aligned, common_snaps, newborn, open_catalogue, pool, seen_before
 from evaluate.report import Report
 from evaluate.science import label_mass, log_ratio
 from evaluate.stability import relation
 
-MIN_PARTICLES, MIN_MASS, OLD_GYR, YOUNG_GYR, MIN_YOUNG = 1e5, 1e6, 1.0, 0.5, 100
+MIN_PARTICLES, MIN_MASS, YOUNG_GYR, MIN_YOUNG = 1e5, 1e6, 0.5, 100
 POS, VEL = ["position_x", "position_y", "position_z"], ["velocity_x", "velocity_y", "velocity_z"]
 R_BINS = np.array([0.0, 1.0, 2.0, 5.0, 10.0, 30.0, np.inf])
 M_BINS = np.array([0.0, 1e6, 1e7, 1e8, 1e9, np.inf])
@@ -55,19 +56,18 @@ def disc_tag(X, m, is_host, young, centre, velocity, rh):
     return (np.abs(z) < 3.0 * np.median(np.abs(z[ref]))) & (R < np.percentile(R[ref], 90))
 
 
-def bins(cat, s, X, m, lab, first, time_s):
+def bins(cat, s, X, m, lab, young, nb, old):
     """Bin index of every particle in each breakdown of 6.3 (from the reference catalogue)."""
     out = {}
     gal = cat.galaxies(s)
     host = cat.host
-    age = time_s - first
     has_host = host in gal.index and np.isfinite(gal.loc[host, POS + VEL + ["rh"]].to_numpy(np.float64)).all()
     if has_host:
         centre, velocity, rh = (gal.loc[host, POS].to_numpy(np.float64), gal.loc[host, VEL].to_numpy(np.float64),
                                 float(gal.at[host, "rh"]))
         r = np.linalg.norm(X[:, :3] - centre, axis=1) / rh
         out["r / rh_host"] = np.digitize(r, R_BINS) - 1
-        out["host disc"] = np.where(disc_tag(X, m, lab == host, age < YOUNG_GYR, centre, velocity, rh), 0, 1)
+        out["host disc"] = np.where(disc_tag(X, m, lab == host, young, centre, velocity, rh), 0, 1)
     else:
         out["r / rh_host"] = np.full(lab.size, 6)
         out["host disc"] = np.ones(lab.size, int)
@@ -75,63 +75,78 @@ def bins(cat, s, X, m, lab, first, time_s):
     out["reference label"] = np.select([lab == host, sat, lab == UNASSIGNED], [0, 1, 3], 2)
     M = label_mass(lab, m)
     out["reference galaxy mass"] = np.where(lab == UNASSIGNED, 5, np.digitize(M.reindex(lab).to_numpy(), M_BINS) - 1)
-    out["age"] = np.select([age <= 0.0, age >= OLD_GYR], [0, 2], 1)
+    out["age"] = np.select([nb, old], [0, 2], 1)
     return out
 
 
-def evaluate(cats, particles, out, every=10):
+_W = {}                                 # a worker's catalogues and particle run
+
+
+def _init(paths, path, source):
+    _W.update(cats=[open_catalogue(p) for p in paths], particles=Run(path, particles=source))
+
+
+def _snapshot(s):
+    """Goal 6 at ``s`` in a worker, per other catalogue: agreement row, mass movers, where-sums and property
+    rows; None with too few common particles. Also the share of the particle data held by all."""
+    cats, particles = _W["cats"], _W["particles"]
+    ref, others = cats[0], cats[1:]
+    ids, X, m, L, share = aligned(cats, particles, s)
+    if ids.size < MIN_PARTICLES:
+        return None
+    nb, old = newborn(particles, s, ids), seen_before(particles, s, ids, OLD_GYR)
+    sub = {"all": np.ones(ids.size, bool), "old": old, "newborn": nb}
+    rr = next((c for c in cats if isinstance(c, Run)), None)
+    if rr is not None:
+        n = np.bincount(rr.pairs(s)["row"].astype(np.int64))
+        many = np.sort(rr.row_labels(s)[0][np.flatnonzero(n >= 2)])
+        sub["contested"] = np.isin(ids, many, assume_unique=True)
+    B = bins(ref, s, X, m, L[0], ~seen_before(particles, s, ids, YOUNG_GYR), nb, old)
+    H = ref.hosts(s)
+    Mref = label_mass(L[0], m)
+    G = ref.galaxies(s)
+    found = {}
+    for c, lab in zip(others, L[1:]):
+        same = lab == L[0]
+        agree = {"snap": s, "t": particles.time[s],
+                 **{k: float(m[v & same].sum() / m[v].sum()) if v.any() else np.nan for k, v in sub.items()}}
+        dis = ~same
+        mv = pd.DataFrame({"a": L[0][dis], "b": lab[dis], "m": m[dis]}).groupby(["a", "b"])["m"].sum()
+        movers = {(int(a), int(b)): [mass, relation(int(a), int(b), H, set())] for (a, b), mass in mv.items()}
+        where = {k: np.stack([np.bincount(idx, weights=m, minlength=len(BREAKDOWNS[k])),
+                              np.bincount(idx, weights=m * dis, minlength=len(BREAKDOWNS[k]))]) for k, idx in B.items()}
+        Gc = c.galaxies(s)
+        Mc = label_mass(lab, m)
+        props = [{q: float(log_ratio(np.array(Gc.at[g, q]), np.array(G.at[g, q]))) for q in ("Mtot", "rh", "sigma")}
+                 | {"label mass": float(log_ratio(np.array(Mc.get(g, 0.0)), np.array(Mref.get(g, 0.0)))),
+                    "snap": s, "galaxy": int(g), "Mtot ref": float(G.at[g, "Mtot"]), "Mtot other": float(Gc.at[g, "Mtot"])}
+                 for g in G.index.intersection(Gc.index) if G.at[g, "Mtot"] >= MIN_MASS and Gc.at[g, "Mtot"] >= MIN_MASS]
+        found[c.name] = (agree, movers, where, props)
+    return share, found
+
+
+def evaluate(cats, particles, out, every=10, workers=1):
     ref, others = cats[0], cats[1:]
     rep = Report("Goal 6, catalogue comparison", " / ".join(c.name for c in cats), verdict=False)
-    snaps = [s for s in common_snaps(cats, particles)[::every]]
-    first = first_seen(particles, max(snaps))
-    time_of = np.array([particles.time.get(s, np.nan) for s in range(int(max(snaps)) + 1)])
-    rr = next((c for c in cats if isinstance(c, Run)), None)
+    snaps = [int(s) for s in common_snaps(cats, particles)[::every]]
     agree = {c.name: [] for c in others}
     movers = {c.name: {} for c in others}
     where = {c.name: {k: np.zeros((2, len(v))) for k, v in BREAKDOWNS.items()} for c in others}
     props = {c.name: [] for c in others}
     measured = []
-    for s in snaps:
-        ids, X, m, L, share = aligned(cats, particles, s)
-        if ids.size < MIN_PARTICLES:
+    for s, part in zip(snaps, pool(_snapshot, snaps, workers, _init,
+                                   ([c.path for c in cats], particles.path, particles.source), desc="6 snapshots")):
+        if part is None:
             continue
-        measured.append((int(s), share))
-        t_first = time_of[np.maximum(first[ids], 0)]
-        age = particles.time[s] - t_first
-        sub = {"all": np.ones(ids.size, bool), "old": age >= OLD_GYR, "newborn": first[ids] == s}
-        if rr is not None:
-            n = np.bincount(rr.pairs(s)["row"].astype(np.int64))
-            many = np.sort(rr.row_labels(s)[0][np.flatnonzero(n >= 2)])
-            sub["contested"] = np.isin(ids, many, assume_unique=True)
-        B = bins(ref, s, X, m, L[0], first[ids], particles.time[s])
-        H = ref.hosts(s)
-        Mref = label_mass(L[0], m)
-        G = ref.galaxies(s)
-        for c, lab in zip(others, L[1:]):
-            same = lab == L[0]
-            agree[c.name].append({"snap": s, "t": particles.time[s],
-                                  **{k: float(m[v & same].sum() / m[v].sum()) if v.any() else np.nan
-                                     for k, v in sub.items()}})
-            dis = ~same
-            mv = pd.DataFrame({"a": L[0][dis], "b": lab[dis], "m": m[dis]}).groupby(["a", "b"])["m"].sum()
-            for (a, b), mass in mv.items():
-                acc = movers[c.name].setdefault((int(a), int(b)), [0.0, relation(int(a), int(b), H, set())])
-                acc[0] += mass
-            for k, idx in B.items():
-                nb = len(BREAKDOWNS[k])
-                where[c.name][k] += np.stack([np.bincount(idx, weights=m, minlength=nb),
-                                              np.bincount(idx, weights=m * dis, minlength=nb)])
-            Gc = c.galaxies(s)
-            both = G.index.intersection(Gc.index)
-            Mc = label_mass(lab, m)
-            for g in both:
-                if G.at[g, "Mtot"] >= MIN_MASS and Gc.at[g, "Mtot"] >= MIN_MASS:
-                    props[c.name].append({q: float(log_ratio(np.array(Gc.at[g, q]), np.array(G.at[g, q])))
-                                          for q in ("Mtot", "rh", "sigma")}
-                                         | {"label mass": float(log_ratio(np.array(Mc.get(g, 0.0)), np.array(Mref.get(g, 0.0)))),
-                                            "snap": s, "galaxy": int(g), "Mtot ref": float(G.at[g, "Mtot"]),
-                                            "Mtot other": float(Gc.at[g, "Mtot"])})
-        print(f"snapshot {s}: {ids.size} common particles", flush=True)
+        share, found = part
+        measured.append((s, share))
+        for name, (a, mv, w, pr) in found.items():          # snapshots in time order: the first relation met is kept
+            agree[name].append(a)
+            for key, (mass, rel) in mv.items():
+                movers[name].setdefault(key, [0.0, rel])[0] += mass
+            for k, v in w.items():
+                where[name][k] += v
+            props[name] += pr
 
     rep.score("snapshots measured", len(measured))
     rep.score("median share of the particle data held by every catalogue",
