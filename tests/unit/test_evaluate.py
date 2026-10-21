@@ -132,3 +132,47 @@ def test_disc_tag_keeps_the_disc_and_drops_the_halo():
     tag = disc_tag(X, np.ones(len(X)), np.r_[np.ones(n, bool), np.zeros(500, bool)], np.zeros(len(X), bool),
                    np.zeros(3), np.zeros(3), rh=2.0)
     assert tag[:n].mean() > 0.8 and tag[n:].mean() < 0.3
+
+
+def test_report_lists_every_item_with_minus_one(monkeypatch):
+    import evaluate.report as report
+    rep = report.Report("t", "run")
+    for i in range(15):
+        rep.flag("check", f"item {i}")
+    assert report.LISTED == -1 and "item 14" in rep.text() and "more" not in rep.text()
+    monkeypatch.setattr(report, "LISTED", 10)
+    assert "item 9" in rep.text() and "item 10" not in rep.text() and "... and 5 more" in rep.text()
+
+
+def test_episodes_link_by_galaxy_check_and_time():
+    from evaluate.report import Report
+    rep = Report("t", "run", point="2", causes=["a cause"])
+    rep.symptom("gap", "FLAG", "x", s0=10, s1=12, t0=1.0, t1=1.2, galaxies={1, 2}, cause="a cause")
+    rep.symptom("spike", "FAIL", "y", s0=13, s1=14, t0=1.25, t1=1.4, galaxies={2})   # galaxy 2, 50 Myr later
+    rep.symptom("spike", "FLAG", "z", s0=30, s1=31, t0=2.0, t1=2.1, galaxies={2})    # 600 Myr later: alone
+    rep.symptom("1.3 X", "FLAG", "u", s0=40, t0=3.0)                                  # no galaxy ...
+    rep.symptom("1.3 X", "FLAG", "v", s0=41, t0=3.2)                                  # ... same check, adjacent snapshot
+    rep.symptom("1.3 Y", "FLAG", "w", s0=41, t0=3.2)                                  # another check: alone
+    rep.symptom("1.1 run.log", "FAIL", "no end")                                      # not in time: alone
+    rep.episodes()
+    assert {k: len(v) for k, v in rep.fails.items()} == {"2 episode: spike": 1, "2 episode: 1.1 run.log": 1}
+    assert {k: len(v) for k, v in rep.flags.items()} == {"2 episode: spike": 1, "2 episode: 1.3 X": 1,
+                                                         "2 episode: 1.3 Y": 1}
+    assert rep.scores["2 episodes: a cause"] == 0 and rep.scores["2 episodes: spike"] == 2 and not rep.symptoms
+
+
+def test_pool_keeps_order_in_processes_and_here():
+    from evaluate.load import pool
+    assert pool(abs, [-3, 1, -2], 2, dict) == [3, 1, 2]
+    assert pool(abs, [-3, 1, -2], 1, dict) == [3, 1, 2]
+
+
+def test_ages_from_presence():
+    from types import SimpleNamespace
+    from evaluate.load import newborn, seen_before
+    ids = {0: np.array([5, 1]), 1: np.array([1, 5, 9]), 2: np.array([9, 1, 5, 7])}
+    run = SimpleNamespace(snaps=np.array([0, 1, 2]), time={0: 0.0, 1: 0.6, 2: 1.2}, ids=ids.get)
+    q = np.array([7, 9, 5, 1])
+    assert newborn(run, 2, q).tolist() == [True, False, False, False]
+    assert seen_before(run, 2, q, 1.0).tolist() == [False, False, True, True]     # present at snapshot 0
+    assert newborn(run, 0, q).all() and not seen_before(run, 0, q, 1.0).any()
