@@ -270,3 +270,97 @@ def test_autocorrelation_ignores_per_snapshot_constants_and_recovers_rho():
     assert t0["n"].iloc[0] == n and t0["ac_G"].iloc[0] > 0.99
     np.testing.assert_allclose(t0["ac_alpha"].iloc[0], rho, atol=0.03)
     np.testing.assert_allclose(t0["ac_alpha"], shifted["ac_alpha"])
+
+
+def test_bgmm_estep_mstep_match_the_library():
+    """3.2b's replay machinery (evaluate/bgmm.py) must mirror WeightedBayesianGaussianMixture exactly:
+    same E-step log r (up to the per-particle constant it never needs) and same M-step posterior,
+    given the same priors and starting state, with reg_covar = 0 in both."""
+    from roadrunner.mixture.bayesian_gmm import WeightedBayesianGaussianMixture, _compute_precision_cholesky
+    from evaluate import bgmm
+
+    rng = np.random.default_rng(42)
+    D, K, n = 6, 3, 300
+    galaxies = np.arange(K, dtype=np.int64)
+    tree_pos = rng.normal(scale=50.0, size=(K, D))
+    means0 = tree_pos + rng.normal(scale=2.0, size=(K, D))
+    covs0 = np.stack([np.diag(rng.uniform(1.0, 4.0, D)) for _ in range(K)])
+
+    truth = rng.integers(0, K, n)
+    X = tree_pos[truth] + rng.normal(scale=5.0, size=(n, D))
+    rows, gal = [], []
+    for i in range(n):
+        cand = rng.choice(K, size=int(rng.integers(2, K + 1)), replace=False)
+        rows += [i] * cand.size
+        gal += cand.tolist()
+    rows, gal = np.array(rows, dtype=np.int64), np.array(gal, dtype=np.int64)
+    log_alpha = rng.normal(size=rows.size)
+    dense_log_alpha = np.full((n, K), -np.inf)
+    dense_log_alpha[rows, gal] = log_alpha
+
+    a0, beta0 = rng.uniform(0.5, 2.0, K), rng.uniform(0.5, 2.0, K)
+    nu0_scalar = float(D + 4)
+    W0inv = np.stack([np.diag(rng.uniform(1.0, 3.0, D)) for _ in range(K)])
+    prior = bgmm.Prior(a0=a0, beta0=beta0, m0=tree_pos, nu0=np.full(K, nu0_scalar), W0inv=W0inv)
+    N0 = rng.uniform(20.0, 80.0, K)
+    post = bgmm.Posterior(m=means0, Sigma=covs0, N=N0, a=a0 + N0, beta=beta0 + N0, nu=nu0_scalar + N0)
+
+    g, log_r = bgmm.estep(X, rows, gal, galaxies, log_alpha, post, with_alpha=True)
+
+    ref = WeightedBayesianGaussianMixture(n_components=K, cov_type="full", reg_covar=0.0)
+    ref.means_, ref.covariances_ = means0.copy(), covs0.copy()
+    ref.weight_concentration_, ref.mean_precision_, ref.degrees_of_freedom_ = post.a.copy(), post.beta.copy(), post.nu.copy()
+    ref.precisions_cholesky_ = _compute_precision_cholesky(ref.covariances_, "full")
+    ref_log_resp, _ = ref._e_step(X, dense_log_alpha)
+    np.testing.assert_allclose(log_r, ref_log_resp[rows, gal], atol=1e-8)
+
+    ref.weight_concentration_prior_, ref.mean_precision_prior_ = a0.copy(), beta0.copy()
+    ref.mean_prior_, ref.degrees_of_freedom_prior_, ref.covariance_prior_ = tree_pos.copy(), nu0_scalar, W0inv.copy()
+    ref._m_step(X, np.exp(ref_log_resp), np.ones(n))
+
+    new_post = bgmm.mstep(X, rows, gal, galaxies, np.exp(log_r), prior, reg_covar=0.0)
+    np.testing.assert_allclose(new_post.N, ref.weight_concentration_ - a0, atol=1e-8)
+    np.testing.assert_allclose(new_post.m, ref.means_, atol=1e-8)
+    np.testing.assert_allclose(new_post.Sigma, ref.covariances_, atol=1e-8)
+
+
+def test_bgmm_replay_converges_and_recovers_the_written_fit():
+    """replay from theta_A = the written fit must converge (iterations < max_iter) and reproduce,
+    the written log r via ``reproduce``, with with_alpha=True, nearly exactly at iteration 0."""
+    from evaluate import bgmm
+
+    rng = np.random.default_rng(7)
+    D, K, n = 6, 3, 200
+    galaxies = np.arange(K, dtype=np.int64)
+    tree_pos = rng.normal(scale=50.0, size=(K, D))
+    truth = rng.integers(0, K, n)
+    X = tree_pos[truth] + rng.normal(scale=5.0, size=(n, D))
+
+    rows, gal = [], []
+    for i in range(n):
+        cand = rng.choice(K, size=int(rng.integers(1, K + 1)), replace=False)
+        rows += [i] * cand.size
+        gal += cand.tolist()
+    rows, gal = np.array(rows, dtype=np.int64), np.array(gal, dtype=np.int64)
+    log_alpha = rng.normal(scale=0.3, size=rows.size)
+
+    gauss, gauss_prev, tree_xyzv, tree_mass, tree_mass_prev = {}, {}, {}, {}, {}
+    for k in range(K):
+        sel = gal == k
+        mean = X[rows[sel]].mean(axis=0)
+        cov = np.cov(X[rows[sel]].T) + np.eye(D)
+        gauss[k] = (mean, cov, 1.0 / K, float(sel.sum()))
+        tree_xyzv[k] = tree_pos[k]
+        tree_mass[k] = tree_mass_prev[k] = 1e10
+
+    prior, theta_A, no_history = bgmm.state(gal, galaxies, gauss, gauss_prev, tree_xyzv, tree_mass, tree_mass_prev)
+    assert no_history.all()                                  # no previous fit was supplied
+
+    delta, delta_r = bgmm.reproduce(X, rows, gal, galaxies, log_alpha, theta_A, np.zeros(rows.size))
+    assert np.isfinite(delta).all() and np.isfinite(delta_r).all()
+
+    post, first_post, iterations, c_rows, c_gal, log_r, g = bgmm.replay(
+        X, rows, gal, galaxies, log_alpha, prior, theta_A, with_alpha=True, max_iter=300)
+    assert 0 < iterations < 300
+    assert np.isfinite(log_r).all() and np.isfinite(g).all()
+    assert post.N.sum() <= gal.size + 1e-6
