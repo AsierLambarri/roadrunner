@@ -94,9 +94,11 @@ def test_contested_pairs_recover_alpha_up_to_a_constant_per_pair():
     p = {"row": np.repeat(np.arange(n), 2).astype(float), "galaxy": np.tile([5.0, 3.0], n),
          "log_resp": log_resp.ravel(), "log_alpha": log_alpha.ravel()}
     ids = 100 + np.arange(n)
-    (k, j, dG, dA, dLa, pid), counts = contested_pairs(p, logN.ravel(), np.ones(2 * n, bool), ids)
+    (k, j, dG, dA, dLa, pid, a, b), counts = contested_pairs(p, logN.ravel(), np.ones(2 * n, bool), ids)
     assert counts == (n, 0) and set(k) == {3} and set(j) == {5}
     np.testing.assert_array_equal(pid, ids)
+    np.testing.assert_array_equal(p["galaxy"][a], k)
+    np.testing.assert_array_equal(p["galaxy"][b], j)
     np.testing.assert_allclose(dA - dLa, C[1] - C[0])       # galaxy 3 minus galaxy 5
     t = pair_table(k, j, dG, dA, dLa, s=0, t=0.0)
     np.testing.assert_allclose(t["rho stored"], 1.0)
@@ -236,12 +238,14 @@ def test_ages_from_presence():
 
 
 def test_resolved_groups_need_ten_particles_per_galaxy():
-    from evaluate.model import resolved
+    from evaluate.model import components
     rows = np.r_[np.arange(5), np.arange(5), [10, 11, 12]]           # 1, 2 share 5 particles; 3 alone
     gal = np.r_[np.full(5, 1), np.full(5, 2), np.full(3, 3)]
-    assert resolved({"row": rows, "galaxy": gal}).tolist() == [False] * 10 + [True] * 3
+    comp, resolved = components({"row": rows, "galaxy": gal})
+    assert resolved.tolist() == [False] * 10 + [True] * 3
+    assert comp[:5].tolist() == comp[5:10].tolist() and comp[0] != comp[10]
     rows = np.r_[np.arange(25), np.arange(25)]                         # 25 >= 10 x 2: resolved
-    assert resolved({"row": rows, "galaxy": np.r_[np.full(25, 1), np.full(25, 2)]}).all()
+    assert components({"row": rows, "galaxy": np.r_[np.full(25, 1), np.full(25, 2)]})[1].all()
 
 
 def test_alpha_share_of_the_decision_adds_up():
@@ -270,6 +274,80 @@ def test_autocorrelation_ignores_per_snapshot_constants_and_recovers_rho():
     assert t0["n"].iloc[0] == n and t0["ac_G"].iloc[0] > 0.99
     np.testing.assert_allclose(t0["ac_alpha"].iloc[0], rho, atol=0.03)
     np.testing.assert_allclose(t0["ac_alpha"], shifted["ac_alpha"])
+
+
+def test_cross_fit_r2_separates_a_real_signal_from_noise():
+    from evaluate.model import cross_fit_r2
+    rng = np.random.default_rng(7)
+    n = 20_000                                            # large enough that noise's out-of-sample R^2
+    F = rng.normal(size=(n, 2))                           # settles near 0 rather than overfitting negative
+    y_signal = np.sin(F[:, 0]) + F[:, 1] ** 2 + rng.normal(scale=0.05, size=n)
+    r2_signal, _ = cross_fit_r2(F, y_signal, seed=0)
+    y_noise = rng.normal(size=n)
+    r2_noise, _ = cross_fit_r2(F, y_noise, seed=0)
+    assert r2_signal > 0.9
+    assert abs(r2_noise) < 0.05
+
+
+def test_dependence_table_recovers_one_pair_at_full_size():
+    from evaluate.model import MIN_DEP, dependence_table
+    rng = np.random.default_rng(8)
+    n = 5 * MIN_DEP
+    k, j = np.zeros(n), np.ones(n)
+    d2k, d2j = rng.normal(size=n) ** 2, rng.normal(size=n) ** 2
+    Y = d2k - d2j + rng.normal(scale=0.01, size=n)
+    phys = rng.normal(size=(n, 4))
+    D = Y + rng.normal(size=n)
+    k[:100] = 5                                             # a second pair, under MIN_DEP: only counted
+    t, few = dependence_table(k, j, Y, d2k, d2j, phys, D, s=0, t=0.0, seed=1)
+    assert t["n"].iloc[0] == n - 100 and few == (1, 100)
+    assert t["r2_G"].iloc[0] > 0.9
+
+
+def test_corrected_r2_removes_the_small_sample_bias():
+    from evaluate.model import corrected_r2, cross_fit_r2
+    rng = np.random.default_rng(9)
+    n = 800
+    F = np.abs(rng.normal(size=(n, 2))) * [3.0, 2.0]
+    f = np.log1p(F[:, 0]) - 0.6 * np.log1p(F[:, 1]) + 0.2 * np.log1p(F[:, 0] * F[:, 1])
+    Y = f + f.std() * rng.normal(size=n)                    # true R^2 = 0.5
+    raw, _ = cross_fit_r2(F, Y, seed=0)
+    r2, se = corrected_r2(F, Y, seed=0)
+    assert raw < 0.47 and abs(r2 - 0.5) < 0.07 and 0 < se < 0.06
+
+
+def test_gamma_table_recovers_the_feedback_slope():
+    """gamma = Cov(L, Delta log alpha) / Var(Delta log alpha), recovered from synthetic leaks
+    L = gamma * Delta log alpha + noise, when Var(Delta log alpha) is not tiny next to Var(D_A)."""
+    from evaluate.model import MIN_PAIR, gamma_table
+    rng = np.random.default_rng(11)
+    n = 2000
+    k, j = np.zeros(n), np.ones(n)
+    dLa = rng.normal(size=n)
+    DA = rng.normal(size=n)                                 # unrelated to dLa: no conditioning issue
+    gamma_true = 0.4
+    L = gamma_true * dLa + rng.normal(scale=0.1, size=n)
+    t = gamma_table(k, j, L, dLa, DA, s=0, t=0.0)
+    assert t["n"].iloc[0] == n
+    assert abs(t["gamma"].iloc[0] - gamma_true) < 0.03
+    assert t["rho_L"].iloc[0] ** 2 > 0.9
+    w = 1.0 / (4.0 * np.cosh(DA / 2.0) ** 2)                # p (1 - p): the stars in play
+    sd = np.sqrt(np.average((L - np.average(L, weights=w)) ** 2, weights=w))
+    assert abs(t["sd_L"].iloc[0] - sd) < 1e-12 and abs(t["n_play"].iloc[0] - w.sum()) < 1e-9
+    assert gamma_table(np.zeros(MIN_PAIR - 1), np.ones(MIN_PAIR - 1), rng.normal(size=MIN_PAIR - 1),
+                        rng.normal(size=MIN_PAIR - 1), rng.normal(size=MIN_PAIR - 1), s=0, t=0.0).empty
+
+
+def test_gamma_is_nan_when_delta_log_alpha_has_tiny_variance():
+    from evaluate.model import GAMMA_MIN_VAR, gamma_table
+    rng = np.random.default_rng(12)
+    n = 2000
+    k, j = np.zeros(n), np.ones(n)
+    DA = rng.normal(size=n)
+    dLa = rng.normal(scale=np.sqrt(0.001 * np.var(DA)), size=n)     # well below GAMMA_MIN_VAR x Var(D_A)
+    L = 0.4 * dLa + rng.normal(scale=0.1, size=n)
+    t = gamma_table(k, j, L, dLa, DA, s=0, t=0.0)
+    assert np.isnan(t["gamma"].iloc[0]) and GAMMA_MIN_VAR == 0.01
 
 
 def test_bgmm_estep_mstep_match_the_library():

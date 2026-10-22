@@ -15,8 +15,9 @@ from evaluate.load import Run
 WORKERS = min(8, os.cpu_count() or 1)
 
 
-def arguments(doc, every=False):
-    """Parse the command line of an evaluation script (``every``: it samples every N-th snapshot)."""
+def arguments(doc, every=False, light_every=False, flags=None):
+    """Parse the command line of an evaluation script (``every``: it samples every N-th snapshot;
+    ``light_every``: its extra pass samples its own; ``flags``: {name: help} of extra store-true options)."""
     p = argparse.ArgumentParser(description=doc, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--path", required=True,
                    help="the roadrunner run directory; results go to PATH/evaluation/")
@@ -26,6 +27,11 @@ def arguments(doc, every=False):
     p.add_argument("--snaps", help="first:last snapshot, both included (default: all)")
     if every:
         p.add_argument("--every", type=int, default=10, help="every N-th snapshot (default 10)")
+    if light_every:
+        p.add_argument("--light-every", type=int, default=3,
+                       help="the extra pass (model: 3.2b, 3.4): every N-th snapshot (default 3; 1: all)")
+    for name, help_ in (flags or {}).items():
+        p.add_argument(f"--{name}", action="store_true", help=help_)
     return p.parse_args()
 
 
