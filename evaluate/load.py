@@ -24,6 +24,7 @@ from tqdm import tqdm
 UNASSIGNED, ABSENT = -1, -2
 RESOLVED, MAJOR = 100, 1000           # particles: a resolved / a major galaxy
 OLD_GYR = 1.0                         # a star is old when it already existed this long before
+DUPLICATE_GYR = 1e-3                  # an output closer than this to the previous one is a duplicate
 BLAS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
 
 
@@ -254,12 +255,39 @@ def on(ids_ref, ids_sorted, x_sorted, fill=ABSENT):
     return np.where(ids_sorted[pos] == ids_ref, x_sorted[pos], fill)
 
 
+def label_mass(L, m):
+    """Hard-label mass of every label."""
+    g, inv = np.unique(L, return_inverse=True)
+    return pd.Series(np.bincount(inv.ravel(), weights=m), index=g)
+
+
+def log_ratio(a, b):
+    """``log10(a / b)``, NaN where either is not positive."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where((a > 0) & (b > 0), np.log10(a / b), np.nan)
+
+
+def wmedian(x, w):
+    """The ``w``-weighted median of ``x``."""
+    if not x.size:
+        return np.nan
+    o = np.argsort(x)
+    c = np.cumsum(w[o])
+    return float(x[o][np.searchsorted(c, 0.5 * c[-1])])
+
+
 def common_snaps(cats, particles):
-    """Snapshots in every catalogue and in the particle data, sorted."""
+    """Snapshots in every catalogue and in the particle data, sorted, without near-duplicate outputs: a
+    snapshot less than DUPLICATE_GYR after the previous one kept is left out (halo685x095's 178 comes
+    0.6 Myr after 177, and the merger tree loses 340 of its halos there, live satellites among them)."""
     snaps = set(particles.snaps.tolist())
     for c in cats:
         snaps &= set(np.asarray(c.snaps).tolist())
-    return sorted(snaps)
+    kept = []
+    for s in sorted(snaps):
+        if not kept or particles.time[s] - particles.time[kept[-1]] >= DUPLICATE_GYR:
+            kept.append(s)
+    return kept
 
 
 def aligned(cats, particles, s):

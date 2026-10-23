@@ -122,7 +122,7 @@ from scipy.stats import rankdata
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 from evaluate import bgmm, cli, plots
-from evaluate.load import ABSENT, OLD_GYR, UNASSIGNED, Run, pool, seen_before
+from evaluate.load import ABSENT, OLD_GYR, UNASSIGNED, Run, pool, seen_before, wmedian
 from evaluate.report import Report
 
 MIN_PARTICLES, MIN_R, MIN_HARD, MIN_PAIR = 1e5, 50.0, 50, 30
@@ -246,15 +246,6 @@ def wspearman(a, b, w):
     with np.errstate(invalid="ignore", divide="ignore"):
         return (np.average(da * db, weights=w)
                 / np.sqrt(np.average(da * da, weights=w) * np.average(db * db, weights=w)))
-
-
-def wmedian(x, w):
-    """The ``w``-weighted median of ``x``."""
-    if not x.size:
-        return np.nan
-    o = np.argsort(x)
-    c = np.cumsum(w[o])
-    return float(x[o][np.searchsorted(c, 0.5 * c[-1])])
 
 
 # --- 3.1 ----------------------------------------------------------------------------------------
@@ -1516,7 +1507,7 @@ def _draw_galaxy_dependence(item):
 
 
 def main():
-    args = cli.arguments(__doc__, every=True, light_every=True, flags={
+    args = cli.arguments(__doc__, every=10, light_every=True, flags={
         "feedback": "3.2b: replay the fit without alpha in EM (needs the run's stored log_alpha)",
         "dependence": "3.4: how much of alpha the Gaussians already contain",
     })

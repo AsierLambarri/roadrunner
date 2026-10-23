@@ -7,9 +7,13 @@ Per run, as standalone scripts writing to ``RUN/evaluation/`` (report, log, PDFs
     python3 evaluate/stability.py --path RUN ...                               # point 2, stable in time
     python3 evaluate/model.py --path RUN ...                                   # goal 3, overlap, calibration
 
-Two or more catalogues, the first the reference (``python -m evaluate -h``): ``science`` (goal 5,
-robustness of the science outputs), ``compare`` (goal 6, where they differ); ``sweep`` (goal 7) gathers
-the SCOREs of runs into one table.
+Two or more catalogues (roadrunner runs or ACCME results), the first the reference, written to the first
+roadrunner run's ``evaluation/<REF>_vs_<OTHERS>/`` (or ``--out``):
+
+    python3 evaluate/science.py --path REF --vs OTHER [...]                   # goal 5, births and ex-situ
+    python3 evaluate/compare.py --path REF --vs OTHER [...]                   # goal 6, where they differ
+
+``python -m evaluate sweep`` (goal 7) gathers the SCOREs of runs into one table.
 
 ``soundness`` and ``stability`` give a verdict (FAIL and FLAG episodes), the others only measure.
 """

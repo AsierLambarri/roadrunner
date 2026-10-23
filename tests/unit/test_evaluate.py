@@ -442,3 +442,53 @@ def test_bgmm_replay_converges_and_recovers_the_written_fit():
     assert 0 < iterations < 300
     assert np.isfinite(log_r).all() and np.isfinite(g).all()
     assert post.N.sum() <= gal.size + 1e-6
+
+
+def test_exsitu_overlap_recall_purity_J_and_disagreement_split():
+    from evaluate.science import exsitu_overlap
+    # 8 particles; h = 1. memA/memB: hard label == h. bidA/bidB: birth galaxy (-1: unknown).
+    memA = np.array([True, True, True, True, False, False, True, True])
+    memB = np.array([True, True, True, False, True, False, True, True])
+    bidA = np.array([2, -1, 1, 2, 2, 1, 1, 3])
+    bidB = np.array([2, -1, 1, 2, 2, 1, 1, 3])
+    m = np.ones(8)
+    out = exsitu_overlap(memA, memB, bidA, bidB, m, 1)
+    # X_A(1) = {0, 3, 7} (born in 2, 2, 3; particle 2 and 6 are born in 1 = h, excluded; 1 is unknown)
+    # X_B(1) = {0, 4, 7} (particle 4 is a member of B only, born in 2)
+    assert out["mA"] == 3.0 and out["mB"] == 3.0 and out["mBoth"] == 2.0   # {0, 7} shared
+    assert np.isclose(out["recall"], 2 / 3) and np.isclose(out["purity"], 2 / 3)
+    assert np.isclose(out["J"], 2 / 4)
+    # symmetric difference {3, 4}: both are membership disagreements (3 only in A, 4 only in B); as a
+    # share of m(X_A | X_B) = {0, 3, 4, 7} (mass 4), that is 2 / 4
+    assert np.isclose(out["membership_share"], 0.5) and out["birth_share"] == 0.0
+
+
+def test_exsitu_overlap_splits_off_birth_disagreement():
+    # same host membership in both catalogues, but particle 1's ex-situ status disagrees: known birth
+    # in A (galaxy 2, so ex-situ), in-situ (born in h) in B.
+    from evaluate.science import exsitu_overlap
+    memA = memB = np.array([True, True, True])
+    bidA = np.array([2, 2, -1])
+    bidB = np.array([2, 1, -1])      # particle 1: in-situ in B (birth == h)
+    m = np.ones(3)
+    out = exsitu_overlap(memA, memB, bidA, bidB, m, 1)
+    assert out["mA"] == 2.0 and out["mB"] == 1.0 and out["mBoth"] == 1.0   # only particle 0 agrees
+    # symmetric difference is {1} alone (particle 0 shared, particle 2 in neither): as a share of
+    # m(X_A | X_B) = {0, 1} (mass 2), the disagreement is entirely a birth mismatch
+    assert out["membership_share"] == 0.0 and np.isclose(out["birth_share"], 0.5)
+
+
+def test_birth_overlap_recall_purity_J_and_main_destination():
+    from evaluate.science import birth_overlap
+    # 10 stars born in galaxy 5 (mass 2e6 each); 8 keep that birth galaxy in B, 2 are attributed to 7
+    bidA = np.full(10, 5)
+    bidB = bidA.copy()
+    bidB[8:] = 7
+    m = np.full(10, 2e6)
+    BT = birth_overlap(bidA, bidB, m)
+    assert set(BT.index) == {5, 7}                            # both cross the 1e6 born-mass threshold
+    assert BT.loc[5, "mA"] == 2e7 and BT.loc[5, "mB"] == 1.6e7 and BT.loc[5, "mBoth"] == 1.6e7
+    assert np.isclose(BT.loc[5, "recall"], 0.8) and np.isclose(BT.loc[5, "purity"], 1.0)
+    assert np.isclose(BT.loc[5, "J"], 0.8)
+    assert BT.loc[5, "dest"] == 7 and np.isclose(BT.loc[5, "dest_share"], 0.2)
+    assert BT.loc[7, "mA"] == 0.0 and BT.loc[7, "recall"] != BT.loc[7, "recall"]  # NaN: no mass born there in A

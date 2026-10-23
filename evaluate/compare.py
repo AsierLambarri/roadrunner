@@ -25,9 +25,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from evaluate.load import OLD_GYR, Run, UNASSIGNED, aligned, common_snaps, newborn, open_catalogue, pool, seen_before
+from evaluate.load import (OLD_GYR, Run, UNASSIGNED, aligned, common_snaps, label_mass, log_ratio, newborn,
+                           open_catalogue, pool, seen_before)
 from evaluate.report import Report
-from evaluate.science import label_mass, log_ratio
 from evaluate.stability import relation
 
 MIN_PARTICLES, MIN_MASS, YOUNG_GYR, MIN_YOUNG = 1e5, 1e6, 0.5, 100
