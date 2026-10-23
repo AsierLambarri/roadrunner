@@ -397,6 +397,7 @@ def plot_progenitors(cats, hist, times, pdf):
             if np.isfinite(r["disrupt_t"]):
                 ax.axvline(r["disrupt_t"], ls=":", color=f"C{i}", lw=0.8)
         ax.set_title(f"progenitor {p}", fontsize=8)
+        ax.set_xlim(0.0, max(times))                         # one time axis for every panel
     if progs:
         axes.flat[0].legend(fontsize=6)
     for ax in axes.flat[len(progs):]:
