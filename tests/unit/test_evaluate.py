@@ -444,6 +444,36 @@ def test_bgmm_replay_converges_and_recovers_the_written_fit():
     assert post.N.sum() <= gal.size + 1e-6
 
 
+def test_normalized_offset_is_the_scaled_distance():
+    from evaluate.compare import normalized_offset
+    a = np.array([[3.0, 4.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    b = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    scale = np.array([2.0, 0.5, 1.0])
+    out = normalized_offset(a, b, scale)
+    assert np.allclose(out, [2.5, 2.0, 0.0])
+
+
+def test_galaxy_summary_recovers_known_medians_and_maxima():
+    from evaluate.compare import galaxy_summary
+    df = pd.DataFrame({
+        "galaxy": [1, 1, 1, 1, 2, 2],
+        "t": [0.0, 1.0, 2.0, 3.0, 0.0, 1.0],
+        "Mtot": [0.1, -0.2, 0.3, -0.4, 0.05, -0.05],
+        "rh": [0.0, 0.1, -0.1, 0.2, 0.0, 0.0],
+        "sigma": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "pos_offset": [1.0, 2.0, 3.0, 4.0, 1.0, 1.0],
+        "vel_offset": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        "Mtot ref": [1e8, 1e8, 1e8, 1e8, 1e7, 1e7],
+    })
+    S = galaxy_summary(df).set_index("galaxy")
+    assert list(S.index) == [1]                              # galaxy 2 has only 2 rows: below MIN_SNAPS
+    assert S.loc[1, "n"] == 4
+    assert np.isclose(S.loc[1, "Mtot max |log ratio|"], 0.4)
+    assert np.isclose(S.loc[1, "Mtot median |log ratio|"], np.median([0.1, 0.2, 0.3, 0.4]))
+    assert np.isclose(S.loc[1, "t of largest Mtot |log ratio|"], 3.0)
+    assert np.isclose(S.loc[1, "position offset median"], 2.5)
+
+
 def test_exsitu_overlap_recall_purity_J_and_disagreement_split():
     from evaluate.science import exsitu_overlap
     # 8 particles; h = 1. memA/memB: hard label == h. bidA/bidB: birth galaxy (-1: unknown).

@@ -17,11 +17,12 @@ from evaluate.load import Run, open_catalogue
 WORKERS = min(8, os.cpu_count() or 1)
 
 
-def arguments(doc, every=None, light_every=False, flags=None, compare=False):
+def arguments(doc, every=None, light_every=False, flags=None, options=None, compare=False):
     """Parse the command line of an evaluation script. ``every``: the default N of its ``--every`` (it
     samples every N-th snapshot; None: no such option); ``light_every``: its extra pass samples its own;
-    ``flags``: {name: help} of extra store-true options; ``compare``: it compares catalogues (``--path``
-    the reference, ``--vs`` the others, ``--out`` where the results go)."""
+    ``flags``: {name: help} of extra store-true options; ``options``: {name: add_argument keywords} of
+    other extra options; ``compare``: it compares catalogues (``--path`` the reference, ``--vs`` the
+    others, ``--out`` where the results go)."""
     p = argparse.ArgumentParser(description=doc, formatter_class=argparse.RawDescriptionHelpFormatter)
     if compare:
         p.add_argument("--path", required=True,
@@ -43,6 +44,8 @@ def arguments(doc, every=None, light_every=False, flags=None, compare=False):
                        help="the extra pass (model: 3.2b, 3.4): every N-th snapshot (default 3; 1: all)")
     for name, help_ in (flags or {}).items():
         p.add_argument(f"--{name}", action="store_true", help=help_)
+    for name, kw in (options or {}).items():
+        p.add_argument(f"--{name}", **kw)
     return p.parse_args()
 
 
