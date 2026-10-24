@@ -526,3 +526,31 @@ def test_birth_overlap_recall_purity_J_and_main_destination():
     assert np.isclose(BT.loc[5, "J"], 0.8)
     assert BT.loc[5, "dest"] == 7 and np.isclose(BT.loc[5, "dest_share"], 0.2)
     assert BT.loc[7, "mA"] == 0.0 and BT.loc[7, "recall"] != BT.loc[7, "recall"]  # NaN: no mass born there in A
+
+
+def test_membership_recall_purity_J_per_galaxy():
+    from evaluate.compare import membership
+    a = np.array([1, 1, 1, 1, 2, 2, -1, 3])
+    b = np.array([1, 1, 2, -1, 2, 2, 1, 3])
+    m = np.array([1e6] * 7 + [5e5])
+    M = membership(a, b, m).set_index("galaxy")
+    assert list(M.index) == [1, 2]                  # unassigned left out; galaxy 3 below 1e6 in both
+    # galaxy 1: ref {0, 1, 2, 3}, other {0, 1, 6}, both {0, 1}
+    assert M.loc[1, "m ref"] == 4e6 and M.loc[1, "m other"] == 3e6 and M.loc[1, "m both"] == 2e6
+    assert np.isclose(M.loc[1, "recall"], 0.5) and np.isclose(M.loc[1, "purity"], 2 / 3)
+    assert np.isclose(M.loc[1, "J"], 2 / 5)
+    # galaxy 2: ref {4, 5}, other {2, 4, 5}
+    assert np.isclose(M.loc[2, "recall"], 1.0) and np.isclose(M.loc[2, "purity"], 2 / 3)
+    assert np.isclose(M.loc[2, "J"], 2 / 3)
+
+
+def test_mass_movers_split_by_each_snapshots_relation():
+    from evaluate.compare import mass_movers
+    rows = pd.DataFrame({"a": [1, 1, 1], "b": [2, -1, 2], "relation": ["swap", "unbound", "stripping"],
+                         "m": [2.0, 1.0, 6.0]})           # two snapshots: 1 -> 2 is a swap, then stripping
+    T, overall = mass_movers(rows, pd.Series({1: 40.0, 2: 100.0, -1: 10.0}), 2)
+    assert list(T.index) == [(1, 2), (1, -1)]
+    assert T.loc[(1, 2), "mean moved"] == 4.0 and np.isclose(T.loc[(1, 2), "share of a"], 0.2)
+    assert np.isclose(T.loc[(1, 2), "swap"], 0.25) and np.isclose(T.loc[(1, 2), "stripping"], 0.75)
+    assert T.loc[(1, -1), "unbound"] == 1.0 and np.isclose(T.loc[(1, -1), "share of a"], 1 / 40)
+    assert np.allclose(overall[["stripping", "swap", "unbound"]], [6 / 9, 2 / 9, 1 / 9])
