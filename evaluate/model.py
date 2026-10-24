@@ -43,9 +43,10 @@ overlapping spheres, can be larger, so this can leave out a little of a resolved
     from the fit at the previous snapshot (bgmm.py's ``state``, mirroring the pipeline's
     ``_build_prior_kwargs`` / ``_history``), theta_A read as a posterior (written mean, covariance,
     count). One E-step with alpha at theta_A is checked against the written log r of the contested
-    entries (the reproduction residual: median |delta log r|; the tail as p99 |delta r|, since log
-    differences between underflowed r ~ 1e-12 mean nothing); components whose median |delta log r|
-    > 1e-2 are dropped (counted). Two chains are then iterated to convergence from theta_A (<= 300 EM
+    entries (the reproduction residual: median |delta log r|; the tail as each component's p99
+    |delta r|, since log differences between underflowed r ~ 1e-12 mean nothing; both medians over
+    components, weighted by their contested entries); components whose median |delta log r| > 1e-2 are
+    dropped (counted). Two chains are then iterated to convergence from theta_A (<= 300 EM
     steps): A with alpha in every E-step (the run as written), B with alpha's support only, alpha
     applied once at the end. Per pair (k, j) with >= 30 stars, the leak L = (g^A_k - g^A_j) -
     (g^B_k - g^B_j), how far alpha in EM moved the Gaussians' own log-odds, with every moment weighted by
@@ -62,9 +63,10 @@ overlapping spheres, can be larger, so this can leave out a little of a resolved
     contested, the snapshot's total and the host's contested mass). Sharpening: the share of contested
     mass with r_max >= 0.999 and the mass-weighted mean entropy, A against B. Coverage: the replayed
     share of resolved contested mass, the share in no-history galaxies (no usable previous fit), the
-    excluded shares, iterations (and how many hit the cap). Reported: these SCOREs (per-galaxy medians
-    weighted by contested mass, over components with contested entries; pair medians by the stars in
-    play), a table by stellar mass, the 10 pairs with the largest sd(L) x stars in play.
+    excluded shares, iterations (and how many did not converge within the cap). Reported: these SCOREs
+    (per-galaxy medians weighted by the galaxy's own contested mass, the stars it competes for, over
+    galaxies with some; pair medians by the stars in play), a table by stellar mass, the 10 pairs with
+    the largest sd(L) x stars in play.
 3.3 calibration. Contested (>= 2 candidates) old (present >= 1 Gyr before) stars at s, k = argmax r;
     outcome: labelled k at s', the first snapshot >= 150 Myr later. Left out: k without particles then,
     unassigned then, a satellite's star beyond its catalogue r_t then. Mass-weighted per bin of r_max:
@@ -128,7 +130,7 @@ from evaluate.report import Report
 MIN_PARTICLES, MIN_R, MIN_HARD, MIN_PAIR = 1e5, 50.0, 50, 30
 REPRO_TOL = 1e-2                        # 3.2b: a component is dropped when its median |delta log r| exceeds this
 SHARP = 0.999                           # 3.2b: r_max this high or above counts as "sharp"
-MAX_ITER = 300                          # 3.2b: bgmm.replay's cap, and the "hit max_iter" (non-converged) count
+MAX_ITER = 300                          # 3.2b: bgmm.replay's cap
 LATER_GYR = 0.15                        # 3.3: the outcome is read at the first snapshot this much later
 LAGS_GYR = (0.05, 0.15, 0.3, 0.6, 1.0)  # 3.3's lag curve (0.15 = LATER_GYR itself)
 UNRESOLVED_RATIO = 10                   # the pipeline's UNRESOLVED_GROUP_RATIO
@@ -650,17 +652,19 @@ def feedback_component(run, s, p, X, m, galaxies, gauss, gauss_prev, tree_xyzv, 
     delta_c, delta_r_c = delta[contested], delta_r[contested]   # single-candidate entries are always
     ok_c = np.isfinite(delta_c)                                  # reproduced exactly and would swamp these
 
-    post_A, first_A, it_A, rows_c, gal_c, g_r_A, g_A = bgmm.replay(X, rows, gal, galaxies, la, prior,
-                                                                    theta_A, with_alpha=True, max_iter=MAX_ITER)
-    post_B, first_B, it_B, _, _, g_r_B, g_B = bgmm.replay(X, rows, gal, galaxies, la, prior, theta_A,
-                                                           with_alpha=False, max_iter=MAX_ITER)
+    post_A, first_A, it_A, conv_A, rows_c, gal_c, g_r_A, g_A = bgmm.replay(
+        X, rows, gal, galaxies, la, prior, theta_A, with_alpha=True, max_iter=MAX_ITER)
+    post_B, first_B, it_B, conv_B, _, _, g_r_B, g_B = bgmm.replay(
+        X, rows, gal, galaxies, la, prior, theta_A, with_alpha=False, max_iter=MAX_ITER)
 
     la_c = la[contested]
-    g1_A, _ = bgmm.estep(X, rows_c, gal_c, galaxies, la_c, first_A, with_alpha=True)
-    g1_B, _ = bgmm.estep(X, rows_c, gal_c, galaxies, la_c, first_B, with_alpha=True)
+    g1_A = bgmm.estep(X, rows_c, gal_c, galaxies, la_c, first_A)[0]     # the Gaussian term: alpha-free
+    g1_B = bgmm.estep(X, rows_c, gal_c, galaxies, la_c, first_B)[0]
 
     t = run.time[s]
-    gal_row = {"snap": s, "t": t, "galaxy": galaxies, "no_history": no_history, "mass": contested_mass,
+    idx_c = np.searchsorted(galaxies, gal_c)
+    own_mass = np.bincount(idx_c, weights=m[rows_c], minlength=galaxies.size)   # the stars each competes for
+    gal_row = {"snap": s, "t": t, "galaxy": galaxies, "no_history": no_history, "mass": own_mass,
                "kl": sym_kl(post_A.m, post_A.Sigma, post_B.m, post_B.Sigma),
                "kl_written": sym_kl(theta_A.m, theta_A.Sigma, post_A.m, post_A.Sigma),
                "dlogdet": (np.linalg.slogdet(post_B.Sigma)[1] - np.linalg.slogdet(post_A.Sigma)[1]),
@@ -671,7 +675,6 @@ def feedback_component(run, s, p, X, m, galaxies, gauss, gauss_prev, tree_xyzv, 
     fixed = ~contested
     idx = np.searchsorted(galaxies, gal)
     M_fixed = np.bincount(idx[fixed], weights=m[rows[fixed]], minlength=galaxies.size)
-    idx_c = np.searchsorted(galaxies, gal_c)
     M_A = M_fixed + np.bincount(idx_c, weights=m[rows_c] * np.exp(g_r_A), minlength=galaxies.size)
     M_B = M_fixed + np.bincount(idx_c, weights=m[rows_c] * np.exp(g_r_B), minlength=galaxies.size)
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -712,7 +715,8 @@ def feedback_component(run, s, p, X, m, galaxies, gauss, gauss_prev, tree_xyzv, 
              "p99_r": float(np.nanpercentile(delta_r_c, 99)) if ok_c.any() else np.nan, "n": int(ok_c.sum())}
     no_history_mass = float(w[np.isin(k_A, galaxies[no_history])].sum())
     return dict(gal_row=gal_row, gamma=gam, gamma1=gam1, dep_B=dep_B, labels=labels, repro=repro,
-                iterations=(it_A, it_B), resolved_mass=contested_mass, no_history_mass=no_history_mass)
+                iterations=(it_A, it_B), converged=(conv_A, conv_B), resolved_mass=contested_mass,
+                no_history_mass=no_history_mass)
 
 
 # --- the workers ----------------------------------------------------------------------------------
@@ -1112,8 +1116,8 @@ def assemble_feedback(fb_list, snaps, times):
         its_mass = np.array([out["resolved_mass"] for out in contested_parts])  # entries) parts would
         its_A = np.array([out["iterations"][0] for out in contested_parts])     # swamp the medians below
         its_B = np.array([out["iterations"][1] for out in contested_parts])
-        not_converged = sum(out["resolved_mass"] for out in contested_parts
-                            if out["iterations"][0] >= MAX_ITER or out["iterations"][1] >= MAX_ITER)
+        conv = np.array([out["converged"] for out in contested_parts], bool).reshape(-1, 2)
+        not_converged = float(its_mass[~conv.all(axis=1)].sum())
 
         def cat(key, dtype=float):
             return (np.concatenate([out["labels"][key] for out in parts]) if parts
@@ -1145,8 +1149,8 @@ def assemble_feedback(fb_list, snaps, times):
                 "not_converged_share": not_converged / replayed if replayed > 0 else np.nan,
                 "iterations_A": wmedian(its_A, its_mass) if its_mass.size else np.nan,
                 "iterations_B": wmedian(its_B, its_mass) if its_mass.size else np.nan,
-                "maxiter_A": int((its_A >= MAX_ITER).sum()),
-                "maxiter_B": int((its_B >= MAX_ITER).sum()),
+                "unconverged_A": int((~conv[:, 0]).sum()),
+                "unconverged_B": int((~conv[:, 1]).sum()),
                 "label_share_contested": float((w * changed).sum() / w.sum()) if w.sum() > 0 else np.nan,
                 "label_share_total": (float((w * changed).sum() / fb["snapshot_mass"])
                                       if fb["snapshot_mass"] > 0 else np.nan),
@@ -1214,13 +1218,13 @@ def report_feedback(gal, gamma, gamma1, mass, per_snap, rep):
               float(per_snap["mass_repro_excluded_share"].median()))
     rep.score("3.2b median reproduction residual |delta log r| (contested entries)",
               float(per_snap["repro_median"].median()))
-    rep.score("3.2b median reproduction residual, p99 |delta r| (contested entries)",
+    rep.score("3.2b median reproduction residual, components' p99 |delta r| (contested entries)",
               float(per_snap["repro_p99_r"].median()))
     rep.score("3.2b components left out (summed over snapshots)", int(per_snap["left_out"].sum()))
     rep.score("3.2b median mass-weighted iterations, chain A", float(per_snap["iterations_A"].median()))
     rep.score("3.2b median mass-weighted iterations, chain B", float(per_snap["iterations_B"].median()))
-    rep.score("3.2b components that hit max_iter, chain A", int(per_snap["maxiter_A"].sum()))
-    rep.score("3.2b components that hit max_iter, chain B", int(per_snap["maxiter_B"].sum()))
+    rep.score("3.2b components not converged within max_iter, chain A", int(per_snap["unconverged_A"].sum()))
+    rep.score("3.2b components not converged within max_iter, chain B", int(per_snap["unconverged_B"].sum()))
     rep.score("3.2b median replayed mass share in non-converged components",
               float(per_snap["not_converged_share"].median()))
     rep.score("3.2b median label-change share of contested mass", float(per_snap["label_share_contested"].median()))
@@ -1393,7 +1397,7 @@ def plot_feedback(run, per_snap, gal, gamma, pdf):
     a3.set_ylabel("3.2b mass-weighted median Delta log|Sigma|")
     if not per_snap.empty:
         a4.plot(per_snap["t"], per_snap["repro_median"], "o-", ms=3, label="median |delta log r|")
-        a4.plot(per_snap["t"], per_snap["repro_p99_r"], "s-", ms=3, label="p99 |delta r|")
+        a4.plot(per_snap["t"], per_snap["repro_p99_r"], "s-", ms=3, label="components' p99 |delta r|")
     a4.set_yscale("log")
     a4.set_xlabel("t [Gyr]")
     a4.set_ylabel("3.2b reproduction residual")

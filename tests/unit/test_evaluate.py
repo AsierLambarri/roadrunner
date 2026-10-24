@@ -441,9 +441,9 @@ def test_bgmm_replay_converges_and_recovers_the_written_fit():
     delta, delta_r = bgmm.reproduce(X, rows, gal, galaxies, log_alpha, theta_A, np.zeros(rows.size))
     assert np.isfinite(delta).all() and np.isfinite(delta_r).all()
 
-    post, first_post, iterations, c_rows, c_gal, log_r, g = bgmm.replay(
+    post, first_post, iterations, converged, c_rows, c_gal, log_r, g = bgmm.replay(
         X, rows, gal, galaxies, log_alpha, prior, theta_A, with_alpha=True, max_iter=300)
-    assert 0 < iterations < 300
+    assert converged and 0 < iterations < 300
     assert np.isfinite(log_r).all() and np.isfinite(g).all()
     assert post.N.sum() <= gal.size + 1e-6
 

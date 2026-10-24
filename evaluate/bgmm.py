@@ -383,6 +383,8 @@ def replay(X, rows, gal, galaxies, log_alpha, prior, theta_A, with_alpha=True,
         The posterior after one E+M step from theta_A (the linear response).
     iterations : int
         Number of E+M steps taken.
+    converged : bool
+        Whether the loop met ``tol`` (False: stopped by ``max_iter``).
     rows_c, gal_c : ndarray of int64
         The contested entries' row and galaxy (what ``log_r`` and ``g`` below are indexed by).
     log_r, g : ndarray of shape (rows_c.size,)
@@ -422,7 +424,7 @@ def replay(X, rows, gal, galaxies, log_alpha, prior, theta_A, with_alpha=True,
 
     g_final, log_r_final = estep(X, c_rows, c_gal, galaxies, c_log_alpha, post, with_alpha=True,
                                   grouping=grouping, row_grouping=row_grouping, Xr=Xr)
-    return post, first_post, it, c_rows, c_gal, log_r_final, g_final
+    return post, first_post, it, converged, c_rows, c_gal, log_r_final, g_final
 
 
 def reproduce(X, rows, gal, galaxies, log_alpha, theta_A, written_log_r):
