@@ -188,23 +188,35 @@ def test_gap_verdict():
     assert gap_verdict(500, 2, None, 0.0) == ("FLAG", "bound gap with members not located")
 
 
-def test_label_noise_recovers_sigma_and_drops_merger_triples():
+def test_label_noise_brackets_sigma_around_a_curved_history():
     from evaluate.stability import label_noise
     rng = np.random.default_rng(6)
-    n, dt, sigma = 200, 0.1, 0.05
-    t = dt * np.arange(n)
-    trend = np.linspace(6.0, 6.3, n)                           # smooth growth, 0.3 dex over the run
-    y = trend + rng.normal(0.0, sigma, n)                      # white label noise on top
-    Mres = pd.DataFrame([10.0 ** y], index=[1], columns=np.arange(n))
-    no_merge = pd.DataFrame({"into": [], "t": []})
-    noise, pooled = label_noise(Mres, t, no_merge)
-    assert abs(noise.at[1, "sigma_noise"] - sigma) / sigma < 0.2
-    assert -0.6 < noise.at[1, "rho_1"] < -0.4
-    n_pairs = int(noise.at[1, "n_pairs"])
+    n, sigma = 200, 0.05
+    t = np.cumsum(rng.uniform(0.003, 0.165, n))               # the uneven output spacing of halo685x095
+    history = 6.0 + 0.8 * np.sin(np.pi * t / t[-1])            # grows, then is stripped: hid the old 2.6
+    y = history + rng.normal(0.0, sigma, n)
+    y[150:] += 0.5                                             # a 2.2 step: left out, not noise
+    snaps = np.arange(n)
+    M = pd.DataFrame([10.0 ** y, np.r_[np.full(5, 1e5), np.full(n - 5, np.nan)]], index=[1, 2], columns=snaps)
+    none = pd.DataFrame({"progenitor": [], "into": [], "snapshot": [], "t": []})
+    noise, terms = label_noise(M, M, t, none)
+    assert list(noise.index) == [1]                            # galaxy 2: too few snapshots
+    lo, hi = noise.at[1, "sigma_lo"], noise.at[1, "sigma_hi"]
+    assert 0.8 * sigma < lo <= hi < 1.2 * sigma
+    assert np.isclose(np.sqrt(terms["e2"].sum() / terms["c2"].sum()), hi)     # the terms pool to the bounds
+    assert np.isclose(np.sqrt(-terms["ee"].sum() / terms["ab"].sum()), lo)
 
-    merged = pd.DataFrame({"into": [1], "t": [t[100]]})       # a merger mid-run drops nearby triples
-    noise_m, _ = label_noise(Mres, t, merged)
-    assert noise_m.at[1, "n_pairs"] < n_pairs
+    smooth = pd.DataFrame([10.0 ** history], index=[1], columns=snaps)
+    quiet, _ = label_noise(smooth, smooth, t, none)            # no noise: the bracket holds 0
+    assert quiet.at[1, "sigma_lo"] == 0.0 and quiet.at[1, "sigma_hi"] < 0.1 * sigma
+
+    def merger(progenitor):
+        return pd.DataFrame({"progenitor": [progenitor], "into": [1], "snapshot": [100], "t": [t[100]]})
+    starless, _ = label_noise(M, M, t, merger(3))              # 3 never labels a star: changes nothing
+    assert starless.at[1, "n_pairs"] == noise.at[1, "n_pairs"]
+    M.loc[2, 99] = 1e5                                         # 2 brings 1e5 stars just before snapshot 100
+    merged, _ = label_noise(M, M, t, merger(2))
+    assert merged.at[1, "n_pairs"] < noise.at[1, "n_pairs"]
 
 
 def test_episodes_link_by_galaxy_check_and_time():
