@@ -57,7 +57,8 @@ class Run(Catalogue):
         self.path = Path(path)
         self.name = self.path.name
         self.cat = h5py.File(self.path / "catalogue.hdf5", "r")
-        self.snaps = np.sort(self.cat["header/snapshots"][:].astype(int))
+        self.planned = np.sort(self.cat["header/snapshots"][:].astype(int))   # written up front
+        self.snaps = self.planned[self.planned <= int(self.cat["header/last_snapshot"][()])]  # written ones
         self.config = json.loads(self.cat["header/config"][()])
         self.host = int(self.cat["header/accretion_id"][()])
         eq = pd.DataFrame(json.loads(self.cat["header/equivalence"][()]))
@@ -83,8 +84,12 @@ class Run(Catalogue):
         return self.path / "assignment" / f"snapshot{s:04d}.hdf5"
 
     def galaxies(self, s):
-        """Catalogue galaxy properties at ``s``, indexed by ``Sub_tree_id``."""
-        return pd.DataFrame(self.cat[f"snapshots/{s}/galaxy_properties"][:]).set_index("Sub_tree_id")
+        """Catalogue galaxy properties at ``s``, indexed by ``Sub_tree_id`` (empty at a snapshot without
+        galaxies, where the writer leaves the table out)."""
+        key = f"snapshots/{s}/galaxy_properties"
+        if key not in self.cat:
+            return pd.DataFrame(columns=["Mtot"]).rename_axis("Sub_tree_id")
+        return pd.DataFrame(self.cat[key][:]).set_index("Sub_tree_id")
 
     def satellites(self, s):
         """Host -> its satellites at ``s``. A satellite is any less massive halo bound to the host inside
@@ -100,22 +105,23 @@ class Run(Catalogue):
 
     @lru_cache(maxsize=6)
     def labels(self, s):
-        """``(ids, labels)`` sorted by ID."""
+        """``(ids, labels)`` sorted by ID (cached, read-only)."""
         ids, lab = self.row_labels(s)
         o = np.argsort(ids)
-        return ids[o], lab[o]
+        return frozen(ids[o], lab[o])
 
     @lru_cache(maxsize=6)
     def masses(self, s):
-        """Particle masses parallel to ``labels(s)`` (NaN where missing); ones (counts) without particle data."""
+        """Particle masses parallel to ``labels(s)`` (NaN where missing); ones (counts) without particle
+        data (cached, read-only)."""
         ids = self.labels(s)[0]
         if self.pdata is None:
-            return np.ones(ids.size)
+            return frozen(np.ones(ids.size))[0]
         with h5py.File(self.pdata / f"snapshot{s:04d}.hdf5", "r") as f:
             pid = f["data/indices"][:].astype(np.int64)
             m = f["data/masses"][:].astype(np.float64)
         o = np.argsort(pid)
-        return on(ids, pid[o], m[o], fill=np.nan)
+        return frozen(on(ids, pid[o], m[o], fill=np.nan))[0]
 
     def pairs(self, s):
         """Every stored (particle, galaxy) pair at ``s``, concatenated (float64):
@@ -164,14 +170,15 @@ class Run(Catalogue):
 
     @lru_cache(maxsize=2)
     def particles_by_id(self, s):
-        """``(ids, X, m)`` of the particle data at ``s``, sorted by ID (catalogue units, km/s)."""
+        """``(ids, X, m)`` of the particle data at ``s``, sorted by ID (catalogue units, km/s; cached,
+        read-only)."""
         with h5py.File(self.pdata / f"snapshot{s:04d}.hdf5", "r") as f:
             ids = f["data/indices"][:].astype(np.int64)
             X = np.hstack([f["data/positions"][:], f["data/velocities"][:]]).astype(np.float64)
             X = X / f["data/scaler/scale"][:] + f["data/scaler/mean"][:]
             m = f["data/masses"][:].astype(np.float64)
         o = np.argsort(ids)
-        return ids[o], X[o], m[o]
+        return frozen(ids[o], X[o], m[o])
 
     def fitted(self, s):
         """Galaxies with stored pairs at ``s``: they had bound stars and were fitted (sizes only, no data read)."""
@@ -195,7 +202,10 @@ class Run(Catalogue):
         ids = self.row_labels(s)[0]
         if not np.array_equal(ids, pid):
             o = np.argsort(pid)
-            perm = o[np.searchsorted(pid, ids, sorter=o)]
+            perm = o[np.minimum(np.searchsorted(pid, ids, sorter=o), pid.size - 1)]
+            missing = int((pid[perm] != ids).sum())
+            if missing:                                     # else its neighbour would be read instead
+                raise ValueError(f"the particle data at {s} lacks {missing} of the run's particles")
             X, m = X[perm], m[perm]
         return X, m
 
@@ -221,10 +231,10 @@ class Accme(Catalogue):
 
     @lru_cache(maxsize=6)
     def labels(self, s):
-        """``(ids, labels)`` sorted by ID."""
+        """``(ids, labels)`` sorted by ID (cached, read-only)."""
         c = self.cat[f"catalogue/{s}"][:]
         o = np.argsort(c["particle_index"])
-        return c["particle_index"].astype(np.int64)[o], c["Sub_tree_id"].astype(np.int64)[o]
+        return frozen(c["particle_index"].astype(np.int64)[o], c["Sub_tree_id"].astype(np.int64)[o])
 
     def galaxies(self, s):
         return self._props.get(int(s), pd.DataFrame(columns=["Mtot"]))
@@ -246,11 +256,20 @@ def open_catalogue(path, particles=None):
     return Run(path, particles=particles)
 
 
+def frozen(*arrays):
+    """The arrays, read-only: a cached result is shared by every caller."""
+    for a in arrays:
+        a.setflags(write=False)
+    return arrays
+
+
 def on(ids_ref, ids_sorted, x_sorted, fill=ABSENT):
     """``x`` (parallel to the sorted ``ids_sorted``) read at ``ids_ref``; ``fill`` where the ID is absent.
 
     Fast when ``ids_ref`` is sorted too (the ``Run.labels`` order).
     """
+    if not ids_sorted.size:
+        return np.full(np.shape(ids_ref), fill)
     pos = np.minimum(np.searchsorted(ids_sorted, ids_ref), ids_sorted.size - 1)
     return np.where(ids_sorted[pos] == ids_ref, x_sorted[pos], fill)
 

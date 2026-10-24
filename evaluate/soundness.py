@@ -128,7 +128,7 @@ def completion(run, rep, log):
         rep.symptom("1.1 progress.json", "FAIL", "missing")
     else:
         p = json.loads(prog.read_text())
-        last = int(run.cat["header/snapshots"][:].max())
+        last = int(run.planned.max())
         if not p.get("is_finished") or p.get("last_completed_snapshot") != last:
             rep.symptom("1.1 progress.json", "FAIL",
                         f"is_finished={p.get('is_finished')}, last={p.get('last_completed_snapshot')}")
@@ -137,7 +137,7 @@ def completion(run, rep, log):
     err = run.path / "error.log"
     if err.exists() and err.stat().st_size:
         rep.symptom("1.1 error.log", "FAIL", f"{err.read_text().count(chr(10) + '---')} entries")
-    for s in run.snaps:
+    for s in run.planned:                               # a crashed run's unwritten snapshots fail here
         for check, missing in (("1.1 assignment file missing", not run.assignment_file(s).exists()),
                                ("1.1 catalogue snapshot missing", f"snapshots/{s}" not in run.cat),
                                ("1.1 run.log row missing", s not in log.index)):

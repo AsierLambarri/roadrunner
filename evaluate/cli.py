@@ -55,6 +55,7 @@ def start(point, args):
     if args.snaps:
         lo, hi = (int(x) for x in args.snaps.split(":"))
         run.snaps = run.snaps[(run.snaps >= lo) & (run.snaps <= hi)]
+        run.planned = run.planned[(run.planned >= lo) & (run.planned <= hi)]
     out = Path(args.path) / "evaluation"
     log_to(out, point)
     return run, out

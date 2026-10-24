@@ -12,6 +12,10 @@ def test_on_reads_sorted_ids_and_marks_absent():
     assert on(np.array([1, 2, 9, 10]), ids, np.array([20, 50, 90])).tolist() == [ABSENT, 20, 90, ABSENT]
 
 
+def test_on_with_an_empty_catalogue_is_all_absent():
+    assert on(np.array([3, 1]), np.array([], np.int64), np.array([], np.int64)).tolist() == [ABSENT, ABSENT]
+
+
 def test_read_runlog_keeps_last_row_of_a_resumed_snapshot(tmp_path):
     head = "RUNTIME SNAP REDSHIFT LOAD PROCESS REDUCTION BOUND UNASSIGNED AVG_CONF"
     text = "\n".join(["-halo_model: nfw", head, "-" * 40,
