@@ -20,6 +20,7 @@ HERE = Path(__file__).resolve().parent
 
 
 def main():
+    """Run the chosen points, one process each, with the options that apply to them."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--path", required=True, help="the roadrunner run directory")
     p.add_argument("--particles", help="directory holding particle_data/ (default: the run's own)")
@@ -27,8 +28,10 @@ def main():
     p.add_argument("--snaps", help="first:last snapshot, both included (default: all)")
     p.add_argument("--every", type=int, help="model: every N-th snapshot (default: the script's)")
     p.add_argument("--feedback", action="store_true", help="model: 3.2b, replay the fit without alpha in EM")
-    p.add_argument("--dependence", action="store_true", help="model: 3.4, how much of alpha the Gaussians contain")
-    p.add_argument("--light-every", type=int, help="model: 3.2b and 3.4 on every N-th snapshot (default: the script's)")
+    p.add_argument("--dependence", action="store_true",
+                   help="model: 3.4, how much of alpha the Gaussians contain")
+    p.add_argument("--light-every", type=int,
+                   help="model: 3.2b and 3.4 on every N-th snapshot (default: the script's)")
     p.add_argument("--only", help=f"comma-separated points (default: {','.join(POINTS)})")
     args = p.parse_args()
 

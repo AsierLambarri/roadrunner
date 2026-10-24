@@ -1,62 +1,48 @@
-"""Replay of the Bayesian GMM's E/M-step on a run's own stored pairs and written fit.
+"""The Bayesian GMM's E- and M-step, replayed on a run's own stored pairs from its written fit, for
+goal 3's 3.2b (model_alpha.py): did alpha feed back into the fit, or only gate it? Two chains start
+from the written fit theta_A: A with alpha in every E-step (the run as written), B with alpha's support
+only (its entries) and alpha applied once at the end. Pure numpy and scipy, no I/O: the caller reads the
+stored arrays (``Run.pairs``, ``Run.gaussians``, the merger tree) and passes plain arrays.
 
-Pure numpy/scipy, no I/O: Goal 3's "3.2b" test (did alpha feed back into the fit, or only gate it?)
-replays the BGMM's EM in two chains from the written fit theta_A -- A with alpha in every E-step (the
-run as written), B with alpha's support only (its entries), alpha applied once at the end -- and
-compares. Callers (``evaluate/model.py``) read the run's stored arrays (``evaluate/load.py``'s
-``Run.pairs``, ``Run.gaussians``, the merger tree) and pass plain arrays here.
+It mirrors the pipeline's mixture (roadrunner/mixture: ``_e_step``, ``_estimate_log_gaussian_prob``,
+``_estimate_log_weights``, ``_estimate_weights``, ``_estimate_means``, ``_estimate_wishart_full``) and
+its priors (roadrunner/clustering/assignment: ``_build_prior_kwargs`` and ``_history`` in gmm.py, the
+functions of priors.py):
 
-Mirrors, exactly:
+E-step: log rho_nk = E[log pi_k] + log N(x | m_k, Sigma_k) - D/2 log nu_k
+    + 1/2 (D log 2 + sum_{i<D} digamma((nu_k - i)/2)) - D/(2 beta_k) + log alpha_nk, and
+    log r = log rho - logsumexp over the particle's own candidates. Sigma_k is the fitted covariance
+    (W^-1 / nu), the Gaussian's covariance as the pipeline uses it. E[log pi_k] = digamma(a_k) -
+    digamma(sum_j a_j); its second term is the same for every candidate of a particle (they share one
+    fit group), so it cancels and is dropped.
+M-step: a = a0 + N, beta = beta0 + N, m = (beta0 m0 + N xbar) / beta, nu = nu0 + N,
+    W^-1 = W0inv + N S + N beta0 / beta (xbar - m0)(xbar - m0)^T and Sigma = W^-1 / nu, with N, xbar
+    and S the responsibility-weighted count, mean and scatter (point weights are 1: mass_weighting is
+    off in these runs). The pipeline adds reg_covar = 1e-6 to the diagonal of S in the group's
+    standardised coordinates, where the variances are ~1; in natural units that is reg_covar times the
+    component's own variance, which is what is added here (negligible either way).
+Prior, per galaxy k with n_b stored pairs at s: its history is usable when it has a written fit at s-1
+    with count >= D + 1; then nk_n1 = max(count_prev, 1), ref_vars = degrade_covariance(cov_prev, D) and
+    mass_ratio = tree mass(s) / tree mass(s-1). Without it (tagged no_history: the pipeline used pre-fit
+    estimates that were never written), nk_n1 = max(count_s, 1), ref_vars = diag(cov_s) and
+    mass_ratio = 1. Then a0 = weight_concentration_prior(nk_n1, n_b, n_comp),
+    beta0 = mean_precision_prior(nk_n1, n_b), nu0 = D + PRIOR_DOF_OFFSET,
+    W0inv = covariance_prior(ref_vars, mass_ratio, nk_n1, ones(D), nu0, "full") (the pipeline's scaler
+    cancels in natural units) and m0 = the tree's (x, v) at s. The tree mass is the merger tree's own
+    ``mass`` column, the quantity the pipeline's HaloModel.tree_mass holds for each fit.
+Starting state theta_A: the written mean, covariance and count N, with a = a0 + N, beta = beta0 + N
+    and nu = nu0 + N.
 
-- E-step: ``roadrunner/mixture/base.py:347`` (``_e_step``) and
-  ``roadrunner/mixture/bayesian_gmm.py:794-833`` (``_estimate_log_gaussian_prob``,
-  ``_estimate_log_weights``): ``log rho_nk = E[log pi_k] + log N(x | m_k, Sigma_k) - D/2 log nu_k
-  + 1/2 (D log 2 + sum_{i=0}^{D-1} digamma((nu_k - i)/2)) - D/(2 beta_k) + log alpha_nk``, then
-  ``log r = log rho - logsumexp`` over the particle's own candidates. ``Sigma_k`` is the stored/fitted
-  ``covariances_`` (``= W^-1 / nu``), so ``log N`` uses it directly as the covariance, exactly as
-  ``_estimate_log_gaussian_prob_pchol`` does. ``E[log pi_k] = digamma(a_k) - digamma(sum_j a_j)``; the
-  second term is the same number for every candidate of a given particle (its candidates are all in one
-  fit group, i.e. share one ``a`` vector), so it cancels in the softmax and is dropped here.
-- M-step: ``roadrunner/mixture/bayesian_gmm.py:639-717`` (``_estimate_weights``, ``_estimate_means``,
-  ``_estimate_wishart_full``), fed by ``roadrunner/mixture/weighted_gmm.py``'s
-  ``_estimate_gaussian_parameters`` (full covariance): ``a = a0 + N``, ``beta = beta0 + N``,
-  ``m = (beta0 m0 + N xbar) / beta``, ``nu = nu0 + N``,
-  ``W^-1 = W0inv + N S + N beta0 / beta (xbar - m0)(xbar - m0)^T``, ``Sigma = W^-1 / nu``. Point weights
-  are 1 (``mass_weighting`` is false in these runs), so ``N``, ``xbar``, ``S`` are the plain
-  responsibility-weighted count, mean and scatter. The pipeline adds ``reg_covar = 1e-6`` to ``S``'s
-  diagonal in the group's standardised coordinates; here, in natural units, that is approximated as
-  ``reg_covar`` times the component's own (unregularised) per-dimension variance -- the standardised
-  variance the pipeline regularises is ~1, so this is the natural-unit image of the same addition, and
-  it is negligible either way.
-- Prior: ``roadrunner/clustering/assignment/gmm.py:693-790`` (``_build_prior_kwargs``) and ``:790-810``
-  (``_history``), via the pure helpers in ``roadrunner/clustering/assignment/priors.py``. Per galaxy k,
-  with ``n_b`` its number of stored pairs at s: history is usable when k has a written fit at s-1 with
-  ``count >= D + 1``; then ``nk_n1 = max(count_prev, 1)``, ``ref_vars = degrade_covariance(cov_prev, D)``
-  (natural units), ``mass_ratio = tree_mass(s) / tree_mass(s-1)``. Without usable history,
-  ``nk_n1 = max(count_s, 1)``, ``ref_vars = diag(cov_s)``, ``mass_ratio = 1`` (tagged ``no_history``:
-  the pipeline used pre-fit estimates that were never written). Then
-  ``a0 = weight_concentration_prior(nk_n1, n_b, n_comp)``, ``beta0 = mean_precision_prior(nk_n1, n_b)``,
-  ``nu0 = D + PRIOR_DOF_OFFSET``,
-  ``W0inv = covariance_prior(ref_vars, mass_ratio, nk_n1, ones(D), nu0, "full")`` (natural units: the
-  pipeline's scaler ``scale_`` is passed as ``s = ones(D)``, since its square cancels going back to
-  natural units), ``m0 = tree(x, v)`` at s. The *tree mass* the integrator must pass is the same
-  quantity ``HaloModel.tree_mass`` writes with each fit (``roadrunner/physics/halo_model.py:48-109``:
-  "the catalogue's centre, bulk velocity and mass"; ``self.tree_mass = sum`` of the dark-matter group's
-  particle masses) -- i.e. the merger tree's own ``mass`` column, ``run.tree`` indexed by
-  (``Snapshot``, ``Sub_tree_id``), at s and at s-1 for each galaxy.
-- Starting state theta_A: ``m`` = written mean, ``Sigma`` = written covariance, ``N`` = written count,
-  then ``a = a0 + N``, ``beta = beta0 + N``, ``nu = nu0 + N`` (the written fit read as a BGMM posterior).
-
-Public functions: ``state`` (priors and theta_A from the written/previous fits and the tree),
-``estep``, ``mstep`` (the two half-steps, usable standalone -- the unit test checks them against
-``WeightedBayesianGaussianMixture`` directly), ``replay`` (the full two-chain EM from theta_A) and
-``reproduce`` (one check E-step against the run's own written log r).
+``estep`` and ``mstep`` stand on their own (the unit test checks them against
+WeightedBayesianGaussianMixture); ``replay`` runs one chain to convergence and ``reproduce`` checks one
+E-step against the run's written log r.
 """
 from collections import namedtuple
 
 import numpy as np
 from scipy.special import digamma
 
+from evaluate.pairs import by_row
 from roadrunner._defaults import PRIOR_DOF_OFFSET
 from roadrunner.clustering.assignment.priors import (
     covariance_prior,
@@ -69,23 +55,13 @@ Prior = namedtuple("Prior", "a0 beta0 m0 nu0 W0inv")
 Posterior = namedtuple("Posterior", "m Sigma N a beta nu")
 
 
-# --- row grouping (particle -> its run of candidate entries) --------------------------------------
-
-def _row_groups(rows):
-    """The order sorting ``rows``, and the start and size of each particle's run of entries in it."""
-    o = np.argsort(rows, kind="stable")
-    if not rows.size:
-        return o, np.array([], np.int64), np.array([], np.int64)
-    sr = rows[o]
-    start = np.flatnonzero(np.r_[True, sr[1:] != sr[:-1]])
-    return o, start, np.diff(np.r_[start, rows.size])
-
+# --- the entries, grouped -------------------------------------------------------------------------
 
 def _group_by_galaxy(gal, galaxies):
-    """``idx`` (``gal`` as an index into ``galaxies``), the order sorting entries by it, and the
-    ``n_galaxies + 1`` boundaries of each galaxy's run in that order (``start, start[1:]``, so an
-    empty galaxy has ``start[k] == start[k + 1]``). Sorting once and slicing is what lets ``estep`` and
-    ``mstep`` avoid a fresh ``idx == k`` boolean mask, or a fresh sparse matrix, every EM iteration."""
+    """``idx`` (``gal`` as an index into ``galaxies``), the order sorting the entries by it, and the
+    ``n_galaxies + 1`` bounds of each galaxy's run in that order (an empty galaxy has
+    ``bounds[k] == bounds[k + 1]``). Sorted once, each galaxy's entries are a slice in ``estep`` and
+    ``mstep`` instead of a mask built at every EM iteration."""
     idx = np.searchsorted(galaxies, gal)
     o = np.argsort(idx)
     bounds = np.searchsorted(idx[o], np.arange(galaxies.size + 1))
@@ -93,22 +69,19 @@ def _group_by_galaxy(gal, galaxies):
 
 
 def _row_grouping(rows):
-    """``(o, start, seg)`` for ``_logsumexp_by_row``: the sort order, each run's start, and the run
-    index of every sorted entry, computed once for reuse across repeated calls on the same ``rows``."""
-    o, start, count = _row_groups(rows)
+    """``(o, start, seg)`` of ``rows`` for ``_logsumexp_by_row``: the order sorting them, each particle's
+    first entry in it and every sorted entry's particle, computed once for repeated calls."""
+    o, start, count = by_row(rows)
     return o, start, np.repeat(np.arange(start.size), count)
 
 
 def _logsumexp_by_row(rows, x, row_grouping=None):
-    """``logsumexp`` of ``x`` within each particle's own run of entries, broadcast back to entry order.
-
-    ``row_grouping``: a precomputed ``(o, start, seg)`` (``_row_groups(rows)`` plus the run index of
-    every sorted entry), reused across ``estep`` calls in ``replay``'s loop (``rows`` never changes
-    there) instead of being resorted every call."""
+    """``logsumexp`` of ``x`` over each particle's own entries, broadcast back to the entries;
+    ``row_grouping`` is ``_row_grouping(rows)`` when it was computed already."""
     if not rows.size:
         return np.array([])
     if row_grouping is None:
-        o, start, count = _row_groups(rows)
+        o, start, count = by_row(rows)
         seg = np.repeat(np.arange(start.size), count)
     else:
         o, start, seg = row_grouping
@@ -120,35 +93,18 @@ def _logsumexp_by_row(rows, x, row_grouping=None):
     return out
 
 
-# --- prior and starting state ----------------------------------------------------------------------
+# --- prior and starting state ---------------------------------------------------------------------
 
 def state(gal, galaxies, gauss, gauss_prev, tree_xyzv, tree_mass, tree_mass_prev):
-    """Per-galaxy prior and starting posterior (theta_A), for every id in ``galaxies``.
+    """The prior and the starting posterior theta_A of every galaxy in ``galaxies`` (sorted ids, each with
+    a Gaussian in ``gauss``), and which of them have no usable history.
 
-    Parameters
-    ----------
-    gal : ndarray of int64
-        Galaxy id of every stored pair at s (all of them, not only the contested ones: this is what
-        ``n_b``, the prior's reference count, is counted over).
-    galaxies : ndarray of int64, sorted, unique
-        The galaxies to build state for; every one must have an entry in ``gauss`` (callers restrict
-        to galaxies with a stored, positive-definite Gaussian, as the rest of Goal 3 does).
-    gauss, gauss_prev : dict of {galaxy: (mean, covariance, weight, count)}
-        The written fit at s and at s - 1 (``Run.gaussians``; natural units, ``count`` may be NaN).
-    tree_xyzv : dict of {galaxy: ndarray of shape (D,)}
-        Tree position and velocity at s (the prior mean m0).
-    tree_mass, tree_mass_prev : dict of {galaxy: float}
-        The merger tree's ``mass`` at s and at s - 1 (``HaloModel.tree_mass``; see the module docstring).
-
-    Returns
-    -------
-    prior : Prior
-        ``a0, beta0, m0, nu0, W0inv``, each stacked over ``galaxies`` (``nu0`` is the same scalar
-        everywhere, kept as an array for uniform broadcasting).
-    theta_A : Posterior
-        The written fit read as a posterior: ``m, Sigma, N`` from ``gauss``, ``a = a0 + N`` etc.
-    no_history : ndarray of bool
-        Which galaxies had no usable previous fit (pre-fit estimates were used as the reference instead).
+    ``gal`` is the galaxy of every stored pair at s, contested or not (the prior's reference count n_b
+    counts them all); ``gauss`` and ``gauss_prev`` are the written fits at s and s - 1 (``Run.gaussians``:
+    mean, covariance, weight and count in natural units; the count may be NaN); ``tree_xyzv`` is each
+    galaxy's tree position and velocity at s (the prior mean m0); ``tree_mass`` and ``tree_mass_prev``
+    are its tree mass at s and s - 1. Returns a ``Prior`` and a ``Posterior`` stacked over ``galaxies``
+    (nu0 is one number, repeated), and the boolean array ``no_history``.
     """
     n_gal = galaxies.size
     D = next(iter(gauss.values()))[0].size
@@ -196,53 +152,24 @@ def state(gal, galaxies, gauss, gauss_prev, tree_xyzv, tree_mass, tree_mass_prev
     return prior, theta_A, no_history
 
 
-# --- the two half-steps ------------------------------------------------------------------------------
+# --- the two half-steps ---------------------------------------------------------------------------
 
 def estep(X, rows, gal, galaxies, log_alpha, post, with_alpha=True, grouping=None, row_grouping=None,
           Xr=None):
-    """E-step over the given entries, one Cholesky/inverse per galaxy (vectorised over its entries).
-
-    Parameters
-    ----------
-    X : ndarray of shape (n_particles, D)
-    rows : ndarray of int64, shape (n_entries,)
-        Particle row of each entry.
-    gal : ndarray of int64, shape (n_entries,)
-        Galaxy of each entry.
-    galaxies : ndarray of int64, sorted, unique
-        Aligned with ``post``.
-    log_alpha : ndarray of shape (n_entries,)
-        Ignored when ``with_alpha`` is False (chain B: alpha's support only).
-    post : Posterior
-        Current ``(m, Sigma, a, beta, nu)`` (``N`` is unused here).
-    with_alpha : bool, default True
-    grouping : (idx, order, bounds) or None
-        ``_group_by_galaxy(gal, galaxies)``, precomputed once outside a loop that calls ``estep``
-        repeatedly over the same ``rows``/``gal`` (``replay`` does this): recomputed here if None.
-    row_grouping : (o, start, seg) or None
-        ``_row_grouping(rows)``, likewise precomputed once by ``replay``.
-    Xr : ndarray of shape (n_entries, D) or None
-        ``X[rows[o]]`` (``o`` from ``grouping``), i.e. the entries' coordinates already gathered and
-        sorted into galaxy order: fancy-indexing ``X`` by ``rows`` is itself a sizeable cost (measured
-        tens of ms at 1e5-1e6 entries) that ``replay`` pays once rather than every EM iteration.
-        Recomputed here if None.
-
-    Returns
-    -------
-    g : ndarray of shape (n_entries,)
-        ``log N_k(x) + log pi_k`` term of log rho_nk (no alpha): the Gaussian log term used to form
-        D_G elsewhere (e.g. ``model.py``'s 3.2).
-    log_r : ndarray of shape (n_entries,)
-        Normalised log responsibility, per particle over its own entries only.
+    """E-step over the given entries: ``rows`` and ``gal`` are each entry's particle row in ``X`` and its
+    galaxy, ``post`` is aligned with the sorted ids ``galaxies``. Returns ``g``, the alpha-free part of
+    log rho (so that D_G = g_k - g_j), and the log responsibilities, normalised over each particle's own
+    entries, with ``log_alpha`` in them only ``with_alpha`` (chain B iterates without it).
+    ``grouping`` (``_group_by_galaxy``), ``row_grouping`` (``_row_grouping``) and ``Xr`` (``X`` at the
+    entries, in the order of ``grouping``) can be passed in when computed once for many calls, as
+    ``replay`` does.
     """
     D = X.shape[1]
     idx, o, bounds = grouping if grouping is not None else _group_by_galaxy(gal, galaxies)
     if Xr is None:
         Xr = X[rows[o]]
 
-    # Batched over every galaxy at once: numpy's batched linalg (one LAPACK call doing all K
-    # components) measured ~100x faster than looping K separate (D, D) calls, and
-    # scipy.linalg.solve_triangular carries a large fixed per-call overhead for a matrix this small.
+    # every galaxy at once: one batched call each for the factor, the log-determinant and the precision
     L = np.linalg.cholesky(post.Sigma)                                    # (n_gal, D, D)
     log_det = 2.0 * np.log(np.diagonal(L, axis1=1, axis2=2)).sum(axis=1)  # (n_gal,)
     precision = np.linalg.inv(post.Sigma)                                 # (n_gal, D, D)
@@ -258,7 +185,7 @@ def estep(X, rows, gal, galaxies, log_alpha, post, with_alpha=True, grouping=Non
         if s0 == s1:
             continue
         diff = Xr[s0:s1] - post.m[k]
-        quad = np.einsum("ni,ni->n", diff @ precision[k], diff)    # a 3-operand einsum measured ~6x slower
+        quad = np.einsum("ni,ni->n", diff @ precision[k], diff)
         log_gauss = -0.5 * (D * np.log(2.0 * np.pi) + log_det[k] + quad)
         g[o[s0:s1]] = log_gauss + extra[k]
     log_rho = g + log_alpha if with_alpha else g
@@ -267,15 +194,9 @@ def estep(X, rows, gal, galaxies, log_alpha, post, with_alpha=True, grouping=Non
 
 
 def _sufficient_stats(X, rows, gal, galaxies, centre, r, grouping=None, Xr=None):
-    """Responsibility-weighted ``(N, sum x, sum x x^T)`` per galaxy, raw moments centred on
-    ``centre[k]`` (the tree position) to avoid cancellation at ~1e4 kpc scale.
-
-    One ``xc.T @ (r xc)`` (BLAS ``gemm``) per galaxy, over its own slice of a single sort
-    (``_group_by_galaxy``, or the ``grouping`` passed in), rather than a Python loop of ``bincount``
-    calls per dimension (``D(D+1)/2 + D + 1`` of them), a sparse matrix rebuilt from scratch, or a
-    dense (n, D, D) outer product reduced with ``np.add.reduceat`` (all three measured slower here):
-    with 1e5-1e6 entries and tens of galaxies this keeps an EM iteration (``replay`` calls this, via
-    ``mstep``, every iteration) at milliseconds rather than tenths of a second. ``Xr``: see ``estep``."""
+    """Responsibility-weighted ``(N, sum x, sum x x^T)`` per galaxy, with the moments centred on
+    ``centre[k]`` (the tree position) to avoid cancellation at ~1e4 kpc: one matrix product per galaxy,
+    over its slice of the entries sorted by galaxy (``grouping`` and ``Xr``: see ``estep``)."""
     n_gal, D = galaxies.size, X.shape[1]
     N, Sx, Sxx = np.zeros(n_gal), np.zeros((n_gal, D)), np.zeros((n_gal, D, D))
     if not rows.size:
@@ -298,32 +219,11 @@ def _sufficient_stats(X, rows, gal, galaxies, centre, r, grouping=None, Xr=None)
 
 
 def mstep(X, rows, gal, galaxies, r, prior, reg_covar=1e-6, fixed=None, grouping=None, Xr=None):
-    """M-step: new posterior from responsibilities ``r`` over the given entries.
-
-    Efficiency: particles with a single candidate always have r = 1 and never change across EM
-    iterations, so their sufficient statistics can be computed once and passed as ``fixed`` -- only
-    the contested entries (``rows``, ``gal``, ``r`` here) need redoing every iteration (see ``replay``).
-
-    Parameters
-    ----------
-    X : ndarray of shape (n_particles, D)
-    rows, gal : ndarray of int64, shape (n_entries,)
-    galaxies : ndarray of int64, sorted, unique
-    r : ndarray of shape (n_entries,)
-        Responsibilities (already exponentiated) of these entries.
-    prior : Prior
-        Aligned with ``galaxies``; ``prior.m0`` is also used as the centring constant (see
-        ``_sufficient_stats``).
-    reg_covar : float, default 1e-6
-        See the module docstring's note on natural units.
-    fixed : (N0, Sx0, Sxx0) or None
-        Precomputed sufficient statistics (same centring) of entries not given here, added in.
-    grouping, Xr : see ``estep``.
-
-    Returns
-    -------
-    post : Posterior
-        Aligned with ``galaxies``.
+    """M-step: the posterior from the responsibilities ``r`` (not logs) of the given entries, with
+    ``prior`` aligned with ``galaxies`` (its m0 is also the centring constant). ``fixed`` adds the
+    sufficient statistics of entries not given, computed once: a particle with a single candidate always
+    has r = 1, so ``replay`` passes those that way and iterates over the contested entries only.
+    ``reg_covar``: see the module docstring; ``grouping`` and ``Xr``: see ``estep``.
     """
     D = X.shape[1]
     N, Sx, Sxx = _sufficient_stats(X, rows, gal, galaxies, prior.m0, r, grouping=grouping, Xr=Xr)
@@ -349,47 +249,19 @@ def mstep(X, rows, gal, galaxies, r, prior, reg_covar=1e-6, fixed=None, grouping
     return Posterior(m=m, Sigma=Sigma, N=nk, a=a, beta=beta, nu=nu)
 
 
-# --- the two-chain replay and the written-fit check --------------------------------------------------
+# --- the two-chain replay and the written-fit check -----------------------------------------------
 
 def replay(X, rows, gal, galaxies, log_alpha, prior, theta_A, with_alpha=True,
            reg_covar=1e-6, tol=1e-5, max_iter=100):
-    """Replay the BGMM EM from theta_A, on the group's own stored pairs, in one chain.
+    """One chain of EM from the written fit ``theta_A`` on a component's stored pairs, until no contested
+    log r moves by ``tol`` between consecutive E-steps, or for ``max_iter`` steps. ``with_alpha``: chain
+    A, alpha in every E-step; False: chain B, log alpha = 0 while iterating (every entry is in alpha's
+    support). Particles with one candidate are folded into fixed sufficient statistics; only the
+    contested entries are iterated.
 
-    Particles with a single candidate (r = 1 always) are folded into a fixed sufficient-statistics
-    term computed once; only particles with >= 2 candidates ("contested") are iterated.
-
-    Parameters
-    ----------
-    X : ndarray of shape (n_particles, D)
-    rows, gal, log_alpha : ndarray, shape (n_entries,)
-        Every stored pair of the group at this snapshot (contested and not).
-    galaxies : ndarray of int64, sorted, unique
-    prior : Prior
-    theta_A : Posterior
-        The written fit read as a posterior (``state``'s second return).
-    with_alpha : bool, default True
-        True: chain A, alpha in every E-step (the run as written). False: chain B, alpha's support
-        only during the iteration (every given entry already is in the support, so this is simply
-        ``log_alpha := 0``); one more E-step WITH alpha is then taken at the end, on the converged fit,
-        to score the final responsibilities.
-    reg_covar, tol, max_iter : see ``mstep``; convergence is ``max |Delta log r| < tol`` over the
-        contested entries between consecutive E-steps.
-
-    Returns
-    -------
-    post : Posterior
-        The final (converged, or ``max_iter``-truncated) fit.
-    first_post : Posterior
-        The posterior after one E+M step from theta_A (the linear response).
-    iterations : int
-        Number of E+M steps taken.
-    converged : bool
-        Whether the loop met ``tol`` (False: stopped by ``max_iter``).
-    rows_c, gal_c : ndarray of int64
-        The contested entries' row and galaxy (what ``log_r`` and ``g`` below are indexed by).
-    log_r, g : ndarray of shape (rows_c.size,)
-        The final, WITH-alpha responsibilities and the alpha-free Gaussian log term (``D_G = g_k - g_j``
-        per pair), from the one extra E-step taken after the loop.
+    Returns the final posterior, the posterior after one step (the linear response), the steps taken,
+    whether it converged, the contested entries' rows and galaxies, and, from one more E-step with alpha
+    at the final fit, their log responsibilities and alpha-free Gaussian terms ``g``.
     """
     counts = np.bincount(rows, minlength=(rows.max() + 1 if rows.size else 0))
     contested = counts[rows] >= 2 if rows.size else np.zeros(0, dtype=bool)
@@ -397,10 +269,7 @@ def replay(X, rows, gal, galaxies, log_alpha, prior, theta_A, with_alpha=True,
     c_rows, c_gal, c_log_alpha = rows[contested], gal[contested], log_alpha[contested]
 
     fixed = _sufficient_stats(X, f_rows, f_gal, galaxies, prior.m0, np.ones(f_rows.size))
-    # (rows, gal) of the contested entries do not change across iterations: sort once, not every
-    # E-step and M-step call (the EM loop below is the hot path this module exists to keep cheap), and
-    # gather X at those entries (in that same sorted order) once rather than every call too -- fancy
-    # indexing X by rows is itself the dominant cost otherwise (measured tens of ms at 1e5+ entries).
+    # the contested entries never change: sort them, and gather their coordinates, once
     grouping = _group_by_galaxy(c_gal, galaxies)
     row_grouping = _row_grouping(c_rows)
     Xr = X[c_rows[grouping[1]]]
@@ -428,24 +297,9 @@ def replay(X, rows, gal, galaxies, log_alpha, prior, theta_A, with_alpha=True,
 
 
 def reproduce(X, rows, gal, galaxies, log_alpha, theta_A, written_log_r):
-    """One E-step WITH alpha at theta_A, checked against the run's own written log r.
-
-    Parameters
-    ----------
-    X, rows, gal, galaxies, log_alpha : as in ``estep``.
-    theta_A : Posterior
-        ``state``'s starting state.
-    written_log_r : ndarray of shape (n_entries,)
-        The run's stored ``log_resp`` for these entries (``-inf`` where it underflowed).
-
-    Returns
-    -------
-    delta, delta_r : ndarray of shape (n_entries,)
-        ``|replayed log r - written log r|`` and ``|replayed r - written r|``, NaN where
-        ``written_log_r`` is not finite (the caller aggregates over the finite entries, per component).
-        Log differences between underflowed responsibilities (r ~ 1e-12) are large and meaningless, so
-        a tail is read in r.
-    """
+    """One E-step with alpha at ``theta_A``, against the run's written log r of the same entries:
+    ``|delta log r|`` and ``|delta r|`` per entry, NaN where the written value is not finite. A log
+    difference between underflowed responsibilities (r ~ 1e-12) means nothing, so a tail is read in r."""
     _, log_r = estep(X, rows, gal, galaxies, log_alpha, theta_A, with_alpha=True)
     delta, delta_r = np.full(written_log_r.shape, np.nan), np.full(written_log_r.shape, np.nan)
     finite = np.isfinite(written_log_r)

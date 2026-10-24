@@ -56,8 +56,8 @@ import numpy as np
 import pandas as pd
 
 from evaluate import cli, plots
-from evaluate.load import (ABSENT, Run, UNASSIGNED, aligned, common_snaps, label_mass, log_ratio, on,
-                           open_catalogue, pool, wmedian)
+from evaluate.load import (ABSENT, UNASSIGNED, Run, aligned, common_snaps, label_mass, log_ratio, on,
+                           open_catalogue, pool, wmedian, wmedian_in_time)
 from evaluate.report import Report
 
 MIN_BORN = 1e6                    # 5.1: minimum born mass in either catalogue to enter the birth-galaxy table
@@ -70,7 +70,7 @@ J_LOW = 0.9                       # 5.1: J below this counts as "disagreeing"
 DISRUPT_FRAC = 0.01               # 5.3: disruption is a drop below this share of the peak mass
 
 
-# --- pure measurements (tested directly) -----------------------------------------------------------
+# --- pure measurements (tested directly) ----------------------------------------------------------
 
 def exsitu_overlap(memA, memB, bidA, bidB, m, h):
     """5.2: one galaxy ``h``'s ex-situ overlap between two catalogues (``mem.`` hard labels == h,
@@ -131,7 +131,7 @@ def birth_overlap(bidA, bidB, m):
     return pd.DataFrame(rows).set_index("galaxy")
 
 
-# --- 5.1: report ------------------------------------------------------------------------------------
+# --- 5.1: report ----------------------------------------------------------------------------------
 
 def report_births(ref, c, bidA, bidB, m, rep):
     """5.1 overall mass shares between ``ref`` and ``c`` on the particles both hold."""
@@ -163,12 +163,13 @@ def report_birth_table(ref, c, BT, rep):
               .to_string(float_format=lambda v: f"{v:.3e}"))
 
 
-# --- 5.2: the workers --------------------------------------------------------------------------------
+# --- 5.2: the workers -----------------------------------------------------------------------------
 
 _W = {}                                 # a worker's catalogues and particle run
 
 
 def _init(paths, path, source):
+    """Open the catalogues once per worker process."""
     _W.update(cats=[open_catalogue(p) for p in paths], particles=Run(path, particles=source))
 
 
@@ -231,7 +232,7 @@ def _snapshot(s):
     return host_rows, prog_rows, mass, counts, share
 
 
-# --- 5.2: report ------------------------------------------------------------------------------------
+# --- 5.2: report ----------------------------------------------------------------------------------
 
 def report_exsitu(ref, others, H, Pg, last, rep):
     """5.2 SCOREs and tables at the last snapshot."""
@@ -251,12 +252,15 @@ def report_exsitu(ref, others, H, Pg, last, rep):
         big = Hl[(Hl["catalogue"] == c.name) & ((Hl["MA"] >= MIN_SCORE_MASS) | (Hl["MB"] >= MIN_SCORE_MASS))]
         if not big.empty:
             w = (big["MA"] + big["MB"]).to_numpy()
-            rep.score(f"{c.name}: 5.2 mass-weighted median J, galaxies >= 1e7", wmedian(big["J"].to_numpy(), w))
+            rep.score(f"{c.name}: 5.2 mass-weighted median J, galaxies >= 1e7",
+                      wmedian(big["J"].to_numpy(), w))
             big = big[big["mUnion"] > 0]                    # no ex-situ mass in either: nothing to split
             u = big["mUnion"].to_numpy()
             for kind in ("membership", "birth"):
-                rep.score(f"{c.name}: 5.2 {kind}-disagreement share of the ex-situ union mass, galaxies >= 1e7",
-                          float((big[f"{kind}_share"].to_numpy() * u).sum() / u.sum()) if u.sum() > 0 else np.nan)
+                shares = big[f"{kind}_share"].to_numpy()
+                share = float((shares * u).sum() / u.sum()) if u.sum() > 0 else np.nan
+                rep.score(f"{c.name}: 5.2 {kind}-disagreement share of the ex-situ union mass, "
+                          "galaxies >= 1e7", share)
             tab = big.sort_values("MA", ascending=False).set_index("host")[
                 ["MA", "MB", "exA", "exB", "unknownA", "unknownB", "J", "membership_share", "birth_share"]]
             rep.table(f"5.2 {c.name} vs {ref.name}: galaxies >= 1e7 at the last snapshot",
@@ -267,10 +271,11 @@ def report_exsitu(ref, others, H, Pg, last, rep):
             tab = (prog.sort_values("mA", ascending=False).set_index("progenitor")
                    [["mA", "mB", "recall", "purity", "J"]])
             rep.table(f"5.2 {c.name} vs {ref.name}: the host's progenitors "
-                      "(union, >= 1% of either's ex-situ mass)", tab.to_string(float_format=lambda v: f"{v:.3e}"))
+                      "(union, >= 1% of either's ex-situ mass)",
+                      tab.to_string(float_format=lambda v: f"{v:.3e}"))
 
 
-# --- 5.3 --------------------------------------------------------------------------------------------
+# --- 5.3 ------------------------------------------------------------------------------------------
 
 def progenitor_histories(cats, Pg, ref, last, todo, mass_by_snap):
     """5.3: the union of the host's N_TOP_PROG largest contributors (either catalogue) at the last
@@ -313,7 +318,8 @@ def report_histories(cats, ref, hist, rep):
         h = hist[hist["catalogue"] == c.name].set_index("progenitor")
         common = ref_h.index.intersection(h.index)
         r = log_ratio(h.loc[common, "peak_mass"].to_numpy(), ref_h.loc[common, "peak_mass"].to_numpy())
-        rep.score(f"{c.name}: 5.3 median |log10 ratio| of peak masses (B / A)", float(np.nanmedian(np.abs(r))))
+        rep.score(f"{c.name}: 5.3 median |log10 ratio| of peak masses (B / A)",
+                  float(np.nanmedian(np.abs(r))))
         for col, name in (("infall_t", "infall"), ("disrupt_t", "disruption")):
             dt = (h.loc[common, col] - ref_h.loc[common, col]).abs()
             rep.score(f"{c.name}: 5.3 median |delta t| of {name} [Gyr]", float(dt.median()))
@@ -323,7 +329,7 @@ def report_histories(cats, ref, hist, rep):
               tab.to_string(float_format=lambda v: f"{v:.3e}"))
 
 
-# --- plots ------------------------------------------------------------------------------------------
+# --- plots ----------------------------------------------------------------------------------------
 
 def plot_births(ref, others, BT, pdf):
     """5.1: recall against purity per birth galaxy (marker size by log birth mass), J against birth
@@ -334,7 +340,8 @@ def plot_births(ref, others, BT, pdf):
         if t.empty:
             continue
         mass = np.maximum(t["mA"] + t["mB"], 1.0)
-        a1.scatter(t["recall"], t["purity"], s=4.0 + 3.0 * np.log10(mass), color=f"C{i}", alpha=0.6, label=c.name)
+        a1.scatter(t["recall"], t["purity"], s=4.0 + 3.0 * np.log10(mass), color=f"C{i}", alpha=0.6,
+                   label=c.name)
         a2.loglog(mass, t["J"], "o", ms=4, color=f"C{i}", alpha=0.6, label=c.name)
     a1.plot([0, 1], [0, 1], ":", color="0.5")
     a1.set_xlabel("5.1 recall")
@@ -360,8 +367,7 @@ def plot_exsitu(ref, others, H, pdf):
         ax[2].plot(d["t"], d["birth_share"], "--", color=f"C{i}", label=f"{c.name}: birth")
         big = H[(H["catalogue"] == c.name) & ((H["MA"] >= MIN_SCORE_MASS) | (H["MB"] >= MIN_SCORE_MASS))]
         if not big.empty:
-            med = big.groupby("t").apply(lambda d: wmedian(d["J"].to_numpy(), (d["MA"] + d["MB"]).to_numpy()),
-                                         include_groups=False)
+            med = wmedian_in_time(big.assign(w=big["MA"] + big["MB"]), "J", "w")
             ax[3].plot(med.index, med, "o-", ms=3, color=f"C{i}", label=c.name)
     ax[0].set_ylabel("5.2 host ex-situ share")
     ax[0].legend(fontsize=6, ncol=2)
@@ -418,7 +424,8 @@ def _draw_galaxy(item):
             continue
         ax[0].semilogy(d["t"], np.maximum(d["MA"] * d["exA"], 1.0), "-", color=f"C{i}",
                        label=f"{name}: {ref_name}")
-        ax[0].semilogy(d["t"], np.maximum(d["MB"] * d["exB"], 1.0), "--", color=f"C{i}", label=f"{name}: {name}")
+        ax[0].semilogy(d["t"], np.maximum(d["MB"] * d["exB"], 1.0), "--", color=f"C{i}",
+                       label=f"{name}: {name}")
         ax[1].plot(d["t"], d["J"], "o-", ms=3, color=f"C{i}", label=name)
         ax[2].plot(d["t"], d["membership_share"], "-", color=f"C{i}", label=f"{name}: membership")
         ax[2].plot(d["t"], d["birth_share"], "--", color=f"C{i}", label=f"{name}: birth")
@@ -445,9 +452,11 @@ def _draw_galaxy(item):
     plots.save(fig, path)
 
 
-# --- the point ----------------------------------------------------------------------------------------
+# --- the point ------------------------------------------------------------------------------------
 
 def evaluate(cats, particles, out, every=3, workers=1):
+    """Goal 5 on the catalogues ``cats`` (the first the reference; see the module docstring), read on the
+    particles of the roadrunner run ``particles``, written to ``out``."""
     ref, others = cats[0], cats[1:]
     rep = Report("Goal 5, births and ex-situ particles", " / ".join(c.name for c in cats), verdict=False)
     snaps = common_snaps(cats, particles)

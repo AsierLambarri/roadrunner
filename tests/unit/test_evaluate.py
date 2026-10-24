@@ -70,7 +70,7 @@ def test_relation_classes():
 
 def test_log_gauss_matches_scipy():
     from scipy.stats import multivariate_normal
-    from evaluate.model import log_gauss
+    from evaluate.pairs import log_gauss
     rng = np.random.default_rng(1)
     A = rng.normal(size=(6, 6))
     cov, mean, x = A @ A.T + 6 * np.eye(6), rng.normal(size=6), rng.normal(size=(50, 6))
@@ -87,7 +87,8 @@ def test_weighted_spearman_with_equal_weights_is_spearman():
 
 def test_contested_pairs_recover_alpha_up_to_a_constant_per_pair():
     """D_alpha = Delta log alpha + (C_k - C_j): correlation with the stored Delta log alpha is 1."""
-    from evaluate.model import contested_pairs, pair_table
+    from evaluate.model import pair_table
+    from evaluate.pairs import contested_pairs
     rng = np.random.default_rng(3)
     n = 60
     logN = rng.normal(size=(n, 2))
@@ -110,7 +111,7 @@ def test_contested_pairs_recover_alpha_up_to_a_constant_per_pair():
 
 
 def test_best_is_the_renormalised_argmax():
-    from evaluate.model import best
+    from evaluate.pairs import best
     rows = np.array([1, 0, 1, 0, 1])
     g = np.array([7, 7, 8, 8, 9])
     x = np.log(np.array([0.2, 0.9, 0.5, 0.1, 0.3]))
@@ -287,7 +288,7 @@ def test_ages_from_presence():
 
 
 def test_resolved_groups_need_ten_particles_per_galaxy():
-    from evaluate.model import components
+    from evaluate.pairs import components
     rows = np.r_[np.arange(5), np.arange(5), [10, 11, 12]]           # 1, 2 share 5 particles; 3 alone
     gal = np.r_[np.full(5, 1), np.full(5, 2), np.full(3, 3)]
     comp, resolved = components({"row": rows, "galaxy": gal})
@@ -326,7 +327,7 @@ def test_autocorrelation_ignores_per_snapshot_constants_and_recovers_rho():
 
 
 def test_cross_fit_r2_separates_a_real_signal_from_noise():
-    from evaluate.model import cross_fit_r2
+    from evaluate.model_alpha import cross_fit_r2
     rng = np.random.default_rng(7)
     n = 20_000                                            # large enough that noise's out-of-sample R^2
     F = rng.normal(size=(n, 2))                           # settles near 0 rather than overfitting negative
@@ -339,7 +340,7 @@ def test_cross_fit_r2_separates_a_real_signal_from_noise():
 
 
 def test_dependence_table_recovers_one_pair_at_full_size():
-    from evaluate.model import MIN_DEP, dependence_table
+    from evaluate.model_alpha import MIN_DEP, dependence_table
     rng = np.random.default_rng(8)
     n = 5 * MIN_DEP
     k, j = np.zeros(n), np.ones(n)
@@ -354,7 +355,7 @@ def test_dependence_table_recovers_one_pair_at_full_size():
 
 
 def test_corrected_r2_removes_the_small_sample_bias():
-    from evaluate.model import corrected_r2, cross_fit_r2
+    from evaluate.model_alpha import corrected_r2, cross_fit_r2
     rng = np.random.default_rng(9)
     n = 800
     F = np.abs(rng.normal(size=(n, 2))) * [3.0, 2.0]
@@ -368,7 +369,8 @@ def test_corrected_r2_removes_the_small_sample_bias():
 def test_gamma_table_recovers_the_feedback_slope():
     """gamma = Cov(L, Delta log alpha) / Var(Delta log alpha), recovered from synthetic leaks
     L = gamma * Delta log alpha + noise, when Var(Delta log alpha) is not tiny next to Var(D_A)."""
-    from evaluate.model import MIN_PAIR, gamma_table
+    from evaluate.model_alpha import gamma_table
+    from evaluate.pairs import MIN_PAIR
     rng = np.random.default_rng(11)
     n = 2000
     k, j = np.zeros(n), np.ones(n)
@@ -388,7 +390,7 @@ def test_gamma_table_recovers_the_feedback_slope():
 
 
 def test_gamma_is_nan_when_delta_log_alpha_has_tiny_variance():
-    from evaluate.model import GAMMA_MIN_VAR, gamma_table
+    from evaluate.model_alpha import GAMMA_MIN_VAR, gamma_table
     rng = np.random.default_rng(12)
     n = 2000
     k, j = np.zeros(n), np.ones(n)

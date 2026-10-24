@@ -48,6 +48,7 @@ def catalogues(path):
 
 
 def evaluate(runs, csv, reports=()):
+    """The rows of ``runs`` (see the module docstring), written into ``csv``; returns the whole table."""
     shared = {f"{r.parent.name}/{r.stem}": (catalogues(r), read_scores(r)) for r in map(Path, reports)}
     rows = []
     for path in (Path(p).resolve() for p in runs):

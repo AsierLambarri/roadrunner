@@ -63,8 +63,8 @@ import pandas as pd
 from matplotlib.lines import Line2D
 
 from evaluate import cli, plots
-from evaluate.load import (OLD_GYR, Run, UNASSIGNED, aligned, common_snaps, label_mass, log_ratio, newborn,
-                           open_catalogue, pool, seen_before, wmedian)
+from evaluate.load import (OLD_GYR, POS, UNASSIGNED, VEL, Run, aligned, common_snaps, label_mass, log_ratio,
+                           newborn, open_catalogue, pool, seen_before, wmedian)
 from evaluate.report import Report
 from evaluate.stability import relation
 
@@ -72,7 +72,6 @@ MIN_PARTICLES, MIN_MASS, YOUNG_GYR, MIN_YOUNG = 1e5, 1e6, 0.5, 100
 MIN_SNAPS = 3                            # 6.4: a galaxy needs this many matched snapshots for its summary
 J_MASS, J_LOW = 1e7, 0.9                 # 6.1 per galaxy: the SCOREs' galaxies, and a low J
 GRID_MIN_PEAK, EARLY_GYR, GRID_SIZE = 5e6, 3.0, 16   # 6.4's grid selection
-POS, VEL = ["position_x", "position_y", "position_z"], ["velocity_x", "velocity_y", "velocity_z"]
 R_BINS = np.array([0.0, 1.0, 2.0, 5.0, 10.0, 30.0, np.inf])
 D_BINS = np.array([0.0, 0.25, 0.5, 1.0, 2.0, np.inf])
 M_BINS = np.array([0.0, 1e6, 1e7, 1e8, 1e9, np.inf])
@@ -85,10 +84,12 @@ BREAKDOWNS = {
     "age": ["newborn", "between", "old"],
 }
 SUBSETS = ("all", "old", "newborn", "contested")
-SHORT = {"peak Mtot ref": "peak Mtot", "Mtot median |log ratio|": "Mtot med", "Mtot max |log ratio|": "Mtot max",
-         "rh median |log ratio|": "rh med", "sigma median |log ratio|": "sigma med",
-         "position offset median": "dx med", "velocity offset median": "dv med",
-         "t of largest Mtot |log ratio|": "t Mtot max"}       # 6.4's table headers
+SHORT = {                                                # 6.4's table headers
+    "peak Mtot ref": "peak Mtot", "Mtot median |log ratio|": "Mtot med", "Mtot max |log ratio|": "Mtot max",
+    "rh median |log ratio|": "rh med", "sigma median |log ratio|": "sigma med",
+    "position offset median": "dx med", "velocity offset median": "dv med",
+    "t of largest Mtot |log ratio|": "t Mtot max",
+}
 
 
 def disc_tag(X, m, is_host, young, centre, velocity, rh):
@@ -121,8 +122,9 @@ def bins(cat, s, X, m, lab, young, nb, old, tree):
     host = cat.host
     has_host = host in gal.index and np.isfinite(gal.loc[host, POS + VEL + ["rh"]].to_numpy(np.float64)).all()
     if has_host:
-        centre, velocity, rh = (gal.loc[host, POS].to_numpy(np.float64), gal.loc[host, VEL].to_numpy(np.float64),
-                                float(gal.at[host, "rh"]))
+        centre = gal.loc[host, POS].to_numpy(np.float64)
+        velocity = gal.loc[host, VEL].to_numpy(np.float64)
+        rh = float(gal.at[host, "rh"])
         r = np.linalg.norm(X[:, :3] - centre, axis=1) / rh
         out["r / rh_host"] = np.digitize(r, R_BINS) - 1
         out["host disc"] = np.where(disc_tag(X, m, lab == host, young, centre, velocity, rh), 0, 1)
@@ -131,7 +133,8 @@ def bins(cat, s, X, m, lab, young, nb, old, tree):
         out["host disc"] = np.ones(lab.size, int)
     sats = np.array(list(cat.hosts(s)), np.int64)
     sat = np.isin(lab, sats)
-    out["r / own r_t or R_vir"] = np.digitize(own_distance(X, lab, tree, sats), D_BINS) - 1  # NaN: the last bin
+    own = own_distance(X, lab, tree, sats)
+    out["r / own r_t or R_vir"] = np.digitize(own, D_BINS) - 1           # NaN falls in the last bin
     out["reference label"] = np.select([lab == host, sat, lab == UNASSIGNED], [0, 1, 3], 2)
     M = label_mass(lab, m)
     out["reference galaxy mass"] = np.where(lab == UNASSIGNED, 5,
@@ -172,10 +175,12 @@ def membership(a, b, m):
     Jaccard J = m(both) / m(either)."""
     same = a == b
     M = pd.DataFrame({"m ref": label_mass(a, m), "m other": label_mass(b, m),
-                      "m both": label_mass(a[same], m[same])}).fillna(0.0).drop(index=UNASSIGNED, errors="ignore")
+                      "m both": label_mass(a[same], m[same])})
+    M = M.fillna(0.0).drop(index=UNASSIGNED, errors="ignore")
     M = M[M[["m ref", "m other"]].max(axis=1) >= MIN_MASS]
-    return M.assign(recall=M["m both"] / M["m ref"], purity=M["m both"] / M["m other"],
-                    J=M["m both"] / (M["m ref"] + M["m other"] - M["m both"])).rename_axis("galaxy").reset_index()
+    M = M.assign(recall=M["m both"] / M["m ref"], purity=M["m both"] / M["m other"],
+                 J=M["m both"] / (M["m ref"] + M["m other"] - M["m both"]))
+    return M.rename_axis("galaxy").reset_index()
 
 
 def mass_movers(rows, Mref, n):
@@ -195,8 +200,8 @@ def select_grid(ref_peak, early, last2, seen, galaxies, n=GRID_SIZE):
     """6.4's grid selection: present in every catalogue, at the reference's last two common snapshots and
     before EARLY_GYR, with peak Mtot above GRID_MIN_PEAK; largest peak first, ``galaxies`` forced in first."""
     present_all = set.intersection(*seen.values()) if seen else set()
-    candidates = sorted((early & last2 & present_all) & {g for g, pk in ref_peak.items() if pk > GRID_MIN_PEAK},
-                        key=lambda g: -ref_peak[g])
+    big = {g for g, pk in ref_peak.items() if pk > GRID_MIN_PEAK}
+    candidates = sorted(early & last2 & present_all & big, key=lambda g: -ref_peak[g])
     return list(dict.fromkeys([int(g) for g in galaxies] + [int(g) for g in candidates]))[:n]
 
 
@@ -210,6 +215,7 @@ _W = {}                                 # a worker's catalogues and particle run
 
 
 def _init(paths, path, source):
+    """Open the catalogues once per worker process."""
     _W.update(cats=[open_catalogue(p) for p in paths], particles=Run(path, particles=source))
 
 
@@ -291,10 +297,10 @@ def properties(cats, particles, snaps_all):
             both = Gref.index[Gref["Mtot"] >= MIN_MASS].intersection(Gc.index[Gc["Mtot"] >= MIN_MASS])
             if not len(both):
                 continue
-            dx = normalized_offset(Gc.loc[both, POS].to_numpy(np.float64), Gref.loc[both, POS].to_numpy(np.float64),
-                                   Gref.loc[both, "rh"].to_numpy(np.float64))
-            dv = normalized_offset(Gc.loc[both, VEL].to_numpy(np.float64), Gref.loc[both, VEL].to_numpy(np.float64),
-                                   Gref.loc[both, "sigma"].to_numpy(np.float64))
+            pos_c, pos_ref = Gc.loc[both, POS].to_numpy(np.float64), Gref.loc[both, POS].to_numpy(np.float64)
+            vel_c, vel_ref = Gc.loc[both, VEL].to_numpy(np.float64), Gref.loc[both, VEL].to_numpy(np.float64)
+            dx = normalized_offset(pos_c, pos_ref, Gref.loc[both, "rh"].to_numpy(np.float64))
+            dv = normalized_offset(vel_c, vel_ref, Gref.loc[both, "sigma"].to_numpy(np.float64))
             props[c.name].append(pd.DataFrame({
                 "snap": s, "t": t, "galaxy": both.to_numpy(np.int64),
                 "Mtot": log_ratio(Gc.loc[both, "Mtot"].to_numpy(), Gref.loc[both, "Mtot"].to_numpy()),
@@ -302,11 +308,15 @@ def properties(cats, particles, snaps_all):
                 "sigma": log_ratio(Gc.loc[both, "sigma"].to_numpy(), Gref.loc[both, "sigma"].to_numpy()),
                 "pos_offset": dx, "vel_offset": dv, "Mtot ref": Gref.loc[both, "Mtot"].to_numpy(np.float64),
             }))
-    props = {name: pd.concat(rows, ignore_index=True) if rows else pd.DataFrame() for name, rows in props.items()}
+    props = {name: pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+             for name, rows in props.items()}
     return props, hist, seen, ref_peak, early, last2
 
 
 def evaluate(cats, particles, out, every=10, workers=1, galaxies=()):
+    """Goal 6 on the catalogues ``cats`` (the first the reference; see the module docstring), read on the
+    particles of the roadrunner run ``particles``, written to ``out``; ``galaxies`` are forced into 6.4's
+    grid."""
     ref, others = cats[0], cats[1:]
     rep = Report("Goal 6, catalogue comparison", " / ".join(c.name for c in cats), verdict=False)
     snaps_all = common_snaps(cats, particles)
@@ -317,8 +327,9 @@ def evaluate(cats, particles, out, every=10, workers=1, galaxies=()):
     where = {c.name: {k: np.zeros((2, len(v))) for k, v in BREAKDOWNS.items()} for c in others}
     label_rows = {c.name: [] for c in others}
     peak, measured, Mref = {}, [], pd.Series(dtype=np.float64)
-    for s, part in zip(snaps, pool(_snapshot, snaps, workers, _init,
-                                   ([c.path for c in cats], particles.path, particles.source), desc="6 snapshots")):
+    parts = pool(_snapshot, snaps, workers, _init, ([c.path for c in cats], particles.path, particles.source),
+                 desc="6 snapshots")
+    for s, part in zip(snaps, parts):
         if part is None:
             continue
         share, found, counts, M = part
@@ -349,8 +360,8 @@ def evaluate(cats, particles, out, every=10, workers=1, galaxies=()):
     chosen = select_grid(ref_peak, early, last2, seen, galaxies)
     plot_properties(cats, particles, chosen, hist, plots.run_plot(out, "compare_properties"))
     own = sorted(set(plots.chosen(ref.host, peak, set())) | set(chosen))
-    items = [(plots.galaxy_plot(out, g, "compare_properties"), g, [c.name for c in cats], rvir_series(particles, g),
-             {c.name: hist[c.name].get(g, []) for c in cats},
+    items = [(plots.galaxy_plot(out, g, "compare_properties"), g, [c.name for c in cats],
+              rvir_series(particles, g), {c.name: hist[c.name].get(g, []) for c in cats},
              {name: B.loc[B["galaxy"] == g, ["t", "recall", "purity", "J"]] for name, B in members.items()})
              for g in own]
     plots.per_galaxy(_draw_properties, items, workers, desc="6 galaxy plots")
@@ -360,6 +371,7 @@ def evaluate(cats, particles, out, every=10, workers=1, galaxies=()):
 
 
 def report(rep, ref, others, agree, members, movers, where, label_rows, props):
+    """6.1-6.4 SCOREs and tables, per other catalogue, from what ``evaluate`` gathered."""
     for c in others:
         A = pd.DataFrame(agree[c.name])
         for k in [x for x in SUBSETS if x in A]:
@@ -374,7 +386,8 @@ def report(rep, ref, others, agree, members, movers, where, label_rows, props):
             rep.score(f"{c.name}: 6.1 galaxies >= {J_MASS:.0e} with J < {J_LOW} at snapshot {s_last}",
                       int((last["J"] < J_LOW).sum()))
             low = last.nsmallest(10, "J")[["galaxy", "m ref", "m other", "recall", "purity", "J"]]
-            rep.table(f"6.1 {c.name} vs {ref.name}: galaxies >= {J_MASS:.0e}, the lowest J at snapshot {s_last}",
+            rep.table(f"6.1 {c.name} vs {ref.name}: galaxies >= {J_MASS:.0e}, "
+                      f"the lowest J at snapshot {s_last}",
                       low.to_string(index=False, float_format=lambda v: f"{v:.3g}"))
         if c.name in movers:
             T, overall = movers[c.name]
@@ -413,8 +426,8 @@ def report(rep, ref, others, agree, members, movers, where, label_rows, props):
                 rep.score(f"{c.name}: 6.4 median of per-galaxy median {kind} offset",
                           float(S[f"{kind} offset median"].median()))
             top20 = S.sort_values("peak Mtot ref", ascending=False).head(20)
-            rep.table(f"6.4 {c.name} vs {ref.name}: 20 most massive matched galaxies (|log10 ratio| median / max; "
-                      "offsets in rh / sigma; t [Gyr])",
+            rep.table(f"6.4 {c.name} vs {ref.name}: 20 most massive matched galaxies "
+                      "(|log10 ratio| median / max; offsets in rh / sigma; t [Gyr])",
                       top20.rename(columns=SHORT).to_string(index=False, float_format=lambda v: f"{v:.3g}"))
 
 
@@ -481,7 +494,8 @@ def plot_properties(cats, particles, chosen, hist, path):
     """6.4's grid: up to GRID_SIZE galaxies, 4 columns of 3 stacked rows (R/Rvir, Mtot, rh + twin sigma)
     on a shared 0-14 Gyr time axis."""
     names = [c.name for c in cats]
-    fig, axes = plt.subplots(3 * ((GRID_SIZE + 3) // 4), 4, figsize=(16, 4.5 * ((GRID_SIZE + 3) // 4)), sharex=True)
+    rows = (GRID_SIZE + 3) // 4
+    fig, axes = plt.subplots(3 * rows, 4, figsize=(16, 4.5 * rows), sharex=True)
     for p, g in enumerate(chosen):
         row0, col = 3 * (p // 4), p % 4
         a0, a1, a2 = axes[row0, col], axes[row0 + 1, col], axes[row0 + 2, col]

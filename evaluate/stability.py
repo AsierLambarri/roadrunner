@@ -92,8 +92,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from evaluate import cli, plots
-from evaluate.load import (ABSENT, MAJOR, OLD_GYR, RESOLVED, UNASSIGNED, Run, member, mergers, newborn,
-                           on, pool, seen_before)
+from evaluate.load import (ABSENT, MAJOR, OLD_GYR, POS, RESOLVED, UNASSIGNED, Run, member, mergers,
+                           newborn, on, pool, seen_before)
 from evaluate.report import Report
 
 RETURN_GYR, STAY_GYR, KEEP_GYR = 0.3, 0.3, 0.15   # 2.2 spikes and 2.3 flicker, 2.4 transfers, 2.5 newborns
@@ -107,7 +107,6 @@ MIN_NOISE_PAIRS, MERGER_SHARE = 10, 0.01            # 2.6: adjacent kept triples
 MASS_BINS = [0.0, 1e7, 1e8, 1e9, np.inf]
 MASS_LABELS = ["<1e7", "1e7-1e8", "1e8-1e9", ">1e9"]
 SPIKE_FACTOR, SHARE_FLOOR = 5.0, 1e-4
-POS = ["position_x", "position_y", "position_z"]
 TRANSFERS = ["merger", "unbound", "rebound", "stripping", "capture", "swap"]
 CELLS = ["contested related", "forced related", "contested unrelated", "forced unrelated"]
 NEWBORN = ["all", "main host", "satellites", "other centrals"]
@@ -125,7 +124,7 @@ CAUSES = [
 COLOR = dict(zip(CAUSES, ["C0", "C1", "C2", "C4", "C5", "C6", "C8", "C7"]))   # no red: red is kept for FAIL
 
 
-# --- label changes ------------------------------------------------------------------------------
+# --- label changes --------------------------------------------------------------------------------
 
 def relation(a, b, hosts, ends):
     """Relation of a label change a -> b at a snapshot (see 2.4); ``hosts``: satellite -> its hosts."""
@@ -159,13 +158,13 @@ def cells(cls, contested):
 
 
 def ahead(t, k, T):
-    """Indices of the snapshots within ``T`` after the k-th (``t_k < t <= t_k + T``), at least the next one."""
+    """Indices of the snapshots within ``T`` after the k-th (``t_k < t <= t_k + T``), at least the next."""
     end = np.searchsorted(t, t[k] + T, side="right")
     return np.arange(k + 1, min(max(end, k + 2), t.size))
 
 
 def within(A, dt, T):
-    """The rows of ``A`` (window snapshots, times ``dt`` after s, ascending) within ``T``; at least the first."""
+    """The rows of ``A`` (window snapshots, ``dt`` after s, ascending) within ``T``; at least the first."""
     return A[:max(1, int((dt <= T).sum()))]
 
 
@@ -201,7 +200,7 @@ def partners(flow, G, change):
     return float(side["m"].sum()), big
 
 
-# --- verdicts -----------------------------------------------------------------------------------
+# --- verdicts -------------------------------------------------------------------------------------
 
 def steps(M, t):
     """Spikes and persistent steps of a (galaxy x snapshot) mass table, NaN where not resolved; ``t`` the
@@ -305,6 +304,7 @@ _W = {}                                 # a worker's run and what its tasks shar
 
 
 def _init(path, source, snaps, factor, tree_last):
+    """Open the run once per worker process, with what its snapshots share."""
     run = Run(path, particles=source)
     run.snaps = snaps
     _W.update(run=run, t=np.array([run.time[s] for s in snaps]), factor=factor, tree_last=tree_last)
@@ -353,6 +353,8 @@ def _windows(ks):
 # --- the point ------------------------------------------------------------------------------------
 
 def evaluate(run, out, workers=1):
+    """Point 2 on ``run`` (see the module docstring), written to ``out``: phase A reads every snapshot,
+    phase B the 2.3-2.5 windows, phase C gives the verdicts."""
     rep = Report("Point 2, stable in time", run.name, point="2", causes=CAUSES)
     sn = run.snaps
     t = np.array([run.time[s] for s in sn])
@@ -459,14 +461,14 @@ def gaps(run, t, N, tree, tree_has, bound, exch, rep):
                 took = took[took.index >= 0]
             else:
                 took = pd.Series(dtype=float)
-            partner, part = (int(took.idxmax()), float(took.max() / np.nansum(m0))) if took.size else (None, 0.0)
+            partner, part = None, 0.0
+            if took.size:
+                partner, part = int(took.idxmax()), float(took.max() / np.nansum(m0))
 
             unbound = [k for k in missing if G not in bound[sn[k]]]
-            d = np.array([
-                np.linalg.norm(centroid(run, sn[k], mine, m0) - tree.loc[(int(sn[k]), G)][POS].to_numpy(float))
-                / tree.loc[(int(sn[k]), G)]["virial_radius"]
-                for k in unbound
-            ])
+            halos = [tree.loc[(int(sn[k]), G)] for k in unbound]
+            d = np.array([np.linalg.norm(centroid(run, sn[k], mine, m0) - h[POS].to_numpy(float))
+                          / h["virial_radius"] for k, h in zip(unbound, halos)])
             place = None if not np.isfinite(d).all() else "in" if (d <= 1.0).all() else "out"
             severity, cause = gap_verdict(n0, len(unbound), place, part)
             text = (f"gap of {G} at {[int(sn[k]) for k in missing]} ({1e3 * (t[k1] - t[k0]):.0f} Myr "
@@ -613,8 +615,8 @@ def label_noise(Mres, M, t, merge):
         "median_mass": np.nanmedian(Mres.to_numpy(np.float64)[on], axis=1),
     }, index=pd.Index(G[on], name="galaxy"))
     gi, j = np.nonzero(kept & on[:, None])
-    terms = pd.DataFrame({"t": t[j + 1], "e2": e2[gi, j], "c2": cc[gi, j],
-                          "ee": np.pad(ee, ((0, 0), (0, 1)))[gi, j], "ab": np.pad(ab, ((0, 0), (0, 1)))[gi, j]})
+    ee, ab = np.pad(ee, ((0, 0), (0, 1))), np.pad(ab, ((0, 0), (0, 1)))   # pairs aligned with their triples
+    terms = pd.DataFrame({"t": t[j + 1], "e2": e2[gi, j], "c2": cc[gi, j], "ee": ee[gi, j], "ab": ab[gi, j]})
     return noise, terms
 
 
@@ -653,7 +655,8 @@ def plot_masses(run, Mres, Mcat, events, pdf):
             ax.semilogy(t, Mcat.loc[G], color=c, lw=0.6, ls="--")
         for G2, s, e in events:
             if G2 == G:
-                ax.plot(run.time[s], Mres.at[G, s], "x" if e == "spike" else "o", color="C3", ms=6, mfc="none")
+                marker = "x" if e == "spike" else "o"
+                ax.plot(run.time[s], Mres.at[G, s], marker, color="C3", ms=6, mfc="none")
     ax.set_xlabel("t [Gyr]")
     ax.set_ylabel("M [hard labels]; dashed: catalogue Mtot")
     ax.set_title(f"{run.name}: main host + 8 largest (red x spike, o unexplained step)")

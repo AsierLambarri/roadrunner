@@ -58,7 +58,7 @@ import numpy as np
 import pandas as pd
 
 from evaluate import cli, plots
-from evaluate.load import UNASSIGNED, Run, pool
+from evaluate.load import POS, UNASSIGNED, VEL, Run, pool
 from evaluate.report import Report
 
 MIN_PARTICLES_LOG = 1e5                 # 1.3 applies to snapshots with at least this many particles
@@ -87,7 +87,7 @@ WARNING = re.compile(r"^\[(?P<ts>[^\]]+)\] Snapshot (?P<snap>-?\d+): (?P<cat>\w+
                      r"(?: \((?P<src>[^()]*:\d+)\))?$", re.S)
 NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?")
 NEG_F = re.compile(r"at most ([-+0-9.e]+) \(median")
-CENTRE = ["position_x", "position_y", "position_z", "velocity_x", "velocity_y", "velocity_z"]
+CENTRE = POS + VEL
 
 
 def read_runlog(path):
@@ -370,6 +370,7 @@ _NO_HALOS = pd.DataFrame(columns=["virial_radius", "vmax"],
 
 
 def _init(path, source, snaps, log, halos):
+    """Open the run once per worker process, with what its snapshots share."""
     run = Run(path, particles=source)
     run.snaps = snaps
     _W.update(run=run, log=log, halos=halos)
@@ -383,6 +384,7 @@ def _snapshot(s):
 
 
 def evaluate(run, out, workers=1):
+    """Point 1 on ``run`` (see the module docstring), written to ``out``."""
     rep = Report("Point 1, technically sound", run.name, point="1")
     log = read_runlog(run.path / "run.log")
     completion(run, rep, log)

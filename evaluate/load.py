@@ -26,6 +26,8 @@ UNASSIGNED, ABSENT = -1, -2
 RESOLVED, MAJOR = 100, 1000           # particles: a resolved / a major galaxy
 OLD_GYR = 1.0                         # a star is old when it already existed this long before
 DUPLICATE_GYR = 1e-3                  # an output closer than this to the previous one is a duplicate
+POS = ["position_x", "position_y", "position_z"]   # a halo's or galaxy's centre in the tree and catalogue
+VEL = ["velocity_x", "velocity_y", "velocity_z"]
 BLAS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
 
 
@@ -182,7 +184,7 @@ class Run(Catalogue):
         return frozen(ids[o], X[o], m[o])
 
     def fitted(self, s):
-        """Galaxies with stored pairs at ``s``: they had bound stars and were fitted (sizes only, no data read)."""
+        """Galaxies with stored pairs at ``s``: they had bound stars and were fitted (reads sizes only)."""
         with h5py.File(self.assignment_file(s), "r") as f:
             return {int(k) for k, g in f["galaxies"].items() if g["indices"].size}
 
@@ -301,6 +303,13 @@ def wmedian(x, w):
     o = np.argsort(x)
     c = np.cumsum(w[o])
     return float(x[o][np.searchsorted(c, 0.5 * c[-1])])
+
+
+def wmedian_in_time(df, col, weight):
+    """Per time ``t`` of the rows of ``df``, the ``weight``-weighted median of ``col`` (a Series)."""
+    def one(d):
+        return wmedian(d[col].to_numpy(), d[weight].to_numpy())
+    return df.groupby("t").apply(one, include_groups=False)
 
 
 def common_snaps(cats, particles):
