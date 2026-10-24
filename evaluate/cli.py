@@ -4,8 +4,8 @@ Run one point with ``python3 evaluate/<point>.py --path RUN [...]``, or all of t
 ``python3 evaluate/run_all.py --path RUN [...]``. Everything goes to ``RUN/evaluation/``: the report
 ``<point>.txt``, the log ``<point>.log`` and the PDFs under ``plots/``. The comparisons of catalogues
 (science, compare) take ``--path REF --vs OTHER [...]`` and write the same layout to ``--out``, by
-default the first roadrunner run's ``evaluation/<REF>_vs_<OTHERS>/``. Nothing else is written; a point
-that needed scratch data would put it under ``evaluation/tmp/``.
+default the first roadrunner run's ``evaluation/<REF>_vs_<OTHERS>/`` (a run's ``/`` written ``-``).
+Nothing else is written; a point that needed scratch data would put it under ``evaluation/tmp/``.
 """
 import argparse
 import os
@@ -72,7 +72,8 @@ def start_compare(point, args):
         lo, hi = (int(x) for x in args.snaps.split(":"))
         particles.snaps = particles.snaps[(particles.snaps >= lo) & (particles.snaps <= hi)]
     names = "_".join(c.name for c in cats[1:])
-    out = Path(args.out) if args.out else particles.path / "evaluation" / f"{cats[0].name}_vs_{names}"
+    folder = f"{cats[0].name}_vs_{names}".replace("/", "-")
+    out = Path(args.out) if args.out else particles.path / "evaluation" / folder
     log_to(out, point)
     return cats, particles, out
 

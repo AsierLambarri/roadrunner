@@ -16,8 +16,9 @@ class Report:
     FAIL symptom, else the first of ``causes`` present, else the earliest symptom's). The point passes
     when it has no FAIL episode.
 
-    SCOREs are numbers to compare runs with (with symptoms: the episodes per cause); tables are free
-    text. A report made with ``verdict=False`` only measures.
+    SCOREs are numbers to compare runs with (with a verdict: the FAIL and flag counts first; with
+    symptoms: the episodes per cause); tables are free text. A report made with ``verdict=False`` only
+    measures.
     """
 
     def __init__(self, title, run, verdict=True, point="", causes=()):
@@ -115,7 +116,8 @@ class Report:
             lines += [""]
         lines += self._items("FAIL", self.fails) + self._items("FLAG", self.flags)
         lines += ["", "SCORES"]
-        for k, v in self.scores.items():
+        verdict = {"FAILs": n_fails, "flags": n_flags} if self.verdict else {}
+        for k, v in (verdict | self.scores).items():
             lines.append(f"  {k:52s} {v:.4g}" if isinstance(v, float) else f"  {k:52s} {v}")
         for title, text in self.tables:
             lines += ["", title, text]

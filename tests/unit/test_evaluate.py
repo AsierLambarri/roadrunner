@@ -130,6 +130,39 @@ def test_sweep_reads_back_report_scores(tmp_path):
     assert read_scores(tmp_path / "r.txt") == {"a long score name: with words": 0.25, "count": 7}
 
 
+def test_sweep_rows_hold_the_config_and_each_runs_own_scores(tmp_path):
+    import h5py
+    from evaluate.report import Report
+    from evaluate.sweep import evaluate
+    runs = [tmp_path / "vanilla" / "rank", tmp_path / "tempered_05" / "rank"]
+    for beta, run in zip((1.0, 0.5), runs):
+        (run / "evaluation").mkdir(parents=True)
+        with h5py.File(run / "catalogue.hdf5", "w") as f:
+            f.create_dataset("header/config", data=f'{{"plausibility": "rank", "tempering": {beta}}}')
+        rep = Report("Point 2, stable in time", "x", point="2")
+        rep.fail("2.1 gap", "a gap")
+        rep.score("2.3 flicker share, median", beta)
+        rep.write(run / "evaluation" / "stability.txt")
+    cmp = tmp_path / "accme-h_vs_vanilla-rank_tempered_05-rank"
+    cmp.mkdir()
+    rep = Report("Goal 6, catalogue comparison", "accme-h / vanilla/rank / tempered_05/rank", verdict=False)
+    rep.score("snapshots measured", 60)
+    rep.score("vanilla/rank: 6.1 agreement", 0.9)
+    rep.score("tempered_05/rank: 6.1 agreement", 0.8)
+    rep.write(cmp / "compare.txt")
+
+    csv = tmp_path / "sweep.csv"
+    evaluate(runs, csv, [cmp / "compare.txt"])
+    table = evaluate(runs[:1], csv, [cmp / "compare.txt"])           # a rerun replaces its row
+    table = table.set_index("run")
+    assert sorted(table.index) == ["tempered_05/rank", "vanilla/rank"]
+    assert table.at["vanilla/rank", "tempering"] == 1.0 and table.at["vanilla/rank", "stability | FAILs"] == 1
+    key = f"{cmp.name}/compare | "
+    assert table.at["vanilla/rank", key + "6.1 agreement"] == 0.9
+    assert table.at["tempered_05/rank", key + "6.1 agreement"] == 0.8
+    assert (table[key + "snapshots measured"] == 60).all()
+
+
 def test_disc_tag_keeps_the_disc_and_drops_the_halo():
     from evaluate.compare import disc_tag
     rng = np.random.default_rng(4)

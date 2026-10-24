@@ -13,7 +13,9 @@ roadrunner run's ``evaluation/<REF>_vs_<OTHERS>/`` (or ``--out``):
     python3 evaluate/science.py --path REF --vs OTHER [...]                   # goal 5, births and ex-situ
     python3 evaluate/compare.py --path REF --vs OTHER [...]                   # goal 6, where they differ
 
-``python -m evaluate sweep`` (goal 7) gathers the SCOREs of runs into one table.
+Many runs (goal 7), one row each of their configuration and every SCORE above, into a CSV table:
+
+    python3 evaluate/sweep.py --path RUN [...] --csv FILE [--reports science.txt compare.txt ...]
 
 ``soundness`` and ``stability`` give a verdict (FAIL and FLAG episodes), the others only measure.
 """

@@ -5,7 +5,8 @@ particles) or an ACCME result (hard labels, galaxy properties, satellite relatio
 the tree's ``Sub_tree_id``.
 
 Particle IDs are ``particle_index`` in the outputs. Hard labels are ``Sub_tree_id``, ``UNASSIGNED``
-for particles bound to no halo; ``ABSENT`` marks an ID missing from a snapshot after alignment.
+for particles bound to no halo; ``ABSENT`` marks an ID missing from a snapshot after alignment. A run is
+named by its directory and the one above (``vanilla/rank``), an ACCME result ``accme-<directory>``.
 """
 import json
 import multiprocessing
@@ -55,7 +56,7 @@ class Run(Catalogue):
 
     def __init__(self, path, particles=None):
         self.path = Path(path)
-        self.name = self.path.name
+        self.name = run_name(self.path)
         self.cat = h5py.File(self.path / "catalogue.hdf5", "r")
         self.planned = np.sort(self.cat["header/snapshots"][:].astype(int))   # written up front
         self.snaps = self.planned[self.planned <= int(self.cat["header/last_snapshot"][()])]  # written ones
@@ -247,6 +248,13 @@ class Accme(Catalogue):
         b = self.cat["reduced_catalogue/births"][:]
         o = np.argsort(b["particle_index"])
         return b["particle_index"].astype(np.int64)[o], b["birth_id"].astype(np.int64)[o]
+
+
+def run_name(path):
+    """A run's name: its directory and the one above (``vanilla/rank``), so the same model run in
+    sibling directories keeps two names in comparisons and the sweep."""
+    path = Path(path).resolve()
+    return f"{path.parent.name}/{path.name}"
 
 
 def open_catalogue(path, particles=None):
