@@ -14,6 +14,7 @@ class TestRunConfigDefaults:
         assert c.max_iter == 10
         assert c.tol == 1e-2
         assert c.reg_covar == 1e-6
+        assert c.track_births is True
         assert c.birth_budget == 5.0
         assert c.birth_min_initial_resp == 0.01
         assert c.output_dir == "./output"
@@ -123,6 +124,14 @@ class TestTemperingConfig:
         for bad in (-0.1, float("nan"), float("inf")):
             with pytest.raises(ValueError, match="tempering must be"):
                 RunConfig(tempering=bad)
+
+
+class TestBirthTrackingConfig:
+    def test_budget_must_be_positive_while_tracking(self):
+        for bad in (0, -1, float("nan")):
+            with pytest.raises(ValueError, match="birth_budget must be > 0"):
+                RunConfig(birth_budget=bad)
+        assert RunConfig(birth_budget=0, track_births=False).track_births is False
 
 
 class TestLiteratureRhalfConfig:

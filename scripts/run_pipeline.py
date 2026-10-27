@@ -68,6 +68,7 @@ def build_config_from_args(args):
         min_particles=args.min_particles,
         n_los=args.n_los,
         search_factor=args.search_factor,
+        track_births=args.track_births,
         birth_budget=args.birth_budget,
         birth_min_initial_resp=args.birth_min_initial_resp,
         output_dir=args.output_dir,
@@ -142,6 +143,7 @@ def main():
     parser.add_argument("--search-factor", type=float, default=1.0)
 
     # Tracking
+    parser.add_argument("--track-births", type=lambda x: x.lower() == "true", default=True)
     parser.add_argument("--birth-budget", type=float, default=5.0)
     parser.add_argument("--birth-min-initial-resp", type=float, default=0.01)
 

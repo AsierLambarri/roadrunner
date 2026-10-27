@@ -61,6 +61,7 @@ class RunConfig:
     comoving: bool = True
     stars: str = "free"
 
+    track_births: bool = True
     birth_budget: float = 5.0
     birth_min_initial_resp: float = 0.01
     use_gmm_centers: bool = True
@@ -137,6 +138,8 @@ class RunConfig:
                 object.__setattr__(self, field_name, float(val))
         if not 0.0 <= self.tempering < float("inf"):
             raise ValueError(f"tempering must be finite and >= 0, got {self.tempering}")
+        if self.track_births and not self.birth_budget > 0:
+            raise ValueError(f"birth_budget must be > 0 (track_births: false switches the trackers off), got {self.birth_budget}")
 
         if self.selection_snapshot is not None:
             object.__setattr__(self, "selection_snapshot",

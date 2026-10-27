@@ -32,6 +32,7 @@ ssc_nmin: 30
 ssc_alpha: 0.9
 dynstate_snapshots: [-2, -1]
 
+track_births: true
 birth_budget: 5.0
 birth_min_initial_resp: 0.01
 

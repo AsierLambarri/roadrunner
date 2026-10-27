@@ -172,7 +172,7 @@ def _run(config, equiv_table, snapshot_reader):
     birth_tracker = BirthTracker(
         budget=config.birth_budget,
         min_initial_resp=config.birth_min_initial_resp,
-    ) if config.birth_budget > 0 else None
+    ) if config.track_births else None
     assembly_tracker = (
         AssemblyTracker() if birth_tracker is not None else None
     )
