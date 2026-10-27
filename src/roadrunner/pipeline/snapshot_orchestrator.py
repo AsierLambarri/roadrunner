@@ -27,8 +27,8 @@ class SnapshotResult:
     """Result container for a single snapshot's processing and reduction.
 
     Holds the processed ensemble, assignment result, responsibility
-    matrix, galaxy properties, dynamical state, and satellite map
-    produced by the snapshot pipeline.
+    matrix, galaxy properties, dynamical state, satellite map and the
+    birth tracker's counters produced by the snapshot pipeline.
     """
     ensemble: HaloEnsemble
     result: AssignmentResult
@@ -36,6 +36,7 @@ class SnapshotResult:
     properties: pd.DataFrame | None
     dynstate: pd.DataFrame | None
     satellites: dict | None = None
+    birth_stats: dict | None = None
 
 
 class SnapshotOrchestrator:
@@ -157,4 +158,5 @@ class SnapshotOrchestrator:
             properties=properties,
             dynstate=dynstate,
             satellites=satellites,
+            birth_stats=None if changes is None else changes.stats,
         )

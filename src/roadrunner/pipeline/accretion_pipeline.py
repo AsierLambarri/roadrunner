@@ -723,6 +723,7 @@ class AccretionPipeline:
             "groups": snap_result.result.statistics.get("groups", 0),
         }
         stats.update(snap_result.result.statistics)
+        stats.update({f"birth_{k}": v for k, v in (snap_result.birth_stats or {}).items()})
         self.logger.write_snapshot(stats)
 
     def _log_error(self, snap_id, exc):

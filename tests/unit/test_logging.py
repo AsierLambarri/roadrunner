@@ -36,6 +36,20 @@ class TestRunLogger:
         assert "0.934" in content
         assert "0.087" in content
 
+    def test_birth_tracker_columns(self, tmp_path):
+        log = str(tmp_path / "birth.log")
+        logger = RunLogger(log)
+        logger.write_header({})
+        logger.write_snapshot({"snap": 1, "birth_new": 123, "birth_open": 45, "birth_moved": 6, "birth_closed": 7})
+        logger.write_snapshot({"snap": 2})                                   # no trackers: not available
+        with open(log) as f:
+            lines = f.read().splitlines()
+        header = next(l for l in lines if "RUNTIME" in l)
+        assert header.split()[-4:] == ["NEW", "OPEN", "MOVED", "CLOSED"]
+        first, second = [l for l in lines if l.strip()][-2:]
+        assert first.split()[-4:] == ["123", "45", "6", "7"]
+        assert second.split()[-4:] == ["--"] * 4
+
     def test_soft_metrics_nan(self, tmp_path):
         log = str(tmp_path / "nan.log")
         logger = RunLogger(log)

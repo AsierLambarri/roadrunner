@@ -112,8 +112,9 @@ class RunLogger:
             Dictionary with keys ``runtime``, ``snap``, ``z``, ``load``,
             ``process``, ``reduction``, ``bound``, ``groups``,
             ``fragments``, ``unassigned``, ``avg_conf``, ``avg_entropy``,
-            ``avg_cond``, ``bad_cond``, ``empty``, and ``avg_retention``.
-            A missing key, or a ``NaN`` float value, is rendered as
+            ``avg_cond``, ``bad_cond``, ``empty``, ``avg_retention``, and the
+            birth tracker's ``birth_new``, ``birth_open``, ``birth_moved`` and
+            ``birth_closed``. A missing key, or a ``NaN`` float value, is rendered as
             ``--``.
         """
         col_defs = [
@@ -133,6 +134,10 @@ class RunLogger:
             ("bad_cond",   "BAD_COND",   "d"),
             ("empty",      "EMPTY",      "d"),
             ("avg_retention","MED_RET",  ".3f"),
+            ("birth_new",  "NEW",        "d"),
+            ("birth_open", "OPEN",       "d"),
+            ("birth_moved","MOVED",      "d"),
+            ("birth_closed","CLOSED",    "d"),
         ]
 
         # Build columns with widths computed from label + format

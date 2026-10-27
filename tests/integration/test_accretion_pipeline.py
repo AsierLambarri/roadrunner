@@ -108,6 +108,18 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers
 
 
 class TestAccretionPipeline:
+    def test_the_log_reports_the_birth_tracker(self, tmp_path):
+        pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
+        pipeline.run(str(tmp_path))
+        with open(pipeline.logger._log_path) as f:
+            rows = [l.split() for l in f.read().splitlines() if l.strip()]
+        header = next(r for r in rows if "RUNTIME" in r)
+        data = [r for r in rows if r[0].count(":") == 2][-2:]
+        new, opened = header.index("NEW") - len(header), header.index("OPEN") - len(header)
+        # every particle of the first snapshot is new, none of the second; the open windows are not more than the new particles
+        assert int(data[0][new]) > 0 and int(data[1][new]) == 0
+        assert int(data[0][opened]) <= int(data[0][new])
+
     def test_full_run_two_snapshots(self, tmp_path):
         pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)
         pipeline.run(str(tmp_path))
