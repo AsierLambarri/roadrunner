@@ -10,6 +10,7 @@ from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.potentials import KeplerPotential
 from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
 from roadrunner.postprocessing.tracking.birth import BirthTracker
+from roadrunner.postprocessing.tracking.records import BirthChanges
 from roadrunner.physics.constants import DYN_TIME_FACTOR
 from roadrunner.pipeline.translation import (
     build_reduction_input,
@@ -136,9 +137,9 @@ class TestUpdateBirthTracker:
         })
         result = _make_result_with_df(df)
         bt = BirthTracker()
-        update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
+        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
         assert bt._last_snapshot == 0
-        assert bt.current_birth_map() == {100: {100}, 103: {103}, 105: {105}}
+        assert dict(zip(changes.born_pid.tolist(), changes.born_host.tolist())) == {100: 100, 103: 103, 105: 105}
 
     def test_without_timescale_column(self):
         snap = _make_snap_data(n=10, start_id=200)
@@ -148,8 +149,8 @@ class TestUpdateBirthTracker:
         })
         result = _make_result_with_df(df)
         bt = BirthTracker()
-        update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
-        assert bt.current_birth_map() == {201: {201}, 202: {202}}
+        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
+        assert dict(zip(changes.born_pid.tolist(), changes.born_host.tolist())) == {201: 201, 202: 202}
 
     def _soft_case(self):
         # Particle 400 is split 0.7/0.3 between galaxies 500 and 501, 401 is
@@ -166,15 +167,14 @@ class TestUpdateBirthTracker:
     def test_soft_evidence_and_dynamical_times_from_responsibilities(self):
         snap, result, ensemble = self._soft_case()
         bt = BirthTracker()
-        update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=ensemble)
+        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=ensemble)
         # 401 and 402 have a single possible host and are decided at once;
         # 400 opens a window over its two hosts, as long as the mean of its
         # dynamical times in them, weighted by the responsibilities.
-        assert bt._act["pid"].tolist() == [400]
-        m = bt._ev["pid"] == 400
-        assert dict(zip(bt._ev["host"][m].tolist(), np.round(np.exp(bt._ev["logp"][m]), 6).tolist())) == {500: 0.7, 501: 0.3}
-        assert bt._act["lag"][0] == pytest.approx((0.7 * 0.1 + 0.3 * 0.3) * DYN_TIME_FACTOR, rel=1e-6)
-        assert bt.current_birth_map() == {500: {400}, 501: {401}, -1: {402}}
+        assert bt.open_ids().tolist() == [400]
+        assert {h: round(np.exp(v), 6) for h, v in bt.evidence(400).items()} == {500: 0.7, 501: 0.3}
+        assert bt.window(400) == pytest.approx((0.7 * 0.1 + 0.3 * 0.3) * DYN_TIME_FACTOR, rel=1e-6)
+        assert dict(zip(changes.born_pid.tolist(), changes.born_host.tolist())) == {400: 500, 401: 501, 402: -1}
 
     def test_the_galaxies_alive_are_the_responsibility_columns(self):
         snap, result, ensemble = self._soft_case()
@@ -186,8 +186,21 @@ class TestUpdateBirthTracker:
         df = pd.DataFrame({"array_index": [0, 1, 2], "Sub_tree_id": [500, 500, -1]})
         result2 = AssignmentResult(particle_df=df, responsibilities=resp, fitted_parameters={}, statistics={})
         update_birth_tracker(bt, snap_id=1, snap_data=snap2, result=result2, ensemble=HaloEnsemble([_bound_halo(500, [0, 1], [0.1, 0.1])]))
-        assert bt._act["pid"].size == 0                                          # 400's window closed: a candidate merged away
-        assert bt.current_birth_map()[500] == {400}
+        assert bt.open_ids().size == 0                                           # 400's window closed: a candidate merged away
+        assert dict(zip(bt.finalized().particle_index.tolist(), bt.finalized().birth_id.tolist()))[400] == 500
+
+    def test_settled_particles_are_not_passed_on(self):
+        snap, result, ensemble = self._soft_case()
+        bt = BirthTracker()
+        update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=ensemble)
+        snap2 = _make_snap_data(n=3, start_id=400)
+        snap2.time = snap.time + 0.01
+        seen = []
+        original = bt.update
+        bt.update = lambda looks: (seen.append(looks), original(looks))[1]
+        update_birth_tracker(bt, snap_id=1, snap_data=snap2, result=result, ensemble=ensemble)
+        # 401 and 402 are settled: only 400, still open, reaches the tracker (with its two pairs)
+        assert seen[0].particle_ids.tolist() == [400, 400]
 
 
 class TestUpdateAssemblyTracker:
@@ -200,7 +213,7 @@ class TestUpdateAssemblyTracker:
         result = _make_result_with_df(df)
         at = AssemblyTracker(n_sat_history=2)
         satellites = {500: set(), 501: set()}
-        update_assembly_tracker(at, snap_id=0, snap_data=snap, result=result, satellites=satellites)
+        update_assembly_tracker(at, snap_id=0, snap_data=snap, result=result, satellites=satellites, changes=BirthChanges.nothing())
         current = at.current()
         assert 500 in current
         assert 501 in current
@@ -214,13 +227,12 @@ class TestUpdateAssemblyTracker:
         })
         result = _make_result_with_df(df)
         bt = BirthTracker()
-        update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
+        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
         satellites = {300: set()}
         at = AssemblyTracker(n_sat_history=2)
         update_assembly_tracker(at, snap_id=0, snap_data=snap, result=result,
-                                satellites=satellites, birth_tracker=bt)
-        current = at.current()
-        assert 300 in current
+                                satellites=satellites, changes=changes)
+        assert at.current()[300] == {300, 301}
 
 
 class TestBuildReductionInput:

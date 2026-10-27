@@ -160,7 +160,7 @@ The hard label of each particle is the argmax of its responsibilities. Particles
 ### 5. Trackers (`postprocessing/tracking/`)
 
 - **`BirthTracker`:** a particle is born in a galaxy it is bound to when it first appears. Each candidate host starts with its share of the particle's responsibility at that first output, and the outputs that follow within a window are fused in: each multiplies in a leaky persistence likelihood `ln[lam + (1 - lam) q]`, `q` the particle's share in the host at that output and `lam = exp(-dt / tau_c)`, so outputs closer than the correlation time `tau_c` count little. The window `L` is the responsibility-weighted mean of the particle's dynamical times in the candidate hosts, `tau_c = L / birth_budget`, and it closes early when a candidate galaxy merges away. The host with the most evidence becomes the birth host, with its probability `p_birth`. A particle whose first-output share is at least `1 / (1 + exp(-birth_budget))`, or that has a single candidate, is decided at once. Only the hosts above `birth_min_initial_resp` compete (and always the largest).
-- **`AssemblyTracker`:** keeps an infall list per galaxy, meaning every particle it has ever acquired. That includes stars born in it, stars it acquired directly, and the infall lists of satellites that merged into it, using the merger-tree satellite relations.
+- **`AssemblyTracker`:** follows what the `BirthTracker` changes each snapshot (the particles first seen and the ones whose leading host changed) and keeps an infall list per galaxy, meaning every particle it has ever acquired. That includes stars born in it, stars it acquired directly, and the infall lists of satellites that merged into it, using the merger-tree satellite relations.
 
 Setting `birth_budget <= 0` turns off both trackers.
 
@@ -269,7 +269,7 @@ checkpoint.zst                   (after a failure)
 | `snapshots/<id>/galaxy_properties` | `Sub_tree_id`, `mb_host_id`, `position_x/y/z`, `velocity_x/y/z`, `Mtot`, `r20`, `rh`, `r80`, `Rhp`, `sigma`, `sigma_los`, `r_t`. Attribute `time`. |
 | `snapshots/<id>/riley_criterion` | `Sub_tree_id`, `mstar`, `f_bound`, `sigma50`, `dynstate`. Only on `dynstate_snapshots`. |
 | `snapshots/<id>/satellite_relations/<host_id>` | Satellite IDs of each host. |
-| `final/births` | `particle_index` (simulation ID), `birth_id` (birth galaxy), `p_birth` (its probability). |
+| `final/births` | `particle_index` (simulation ID), `birth_id` (birth galaxy), `p_birth` (its probability), `birth_time` (cosmic time the particle first appeared, Gyr). |
 | `final/assembly` | `particle_index`, `galaxy_id`: one row per particle in each galaxy's infall list. |
 
 A star in galaxy G's assembly set is in situ if its `birth_id == G`, and accreted otherwise. `roadrunner.io.HDF5CatalogueReader` reads these tables (`read_header`, `read_galaxy_properties`, `read_riley_criterion`, `read_births`, `read_assembly`).

@@ -55,7 +55,12 @@ class SnapshotOrchestrator:
     birth_tracker : BirthTracker or None, optional
         Tracks birth events of particles.
     assembly_tracker : AssemblyTracker or None, optional
-        Tracks galaxy assembly histories.
+        Tracks galaxy assembly histories. It follows the birth hosts, so it needs ``birth_tracker``.
+
+    Raises
+    ------
+    ValueError
+        If there is an assembly tracker without a birth tracker.
     """
 
     def __init__(
@@ -66,6 +71,8 @@ class SnapshotOrchestrator:
         birth_tracker: BirthTracker | None = None,
         assembly_tracker: AssemblyTracker | None = None,
     ):
+        if assembly_tracker is not None and birth_tracker is None:
+            raise ValueError("The assembly tracker follows the birth hosts: it needs a birth tracker.")
         self.processing_config = processing_config
         self.reduction_config = reduction_config
         self.assigner = assigner
@@ -111,8 +118,9 @@ class SnapshotOrchestrator:
             self.assigner, self.processing_config,
         )
 
+        changes = None
         if self.birth_tracker is not None:
-            update_birth_tracker(self.birth_tracker, snap_id, snap_data, result, ensemble)
+            changes = update_birth_tracker(self.birth_tracker, snap_id, snap_data, result, ensemble)
 
         pop_ids = set(ensemble.sub_tree_ids[ensemble.populated_indices()])
         # Complete over the alive (populated) halos: every one is a key,
@@ -126,7 +134,7 @@ class SnapshotOrchestrator:
         if self.assembly_tracker is not None:
             update_assembly_tracker(
                 self.assembly_tracker, snap_id, snap_data, result,
-                satellites, self.birth_tracker,
+                satellites, changes,
             )
 
         galaxy_particles, galaxy_bound = build_reduction_input(

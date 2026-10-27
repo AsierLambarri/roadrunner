@@ -6,8 +6,10 @@ import numpy as np
 
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
 from roadrunner._defaults import GALAXY_ID, LOCAL_IDX, SIM_ID, UNBOUND, math_dtype
+from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.physics.constants import DYN_TIME_FACTOR
 from roadrunner.physics.timescales import pair_dynamical_timescales
+from roadrunner.postprocessing.tracking.records import Memberships
 
 
 def responsibilities_to_sim(csc, snap_data: SnapshotData):
@@ -50,7 +52,7 @@ def responsibilities_from_sim(csc, snap_data: SnapshotData):
     return csc.remap_rows(src, dst)
 
 
-def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, ensemble) -> None:
+def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, ensemble):
     """Update the birth tracker with the current snapshot assignment.
 
     The evidence is soft: one (particle, host) pair per non-zero
@@ -60,6 +62,10 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     at this snapshot are the columns of the responsibility matrix. Without a
     responsibility matrix the hard assignment is used, one pair per particle
     with weight 1 and the particle's timescale.
+
+    Only the particles whose birth is not settled are passed on: a finalised
+    particle can no longer change, and the vast majority of a snapshot is
+    finalised.
 
     Parameters
     ----------
@@ -72,41 +78,51 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     ensemble : HaloEnsemble
         The halos the assignment was fit to, with boundness computed: the
         source of the dynamical time of each pair.
+
+    Returns
+    -------
+    changes : BirthChanges
+        What the update changed in the birth hosts.
     """
+    todo = ~birth_tracker.settled(snap_data.index)                      # by array index
     df = result.particle_df
     arr_idx = df["array_index"].values
 
     resp = result.responsibilities
     if resp is None or len(resp) == 0:
-        timescales = df["timescale"].values if "timescale" in df.columns else np.full(len(df), 0.1, dtype=math_dtype())
-        rows, hosts, weights, alive = arr_idx, df["Sub_tree_id"].values, None, None
+        keep = todo[arr_idx]
+        alive = np.unique(df["Sub_tree_id"].values)
+        timescales = df["timescale"].values[keep] if "timescale" in df.columns else np.full(int(keep.sum()), 0.1)
+        rows, hosts, weights = arr_idx[keep], df["Sub_tree_id"].values[keep], np.ones(int(keep.sum()))
     else:
-        sizes = [len(c) for c in resp.column_indices]
-        rows = np.concatenate(resp.column_indices).astype(np.int64)
-        hosts = np.repeat(np.asarray(resp.column_id, dtype=GALAXY_ID), sizes)
-        weights = np.concatenate(resp.column_values).astype(math_dtype(), copy=False)
-        timescales = pair_dynamical_timescales(ensemble, resp, DYN_TIME_FACTOR)
-        positive = weights > 0
-        rows, hosts, weights, timescales = rows[positive], hosts[positive], weights[positive], timescales[positive]
-        unbound = arr_idx[~np.isin(arr_idx, rows)]
+        alive = resp.column_id
+        mask = [todo[rows_c] & (w_c > 0) for rows_c, w_c in zip(resp.column_indices, resp.column_values)]
+        kept = SparseCSC([rows_c[m] for rows_c, m in zip(resp.column_indices, mask)],
+                         [w_c[m] for w_c, m in zip(resp.column_values, mask)], column_id=resp.column_id)
+        rows = np.concatenate(kept.column_indices).astype(np.int64) if len(kept) else np.empty(0, np.int64)
+        hosts = np.repeat(np.asarray(kept.column_id, dtype=GALAXY_ID), [len(c) for c in kept.column_indices])
+        weights = np.concatenate(kept.column_values).astype(math_dtype(), copy=False) if len(kept) else np.empty(0, math_dtype())
+        timescales = pair_dynamical_timescales(ensemble, kept, DYN_TIME_FACTOR)
+        paired = np.zeros(todo.size, dtype=bool)
+        paired[rows] = True
+        unbound = np.flatnonzero(todo & ~paired)
         rows = np.concatenate([rows, unbound])
         hosts = np.concatenate([hosts, np.full(unbound.size, UNBOUND, dtype=GALAXY_ID)])
         weights = np.concatenate([weights, np.ones(unbound.size, dtype=weights.dtype)])
         timescales = np.concatenate([timescales, np.full(unbound.size, np.nan)])
-        alive = resp.column_id
 
-    birth_tracker.update(
+    return birth_tracker.update(Memberships(
         t_snap=snap_data.time,
         snapshot_id=snap_id,
         particle_ids=snap_data.index[rows],
         host_ids=hosts,
-        timescales=timescales,
         weights=weights,
+        t_dyn=timescales,
         alive=alive,
-    )
+    ))
 
 
-def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, satellites, birth_tracker=None) -> None:
+def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, satellites, changes) -> None:
     """Update the assembly tracker with current assignment and satellite data.
 
     Parameters
@@ -117,15 +133,14 @@ def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotD
     result : AssignmentResult
     satellites : dict of {int: set of int}
         Satellite map from the merger tree.
-    birth_tracker : BirthTracker or None, optional
-        If provided, uses its current birth map.
+    changes : BirthChanges
+        What the birth tracker changed in this snapshot.
     """
     assignment_map = {}
     for sid, group in result.particle_df.groupby("Sub_tree_id"):
         arr_idx = group["array_index"].values
         assignment_map[int(sid)] = set(snap_data.index[arr_idx].tolist())
-    birth_map = birth_tracker.current_birth_map() if birth_tracker is not None else {}
-    assembly_tracker.update(snap_id, assignment_map, birth_map, satellites)
+    assembly_tracker.update(snap_id, assignment_map, changes, satellites)
 
 
 def build_reduction_input(snap_data: SnapshotData, ensemble, assembly_tracker) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:

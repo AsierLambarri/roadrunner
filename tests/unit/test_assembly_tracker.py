@@ -1,12 +1,36 @@
+import weakref
+
+import numpy as np
 import pytest
 
 from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
+from roadrunner.postprocessing.tracking.records import BirthChanges
+
+_GONE = -999          # where a test device sends a particle that leaves the birth maps altogether (the birth tracker never does)
+_PREVIOUS = weakref.WeakKeyDictionary()
+
+
+def _changes(previous, current):
+    """The birth changes that take the birth map ``previous`` to ``current`` (``{galaxy: set of particles}``)."""
+    was = {p: g for g, ps in previous.items() for p in ps}
+    now = {p: g for g, ps in current.items() for p in ps}
+    born = sorted((p, g) for p, g in now.items() if p not in was)
+    moved = sorted((p, was[p], now.get(p, _GONE)) for p in was if now.get(p, _GONE) != was[p])
+    return BirthChanges(np.array([p for p, _ in born], dtype=np.uint64), np.array([g for _, g in born], dtype=np.int64),
+                        np.array([p for p, _, _ in moved], dtype=np.uint64), np.array([f for _, f, _ in moved], dtype=np.int64),
+                        np.array([t for _, _, t in moved], dtype=np.int64), {})
+
+
+def _update(tracker, snapshot_id, assignment_map, birth_map, satellites_map, freeze_galaxies=None):
+    """Feed the tracker the changes from the birth map this helper fed it last (none before) to ``birth_map``."""
+    tracker.update(snapshot_id, assignment_map, _changes(_PREVIOUS.get(tracker, {}), birth_map), satellites_map, freeze_galaxies)
+    _PREVIOUS[tracker] = birth_map
 
 
 class TestAssemblyTracker:
     def test_single_galaxy_no_satellites(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20, 30}},
             birth_map={1: {10, 20}},
@@ -25,7 +49,7 @@ class TestAssemblyTracker:
         # are BOTH in the host's assignment AND in the "valid" set (birth +
         # unbound + satellite infall). Inheritance tracks potential lineage
         # but particles stay with their assigned galaxy.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20, 30}, 2: {20, 30}, 3: {30}},
             birth_map={1: {10}, 2: {20}, 3: {30}},
@@ -72,13 +96,13 @@ class TestAssemblyTracker:
         #     nothing new to 2 beyond a repeat -- net: infall[1]={40,10},
         #     infall[2]={10}.
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10}, 2: {20}, 3: {30}},
             birth_map={1: {10}, 2: {20}, 3: {30}},
             satellites_map={2: {1}},
         )
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10, 20}, 2: {20, 30}, 3: {30}},
             birth_map={1: {40}, 2: {10}, 3: set()},
@@ -97,13 +121,13 @@ class TestAssemblyTracker:
         # galaxy is "g" and which is "h" could change the result.
         def run(g, h, s):
             tracker = AssemblyTracker(n_sat_history=2)
-            tracker.update(
+            _update(tracker, 
                 snapshot_id=0,
                 assignment_map={g: set(), h: {1, 2}, s: set()},
                 birth_map={h: {1, 2}},
                 satellites_map={g: {h, s}},
             )
-            tracker.update(
+            _update(tracker, 
                 snapshot_id=1,
                 assignment_map={g: {3}, h: set(), s: set()},
                 birth_map={h: {1, 2, 3}},
@@ -139,7 +163,7 @@ class TestAssemblyTracker:
         # reaches this same fixed point in one call.
         d = 4  # an unrelated 4th galaxy present throughout, outside the cycle
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={
                 4: {17, 18, 19, 23, 25, 26}, 3: {18, 11},
@@ -148,7 +172,7 @@ class TestAssemblyTracker:
             birth_map={4: set(), 3: {17, 20, 25}, 1: {29}, 2: set()},
             satellites_map={1: {3}, 3: {2}},
         )
-        result = tracker.update(
+        result = _update(tracker, 
             snapshot_id=1,
             assignment_map={
                 4: {12, 23}, 3: {19, 27, 20},
@@ -171,13 +195,13 @@ class TestAssemblyTracker:
         # therefore the flattened list) must not depend on Python's
         # set/dict iteration order, the result must be identical.
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={3: {30}, 2: {20}, 1: {10}},
             birth_map={3: {30}, 2: {20}, 1: {10}},
             satellites_map={2: {1} | set()},
         )
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={3: {30}, 2: {30, 20}, 1: {20, 10}},
             birth_map={3: set(), 2: {10}, 1: {40}},
@@ -189,7 +213,7 @@ class TestAssemblyTracker:
 
     def test_freeze_galaxies(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20}, 2: {30}},
             birth_map={1: {10, 20}, 2: {30}},
@@ -197,7 +221,7 @@ class TestAssemblyTracker:
             freeze_galaxies=[1],
         )
         # snapshot 1: galaxy 1 should not update
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10, 20, 40}, 2: {30}},
             birth_map={1: {10, 20}, 2: {30}},
@@ -211,14 +235,14 @@ class TestAssemblyTracker:
     def test_multiple_snapshots(self):
         tracker = AssemblyTracker(n_sat_history=2, unbound_default=-1)
         # Snapshot 0
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20, 30}},
             birth_map={1: {10, 20}},
             satellites_map={},
         )
         # Snapshot 1: galaxy 2 appears, gets particles 30, 40
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10, 20}, 2: {30, 40}},
             birth_map={1: {10}, 2: {30, 40}},
@@ -234,7 +258,7 @@ class TestAssemblyTracker:
 
     def test_state_serialization(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20, 30}, 2: {30}},
             birth_map={1: {10, 20}, 2: {30}},
@@ -249,14 +273,14 @@ class TestAssemblyTracker:
     def test_sat_history_merging(self):
         tracker = AssemblyTracker(n_sat_history=3, unbound_default=-1)
         # Snapshot 0: galaxy 2 is satellite of 1
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10}, 2: {20}},
             birth_map={1: {10}, 2: {20}},
             satellites_map={1: {2}},
         )
         # Snapshot 1: galaxy 2 is still a satellite of 1.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10}, 2: {20}},
             birth_map={1: {10}, 2: {20}},
@@ -267,7 +291,7 @@ class TestAssemblyTracker:
         # buffer still holds 1 -> 2 from snapshots 0 and 1, so galaxy 1
         # does consult it -- but 1 is assigned none of 2's stars, so it
         # accretes nothing: A_1 & infall[2] == {10} & {20} == set().
-        tracker.update(
+        _update(tracker, 
             snapshot_id=2,
             assignment_map={1: {10}, 2: {20}},
             birth_map={1: {10}, 2: {20}},
@@ -295,7 +319,7 @@ class TestAssemblyTrackerRecovery:
 
         tracker._update = failing_update
         with pytest.raises(RuntimeError, match="simulated mid-update failure"):
-            tracker.update(
+            _update(tracker, 
                 snapshot_id=0,
                 assignment_map={1: {10, 20}},
                 birth_map={1: {10, 20}},
@@ -304,7 +328,7 @@ class TestAssemblyTrackerRecovery:
         assert tracker._last_snapshot == -1  # unchanged: the update never completed
 
         # A retry of the SAME snapshot_id must actually run, not be skipped.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20}},
             birth_map={1: {10, 20}},
@@ -318,14 +342,14 @@ class TestAssemblyTrackerRecovery:
         # precedence bug: `-` binds tighter than `|`, so an unparenthesized
         # rewrite would silently drop this erasure.
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20}},
             birth_map={1: {10, 20}},
             satellites_map={},
         )
         assert tracker.current()[1] == {10, 20}
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10, 20}},
             birth_map={1: {10}},
@@ -335,7 +359,7 @@ class TestAssemblyTrackerRecovery:
 
     def test_cheap_snapshot_infall_lists_unaffected_by_later_update(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10, 20, 30}, 2: {30}},
             birth_map={1: {10, 20}, 2: {30}},
@@ -347,7 +371,7 @@ class TestAssemblyTrackerRecovery:
         # snapshot 1 erases 20 from galaxy 1 (Pass 1) and drives accretion
         # for galaxy 2 via the satellite link (Pass 2) -- both passes
         # mutate `_infall_lists`, so both must be covered.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10, 20, 30}, 2: {30}},
             birth_map={1: {10}, 2: {30}},
@@ -357,7 +381,7 @@ class TestAssemblyTrackerRecovery:
 
     def test_cheap_snapshot_frozen_unaffected_by_later_freeze(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10}, 2: {20}},
             birth_map={1: {10}, 2: {20}},
@@ -366,7 +390,7 @@ class TestAssemblyTrackerRecovery:
         ref = tracker._cheap_snapshot()
         captured_frozen = set(ref["frozen"])
         assert 1 not in captured_frozen
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10}, 2: {20}},
             birth_map={1: {10}, 2: {20}},
@@ -385,7 +409,7 @@ class TestAssemblyTrackerContract:
     a key, empty set if it has no satellites)."""
 
     def _merger_snapshot_0(self, tracker):
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10}, 2: {20, 21}},
             birth_map={1: {10}, 2: {20, 21}},
@@ -397,7 +421,7 @@ class TestAssemblyTrackerContract:
         self._merger_snapshot_0(tracker)
         # Snapshot 1: 2 has merged into 1 -- 2 is gone, its star 20 is now
         # assigned to 1, and 1 has no current satellite: {1: set()}.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10, 20}},
             birth_map={1: {10}, 2: {20, 21}},
@@ -411,7 +435,7 @@ class TestAssemblyTrackerContract:
         # never consulted and the merged star is lost.
         incomplete = AssemblyTracker(n_sat_history=2)
         self._merger_snapshot_0(incomplete)
-        incomplete.update(
+        _update(incomplete, 
             snapshot_id=1,
             assignment_map={1: {10, 20}},
             birth_map={1: {10}, 2: {20, 21}},
@@ -422,7 +446,7 @@ class TestAssemblyTrackerContract:
     def test_buffered_relation_expires(self):
         tracker = AssemblyTracker(n_sat_history=2)
         self._merger_snapshot_0(tracker)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10, 20}},
             birth_map={1: {10}, 2: {20, 21}},
@@ -430,7 +454,7 @@ class TestAssemblyTrackerContract:
         )
         # Snapshot 2: 2's star 21 is now assigned to 1, but the buffer only
         # holds snapshot 1's map, where 1 had no satellites -- expired.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=2,
             assignment_map={1: {10, 20, 21}},
             birth_map={1: {10}, 2: {20, 21}},
@@ -440,7 +464,7 @@ class TestAssemblyTrackerContract:
 
     def test_dead_galaxy_gets_no_satellite_history(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={3: {30}, 4: {40}},
             birth_map={3: {30}, 4: {40}},
@@ -453,7 +477,7 @@ class TestAssemblyTrackerContract:
 
     def test_dead_galaxy_birth_changes_are_applied(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={5: {50, 51}, 6: {60}},
             birth_map={5: {50, 51}, 6: {60}},
@@ -461,7 +485,7 @@ class TestAssemblyTrackerContract:
         )
         # Snapshot 1: 5 has died, and particle 51's birth leader switches
         # to 6 -- dead 5 must lose it, not keep it forever.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={6: {51, 60}},
             birth_map={5: {50}, 6: {51, 60}},
@@ -471,7 +495,7 @@ class TestAssemblyTrackerContract:
         assert tracker.current()[6] == {51, 60}
         # Snapshot 2: particle 52 finalizes with birth host 5, still dead
         # -- 5 must gain it.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=2,
             assignment_map={6: {51, 52, 60}},
             birth_map={5: {50, 52}, 6: {51, 60}},
@@ -481,7 +505,7 @@ class TestAssemblyTrackerContract:
 
     def test_galaxy_whose_births_all_moved_away_loses_them(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={7: {70}, 8: {80}},
             birth_map={7: {70}, 8: {80}},
@@ -489,7 +513,7 @@ class TestAssemblyTrackerContract:
         )
         # Snapshot 1: 7 has died and has no birth entry left at all -- it
         # appears only in the previous birth map, and must still lose 70.
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={8: {70, 80}},
             birth_map={8: {70, 80}},
@@ -498,19 +522,43 @@ class TestAssemblyTrackerContract:
         assert tracker.current()[7] == set()
         assert tracker.current()[8] == {70, 80}
 
-    def test_unchanged_birth_set_is_not_rebuilt(self):
+    def test_an_update_without_changes_leaves_the_infall_list_alone(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        tracker.update(
+        _update(tracker, 
             snapshot_id=0,
             assignment_map={1: {10}},
             birth_map={1: {10}},
             satellites_map={1: set()},
         )
         before = tracker._infall_lists[1]
-        tracker.update(
+        _update(tracker, 
             snapshot_id=1,
             assignment_map={1: {10}},
             birth_map={1: {10}},
             satellites_map={1: set()},
         )
         assert tracker._infall_lists[1] is before
+
+    def test_the_infall_lists_follow_the_birth_hosts_through_any_births_and_moves(self):
+        # without accretion (nothing assigned) a galaxy's infall list is exactly its birth set, however the
+        # particles are born in and move between the galaxies
+        rng = np.random.default_rng(1)
+        tracker = AssemblyTracker(n_sat_history=2)
+        host = {}
+        for snap in range(30):
+            for p in range(snap * 8, snap * 8 + 8):                         # new particles
+                host[p] = int(rng.integers(0, 6))
+            for p in rng.choice(list(host), 12):                             # leaders change
+                host[int(p)] = int(rng.integers(0, 6))
+            births = {}
+            for p, g in host.items():
+                births.setdefault(g, set()).add(p)
+            _update(tracker, snap, {}, births, {g: set() for g in range(6)})
+            assert {g: v for g, v in tracker.current().items() if v} == births
+
+    def test_a_checkpoint_from_before_the_changes_is_refused(self):
+        tracker = AssemblyTracker(n_sat_history=2)
+        old = {"infall_lists": {}, "previous_birth_map": {}, "frozen": set(), "sat_history_buffer": [], "last_snapshot": 0,
+               "unbound_default": -1}
+        with pytest.raises(ValueError, match="earlier assembly tracker"):
+            tracker._set_state(old)

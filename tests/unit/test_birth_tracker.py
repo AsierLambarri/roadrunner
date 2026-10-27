@@ -4,36 +4,37 @@ import pytest
 from roadrunner._defaults import BIRTH_LATE_PRIOR
 from roadrunner.physics.constants import MAX_DYN_TIMESCALE
 from roadrunner.postprocessing.tracking.birth import BirthTracker
+from roadrunner.postprocessing.tracking.records import BirthChanges, Memberships
 
 NAN = np.nan
 
 
+def _looks(t, snap, pids, hosts, taus, weights=None, alive=None):
+    hosts = np.array(hosts)
+    return Memberships(t, snap, np.array(pids, dtype=np.uint64), hosts,
+                       np.ones(len(pids)) if weights is None else np.array(weights, dtype=float),
+                       np.array(taus, dtype=float), np.unique(hosts) if alive is None else np.array(alive))
+
+
 def _update(tracker, t, snap, pids, hosts, taus, weights=None, alive=None):
-    tracker.update(t_snap=t, snapshot_id=snap, particle_ids=np.array(pids), host_ids=np.array(hosts),
-                   timescales=np.array(taus, dtype=float), weights=None if weights is None else np.array(weights),
-                   alive=None if alive is None else np.array(alive))
+    return tracker.update(_looks(t, snap, pids, hosts, taus, weights, alive))
 
 
 def _open(tracker):
-    return set(tracker._act["pid"].tolist())
+    return set(tracker.open_ids().tolist())
 
 
 def _finalized(tracker):
-    fin = tracker._concat_finalized(tracker._fin_chunks)
-    return dict(zip(fin["pid"].tolist(), fin["birth_id"].tolist()))
-
-
-def _logp(tracker, pid):
-    m = tracker._ev["pid"] == pid
-    return dict(zip(tracker._ev["host"][m].tolist(), tracker._ev["logp"][m].tolist()))
-
-
-def _lag(tracker, pid):
-    return float(tracker._act["lag"][tracker._act["pid"] == pid][0])
+    df = tracker.finalized()
+    return dict(zip(df["particle_index"].tolist(), df["birth_id"].tolist()))
 
 
 def _lam(dt, lag, budget=5.0):
     return np.exp(-dt * budget / lag)
+
+
+def _pairs(arr_a, arr_b):
+    return dict(zip(arr_a.tolist(), arr_b.tolist()))
 
 
 class TestDecidedAtOnce:
@@ -56,21 +57,26 @@ class TestDecidedAtOnce:
         _update(tracker, 0.0, 0, [1], [10], [0.2])
         assert _open(tracker) == {1} and _finalized(tracker) == {}
 
+    def test_settled_particles_are_the_finalised_ones(self):
+        tracker = BirthTracker()
+        _update(tracker, 0.0, 0, [1, 2, 2], [10, 20, 30], [0.2, 0.4, 0.4], [1.0, 0.6, 0.4])
+        assert tracker.settled(np.array([1, 2, 3], dtype=np.uint64)).tolist() == [True, False, False]
+
 
 class TestWindow:
     def test_window_is_the_weighted_mean_of_the_dynamical_times(self):
         tracker = BirthTracker()
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.2, 0.4], [0.6, 0.4])
-        assert _lag(tracker, 1) == pytest.approx(0.6 * 0.2 + 0.4 * 0.4)
+        assert tracker.window(1) == pytest.approx(0.6 * 0.2 + 0.4 * 0.4)
         # the prior is the log of the first-output share
-        assert _logp(tracker, 1) == {10: pytest.approx(np.log(0.6)), 20: pytest.approx(np.log(0.4))}
+        assert tracker.evidence(1) == {10: pytest.approx(np.log(0.6)), 20: pytest.approx(np.log(0.4))}
 
     def test_missing_and_zero_times_are_left_out_of_the_mean(self):
         tracker = BirthTracker()
         _update(tracker, 0.0, 0, [1, 1, 2, 2, 3, 3], [10, 20, 10, 20, 10, 20], [0.3, NAN, 0.3, 0.0, NAN, 0.0],
                 [0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
-        assert _lag(tracker, 1) == pytest.approx(0.3) and _lag(tracker, 2) == pytest.approx(0.3)
-        assert _lag(tracker, 3) == MAX_DYN_TIMESCALE                              # nothing to average
+        assert tracker.window(1) == pytest.approx(0.3) and tracker.window(2) == pytest.approx(0.3)
+        assert tracker.window(3) == MAX_DYN_TIMESCALE                              # nothing to average
 
     def test_window_closes_after_the_lag(self):
         tracker = BirthTracker()
@@ -85,19 +91,13 @@ class TestWindow:
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.2, 0.2], [0.6, 0.4])
         _update(tracker, 0.2, 1, [1, 1], [10, 20], [0.2, 0.2], [0.05, 0.95])
         assert _open(tracker) == {1}
-        assert _logp(tracker, 1)[20] > _logp(tracker, 1)[10]
+        assert tracker.evidence(1)[20] > tracker.evidence(1)[10]
 
     def test_a_candidate_that_died_closes_the_window(self):
         tracker = BirthTracker()
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.6, 0.4], alive=[10, 20])
         _update(tracker, 0.05, 1, [1, 1], [10, 20], [0.4, 0.4], [0.0, 1.0], alive=[10])
         assert _finalized(tracker) == {1: 10}                                   # 20 merged away: that output is not used
-
-    def test_alive_defaults_to_the_hosts_of_the_feed(self):
-        tracker = BirthTracker()
-        _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.6, 0.4])
-        _update(tracker, 0.05, 1, [1, 2], [10, 10], [0.4, 0.4], [1.0, 1.0])      # nobody is paired with 20 now
-        assert _finalized(tracker) == {1: 10, 2: 10}                             # 2 is new, with a single host
 
     def test_particle_missing_from_a_feed_still_closes(self):
         tracker = BirthTracker()
@@ -113,7 +113,6 @@ class TestEvidence:
         for s, t in enumerate((0.1, 0.2, 0.3), start=1):
             _update(tracker, t, s, [1, 1], [10, 20], [0.4, 0.4], [0.1, 0.9])
         assert _open(tracker) == {1}
-        assert tracker.current_birth_map()[20] == {1}                           # 20 leads while the window is open
         assert tracker.finalize().birth_id.tolist() == [20]
 
     def test_evidence_is_the_leaky_likelihood(self):
@@ -121,41 +120,41 @@ class TestEvidence:
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.7, 0.3])        # L = 0.4
         _update(tracker, 0.1, 1, [1, 1], [10, 20], [0.4, 0.4], [0.2, 0.8])
         lam = _lam(0.1, 0.4)
-        assert _logp(tracker, 1) == {10: pytest.approx(np.log(0.7) + np.log(lam + (1 - lam) * 0.2)),
-                                     20: pytest.approx(np.log(0.3) + np.log(lam + (1 - lam) * 0.8))}
+        assert tracker.evidence(1) == {10: pytest.approx(np.log(0.7) + np.log(lam + (1 - lam) * 0.2)),
+                                       20: pytest.approx(np.log(0.3) + np.log(lam + (1 - lam) * 0.8))}
 
     def test_dt_is_measured_from_the_last_output_used(self):
         tracker = BirthTracker(budget=5)
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.5, 0.5])
         _update(tracker, 0.1, 1, [1, 1], [10, 20], [0.4, 0.4], [0.5, 0.5])
-        before = _logp(tracker, 1)
+        before = tracker.evidence(1)
         _update(tracker, 0.2, 2, [1, 1], [10, 20], [0.4, 0.4], [0.3, 0.7])
         lam = _lam(0.1, 0.4)
-        assert _logp(tracker, 1)[20] - before[20] == pytest.approx(np.log(lam + (1 - lam) * 0.7))
+        assert tracker.evidence(1)[20] - before[20] == pytest.approx(np.log(lam + (1 - lam) * 0.7))
 
     def test_outputs_closer_than_the_correlation_time_count_little(self):
         tracker = BirthTracker(budget=5)
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.6, 0.4])       # tau_c = 0.08
         _update(tracker, 0.001, 1, [1, 1], [10, 20], [0.4, 0.4], [0.0, 1.0])
-        assert abs(_logp(tracker, 1)[20] - np.log(0.4)) < 0.02
-        assert abs(_logp(tracker, 1)[10] - np.log(0.6)) < 0.1
+        assert abs(tracker.evidence(1)[20] - np.log(0.4)) < 0.02
+        assert abs(tracker.evidence(1)[10] - np.log(0.6)) < 0.1
 
     def test_a_candidate_missing_from_an_output_loses_the_look(self):
         tracker = BirthTracker(budget=5)
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.5, 0.5], alive=[10, 20])
         _update(tracker, 0.1, 1, [1], [10], [0.4], [1.0], alive=[10, 20])        # no pair with 20: its share is zero
         lam = _lam(0.1, 0.4)
-        assert _logp(tracker, 1)[20] - np.log(0.5) == pytest.approx(np.log(lam))
+        assert tracker.evidence(1)[20] - np.log(0.5) == pytest.approx(np.log(lam))
 
     def test_an_unbound_output_adds_nothing(self):
         tracker = BirthTracker()
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.6, 0.4], alive=[10, 20])
-        before = _logp(tracker, 1)
+        before = tracker.evidence(1)
         _update(tracker, 0.1, 1, [1], [-1], [NAN], alive=[10, 20])
-        assert _logp(tracker, 1) == before
+        assert tracker.evidence(1) == before
         _update(tracker, 0.15, 2, [1, 1], [10, 20], [0.4, 0.4], [0.5, 0.5], alive=[10, 20])
         lam = _lam(0.15, 0.4)                                                   # dt is still measured from the first output
-        assert _logp(tracker, 1)[10] - before[10] == pytest.approx(np.log(lam + (1 - lam) * 0.5))
+        assert tracker.evidence(1)[10] - before[10] == pytest.approx(np.log(lam + (1 - lam) * 0.5))
 
     def test_equal_evidence_goes_to_the_lowest_host(self):
         tracker = BirthTracker()
@@ -165,54 +164,100 @@ class TestEvidence:
     def test_duplicate_pairs_are_merged(self):
         tracker = BirthTracker()
         _update(tracker, 0.0, 0, [1, 1, 1], [10, 10, 20], [0.2, 0.2, 0.2], [0.25, 0.25, 0.4])
-        assert _logp(tracker, 1) == {10: pytest.approx(np.log(0.5 / 0.9)), 20: pytest.approx(np.log(0.4 / 0.9))}
+        assert tracker.evidence(1) == {10: pytest.approx(np.log(0.5 / 0.9)), 20: pytest.approx(np.log(0.4 / 0.9))}
 
 
 class TestCandidates:
     def test_only_hosts_above_the_threshold_compete(self):
         tracker = BirthTracker(min_initial_resp=0.1)
         _update(tracker, 0.0, 0, [1, 1, 1], [10, 20, 30], [0.4, 0.4, 0.4], [0.5, 0.45, 0.05], alive=[10, 20, 30])
-        assert set(_logp(tracker, 1)) == {10, 20}
+        assert set(tracker.evidence(1)) == {10, 20}
         _update(tracker, 0.05, 1, [1, 1], [20, 30], [0.4, 0.4], [0.1, 0.9], alive=[10, 20, 30])      # 30 was not a candidate
-        assert set(_logp(tracker, 1)) == {10, 20}
+        assert set(tracker.evidence(1)) == {10, 20}
 
     def test_the_largest_host_always_competes(self):
         tracker = BirthTracker(min_initial_resp=0.5)
         _update(tracker, 0.0, 0, [1, 1, 1, 1], [10, 20, 30, 40], [0.4] * 4, [0.26, 0.25, 0.25, 0.24])
-        assert set(_logp(tracker, 1)) == {10}
+        assert set(tracker.evidence(1)) == {10}
 
     def test_zero_threshold_keeps_every_bound_host(self):
         tracker = BirthTracker(min_initial_resp=0.0)
         _update(tracker, 0.0, 0, [1, 1, 1], [10, 20, 30], [0.4, 0.4, 0.4], [0.5, 0.45, 1e-6])
-        assert set(_logp(tracker, 1)) == {10, 20, 30}
+        assert set(tracker.evidence(1)) == {10, 20, 30}
 
     def test_negative_threshold_lets_later_hosts_join(self):
         tracker = BirthTracker(min_initial_resp=-1)
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.5, 0.5], alive=[10, 20, 30])
         _update(tracker, 0.05, 1, [1, 1], [10, 30], [0.4, 0.4], [0.5, 0.5], alive=[10, 20, 30])
-        logp = _logp(tracker, 1)
+        logp = tracker.evidence(1)
         assert set(logp) == {10, 20, 30}
         lam = _lam(0.05, 0.4)
         assert logp[30] == pytest.approx(np.log(BIRTH_LATE_PRIOR) + np.log(lam + (1 - lam) * 0.5))
         assert logp[20] == pytest.approx(np.log(0.5) + np.log(lam))
 
 
-class TestOutputs:
-    def test_current_birth_map(self):
+class TestChanges:
+    def test_a_particle_is_born_in_its_leading_host(self):
         tracker = BirthTracker()
-        _update(tracker, 0.0, 0, [1, 2, 2], [10, 20, 30], [0.2, 0.4, 0.4], [1.0, 0.6, 0.4])
-        bmap = tracker.current_birth_map()
-        assert bmap == {10: {1}, 20: {2}}                                        # 1 finalised, 2 open under its leader
+        changes = _update(tracker, 0.0, 0, [1, 2, 2, 3], [10, 20, 30, -1], [0.2, 0.4, 0.4, NAN], [1.0, 0.6, 0.4, 1.0])
+        assert isinstance(changes, BirthChanges)
+        assert _pairs(changes.born_pid, changes.born_host) == {1: 10, 2: 20, 3: -1}          # 2 is open, led by 20
+        assert changes.moved_pid.size == 0
+        assert changes.stats == {"new": 3, "at_once": 2, "opened": 1, "open": 1, "moved": 0, "closed": 0}
 
+    def test_a_new_leader_is_a_move(self):
+        tracker = BirthTracker()
+        _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.55, 0.45])
+        changes = _update(tracker, 0.1, 1, [1, 1], [10, 20], [0.4, 0.4], [0.05, 0.95])
+        assert changes.born_pid.size == 0
+        assert changes.moved_pid.tolist() == [1] and changes.moved_from.tolist() == [10] and changes.moved_to.tolist() == [20]
+        assert changes.stats["moved"] == 1
+        again = _update(tracker, 0.2, 2, [1, 1], [10, 20], [0.4, 0.4], [0.05, 0.95])        # the leader stays
+        assert again.moved_pid.size == 0
+
+    def test_closing_a_window_changes_no_birth(self):
+        tracker = BirthTracker()
+        _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.2, 0.2], [0.6, 0.4])
+        changes = _update(tracker, 0.5, 1, [2], [10], [0.2], alive=[10, 20])
+        assert _pairs(changes.born_pid, changes.born_host) == {2: 10}
+        assert changes.moved_pid.size == 0 and changes.stats["closed"] == 1 and changes.stats["open"] == 0
+        assert _finalized(tracker)[1] == 10
+
+    def test_the_changes_by_galaxy(self):
+        changes = BirthChanges(np.array([1, 2], np.uint64), np.array([10, 10]), np.array([3], np.uint64),
+                               np.array([10]), np.array([20]), {})
+        gained, lost = changes.by_galaxy()
+        assert gained == {10: {1, 2}, 20: {3}} and lost == {10: {3}}
+
+    def test_an_update_without_changes_has_empty_by_galaxy(self):
+        tracker = BirthTracker()
+        changes = _update(tracker, 0.0, 0, np.array([], int), np.array([], int), np.array([]))
+        assert changes.by_galaxy() == ({}, {})
+
+    def test_an_earlier_snapshot_changes_nothing(self):
+        tracker = BirthTracker()
+        _update(tracker, 1.0, 5, [1], [10], [0.2])
+        changes = _update(tracker, 0.5, 4, [2], [10], [0.2])
+        assert changes.born_pid.size == 0 and _finalized(tracker) == {1: 10}
+
+
+class TestOutputs:
     def test_finalize_closes_everything(self):
         tracker = BirthTracker()
         _update(tracker, 0.0, 0, [1, 2, 2, 3], [10, 20, 30, 10], [0.2, 0.4, 0.4, 0.3], [1.0, 0.7, 0.3, 1.0])
         df = tracker.finalize()
         assert dict(zip(df["particle_index"], df["birth_id"])) == {1: 10, 2: 20, 3: 10}
         assert df["particle_index"].dtype == np.uint64 and df["birth_id"].dtype == np.int64
-        assert df["p_birth"].dtype == np.float32
+        assert df["p_birth"].dtype == np.float32 and df["birth_time"].dtype == np.float32
         assert df["p_birth"][df["particle_index"] == 2].item() == pytest.approx(0.7)
         assert _open(tracker) == set()
+
+    def test_birth_time_is_the_first_appearance(self):
+        tracker = BirthTracker()
+        _update(tracker, 0.5, 0, [1, 2, 2], [10, 20, 30], [0.2, 0.4, 0.4], [1.0, 0.6, 0.4])
+        _update(tracker, 0.6, 1, [2, 2, 3], [20, 30, 10], [0.4, 0.4, 0.3], [0.6, 0.4, 1.0])
+        df = tracker.finalize().set_index("particle_index")
+        assert df.birth_time.to_dict() == {1: pytest.approx(0.5), 2: pytest.approx(0.5), 3: pytest.approx(0.6)}
 
     def test_empty_update(self):
         tracker = BirthTracker()
@@ -220,11 +265,15 @@ class TestOutputs:
         assert _open(tracker) == set() and _finalized(tracker) == {}
         assert tracker.finalize().empty
 
-    def test_an_earlier_snapshot_is_ignored(self):
+    def test_the_state_is_read_only(self):
         tracker = BirthTracker()
-        _update(tracker, 1.0, 5, [1], [10], [0.2])
-        _update(tracker, 0.5, 4, [2], [10], [0.2])
-        assert _finalized(tracker) == {1: 10}
+        _update(tracker, 0.0, 0, [1, 1, 2], [10, 20, 10], [0.4, 0.4, 0.2], [0.6, 0.4, 1.0])
+        with pytest.raises(ValueError):
+            tracker._act["lag"][0] = 1.0
+        with pytest.raises(ValueError):
+            tracker._ev["logp"][0] = 0.0
+        with pytest.raises(ValueError):
+            tracker._fin_chunks[0]["birth_id"][0] = 1
 
 
 class TestCheckpoint:
@@ -243,13 +292,12 @@ class TestCheckpoint:
         restored._set_state(tracker._get_state())
         assert restored._last_snapshot == 3 and restored.budget == tracker.budget
         self._run(restored, range(4, 8))
-        assert restored.current_birth_map() == ref.current_birth_map()
         assert restored.finalize().equals(ref.finalize())
 
     def test_an_earlier_tracker_checkpoint_is_refused(self):
         tracker = BirthTracker()
         with pytest.raises(ValueError, match="earlier birth tracker"):
-            tracker._set_state({"format": 2, "active": {}, "evidence": {}, "finalized": {}, "last_snapshot": 0})
+            tracker._set_state({"format": 3, "active": {}, "evidence": {}, "finalized": {}, "last_snapshot": 0})
         with pytest.raises(ValueError, match="earlier birth tracker"):
             tracker._set_state({"active": {}, "finalized": {}, "heap": [], "last_snapshot": 0})
 
@@ -266,15 +314,6 @@ class TestCheckpoint:
             np.testing.assert_array_equal(ref["ev"][k], v)
         for k, v in before_act.items():
             np.testing.assert_array_equal(ref["act"][k], v)
-
-    def test_birth_sets_accumulate(self):
-        tracker = BirthTracker()
-        _update(tracker, 0.0, 0, [1], [10], [0.2])
-        first = tracker._birth_map[10]
-        assert first == {1}
-        _update(tracker, 1.0, 1, [2], [10], [0.2])
-        assert tracker._birth_map[10] == {1, 2}
-        assert first == {1}                                                     # replaced, not edited
 
 
 class _Reference:
@@ -294,7 +333,7 @@ class _Reference:
             if st is None:
                 p = w / w.sum()
                 if len(h) == 1 or p.max() >= 1 / (1 + np.exp(-self.budget)):
-                    self.done[pid] = (h[int(np.argmax(p))], p.max())
+                    self.done[pid] = (h[int(np.argmax(p))], p.max(), t)
                     continue
                 cand = [i for i in range(len(h)) if p[i] > self.x or i == int(np.argmax(p))]
                 ok = [i for i in cand if np.isfinite(tt[i]) and tt[i] > 0]
@@ -316,10 +355,20 @@ class _Reference:
 
     def close(self, pid):
         st = self.open.pop(pid)
+        k, prob = self.lead(st)
+        self.done[pid] = (st["hosts"][k], prob, st["t0"])
+
+    @staticmethod
+    def lead(st):
         order = sorted(range(len(st["hosts"])), key=lambda i: st["hosts"][i])
         w = np.exp(st["lp"] - st["lp"].max())
         k = next(i for i in order if w[i] == w.max())
-        self.done[pid] = (st["hosts"][k], w[k] / w.sum())
+        return k, w[k] / w.sum()
+
+    def leaders(self):
+        """Every particle seen, with its birth host now: the final one, or its window's leader."""
+        return {**{pid: v[0] for pid, v in self.done.items()},
+                **{pid: st["hosts"][self.lead(st)[0]] for pid, st in self.open.items()}}
 
 
 def _random_feeds(rng, n_particles=120, n_snap=25, n_gal=7):
@@ -351,13 +400,22 @@ def _random_feeds(rng, n_particles=120, n_snap=25, n_gal=7):
 def test_matches_the_reference_on_random_feeds(budget, x):
     for seed in range(8):
         tracker, ref = BirthTracker(budget=budget, min_initial_resp=x), _Reference(budget, x)
+        leaders = {}                                         # the birth hosts as a consumer of the changes sees them
         for t, s, P, H, T, W, alive in _random_feeds(np.random.default_rng(seed)):
-            tracker.update(t, s, np.array(P, np.uint64), np.array(H), np.array(T), np.array(W), alive=alive)
+            changes = tracker.update(Memberships(t, s, np.array(P, np.uint64), np.array(H), np.array(W), np.array(T), alive))
             ref.update(t, P, H, T, W, alive)
+            assert not set(changes.born_pid.tolist()) & set(leaders)                       # born once
+            leaders.update(_pairs(changes.born_pid, changes.born_host))
+            for pid, old, new in zip(changes.moved_pid.tolist(), changes.moved_from.tolist(), changes.moved_to.tolist()):
+                assert leaders[pid] == old and old != new
+                leaders[pid] = new
+            assert leaders == ref.leaders(), (seed, s)                                    # the changes are the whole difference
         out = tracker.finalize().set_index("particle_index")
         for pid in list(ref.open):
             ref.close(pid)
         assert set(out.index.tolist()) == set(ref.done)
-        for pid, (host, prob) in ref.done.items():
+        for pid, (host, prob, t0) in ref.done.items():
             assert out.birth_id[pid] == host, (seed, pid)
             assert out.p_birth[pid] == pytest.approx(prob, abs=2e-6)
+            assert out.birth_time[pid] == pytest.approx(t0, abs=2e-6)
+        assert leaders == {pid: v[0] for pid, v in ref.done.items()}

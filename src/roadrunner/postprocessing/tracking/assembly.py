@@ -6,11 +6,10 @@ a map of each galaxy's infall-list across snapshots.
 
 from collections import defaultdict, deque
 
-from tqdm import tqdm
-
 from roadrunner._defaults import UNBOUND
 
 _EMPTY = frozenset()
+_FORMAT = 2                 # checkpoint format of the state
 
 
 class AssemblyTracker:
@@ -20,7 +19,8 @@ class AssemblyTracker:
     have ever been accreted by that galaxy (including those inherited
     from merged satellites).
 
-    Each snapshot, :meth:`update` ingests the current birth map, the
+    Each snapshot, :meth:`update` ingests what the birth tracker changed
+    (:class:`~roadrunner.postprocessing.tracking.records.BirthChanges`), the
     current particle assignment, and the current satellite map, and it
     keeps the previous ``n_sat_history - 1`` satellite maps in a buffer.
     The satellite map must list every galaxy alive this snapshot as a
@@ -32,7 +32,8 @@ class AssemblyTracker:
     1. Birth bookkeeping for every galaxy whose birth set changed, dead
        ones included: birth hosts are chosen over an accumulation
        window, so a galaxy can gain or lose birth particles after it
-       has died.
+       has died. A galaxy gains the particles first seen in it or that
+       moved into it, and loses the ones that moved away.
     2. Accretion for alive galaxies only, over the current plus
        buffered satellite graph. Dead galaxies neither gain satellites
        nor accrete; their infall lists are only read, by hosts that
@@ -48,7 +49,6 @@ class AssemblyTracker:
 
     def __init__(self, n_sat_history=2, unbound_default=UNBOUND):
         self._infall_lists = defaultdict(set)
-        self._previous_birth_map = defaultdict(set)
         self._unbound_default = unbound_default
         self._frozen = set([unbound_default])
         self._last_snapshot = -1
@@ -189,14 +189,15 @@ class AssemblyTracker:
                 ordered.extend(members * len(members))
         return ordered
 
-    def update(self, snapshot_id, assignment_map, birth_map, satellites_map, freeze_galaxies=None):
+    def update(self, snapshot_id, assignment_map, changes, satellites_map, freeze_galaxies=None):
         """Update the assembly tracker with data from a new snapshot.
 
         Parameters
         ----------
         snapshot_id : int
         assignment_map : dict of {int: set of int}
-        birth_map : dict of {int: set of int}
+        changes : BirthChanges
+            What the birth tracker changed in this snapshot.
         satellites_map : dict of {int: set of int}
             Must list every galaxy alive this snapshot as a key, with an
             empty set when it has no satellites (see the class docstring).
@@ -213,7 +214,7 @@ class AssemblyTracker:
             self._update(
                 alive_galaxies,
                 assignment_map,
-                birth_map,
+                changes,
                 satellites_history,
                 [] if freeze_galaxies is None else freeze_galaxies,
             )
@@ -224,10 +225,10 @@ class AssemblyTracker:
             # skipped (`snapshot_id > self._last_snapshot` would be False).
             self._last_snapshot = snapshot_id
 
-    def _update(self, alive_galaxies, assignment_map, birth_map, satellites_history, freeze_galaxies):
+    def _update(self, alive_galaxies, assignment_map, changes, satellites_history, freeze_galaxies):
         """Core update logic: propagate infall lists across satellites.
 
-        Two flat passes, not one combined loop: birth-map deltas have
+        Two flat passes, not one combined loop: birth changes have
         zero cross-galaxy dependency and must fully complete for every
         galaxy before satellite accretion starts, since accretion reads
         other galaxies' infall lists. Combining the two into a single
@@ -247,7 +248,7 @@ class AssemblyTracker:
         alive_galaxies : set of int
             Galaxies alive this snapshot: pass 2's node set.
         assignment_map : dict of {int: set of int}
-        birth_map : dict of {int: set of int}
+        changes : BirthChanges
         satellites_history : dict of {int: set of int}
             The merged (current + buffered) satellite graph, already
             built by :meth:`_get_current_sat_history`.
@@ -256,31 +257,18 @@ class AssemblyTracker:
         for g in freeze_galaxies:
             self._frozen.add(g)
 
-        # Pass 1: birth bookkeeping for every galaxy whose birth set differs
-        # from the previous snapshot's -- alive or dead. A birth host is
-        # chosen over an accumulation window, so a galaxy can gain or lose
-        # birth particles after it has died, and `_previous_birth_map`
-        # (end of this method) records every galaxy's set as applied: a
-        # galaxy skipped here would lose its change for good. Both maps'
-        # keys are visited, since a galaxy whose births all moved away
-        # appears only in the previous one; unchanged sets are skipped.
+        # Pass 1: birth bookkeeping for every galaxy whose birth set changed --
+        # alive or dead. A birth host is chosen over an accumulation window,
+        # so a galaxy can gain or lose birth particles after it has died.
         # Order-independent, and completed for every galaxy before any
         # accretion reads an infall list.
         #
         # Sets are replaced, never edited in place (C02): a checkpoint
         # capture may still reference the old object. Parenthesized
-        # explicitly -- `-` binds tighter than `|`, and the erase must run
-        # after the union.
-        previous = self._previous_birth_map
-        for g in birth_map.keys() | previous.keys():
-            curr_birth = birth_map.get(g, _EMPTY)
-            prev_birth = previous.get(g, _EMPTY)
-            # The birth tracker hands back its unchanged sets as the same
-            # objects, so identity settles most galaxies without a compare.
-            if curr_birth is prev_birth or curr_birth == prev_birth:
-                continue
-            current = self._infall_lists.get(g, _EMPTY)
-            self._infall_lists[g] = (current | (curr_birth - prev_birth)) - (prev_birth - curr_birth)
+        # explicitly: the erase must run after the union.
+        gained, lost = changes.by_galaxy()
+        for g in gained.keys() | lost.keys():
+            self._infall_lists[g] = (self._infall_lists.get(g, _EMPTY) | gained.get(g, _EMPTY)) - lost.get(g, _EMPTY)
 
         # Pass 2: satellite accretion, SCC-ordered and flattened (see
         # _strongly_connected_components / _flatten_components). The
@@ -289,7 +277,7 @@ class AssemblyTracker:
         # already holds, so intersecting with it again adds nothing
         # (verified empirically, not just asserted).
         components = self._strongly_connected_components(alive_galaxies, satellites_history)
-        for g in tqdm(self._flatten_components(components), desc="Updating each galaxy..."):
+        for g in self._flatten_components(components):
             if g in self._frozen:
                 continue
             A_g = assignment_map.get(g, _EMPTY)
@@ -303,8 +291,6 @@ class AssemblyTracker:
             # identical safety, not just Pass 1's own galaxies.
             if accreted or g not in self._infall_lists:
                 self._infall_lists[g] = self._infall_lists.get(g, _EMPTY) | accreted
-
-        self._previous_birth_map = dict(birth_map)
 
     def current(self):
         """Return the current infall lists.
@@ -320,8 +306,8 @@ class AssemblyTracker:
 
         O(n_galaxies), not O(total particles ever accreted): safe to
         call every snapshot because ``_update`` never mutates an
-        existing ``_infall_lists[g]``/``_previous_birth_map`` in place,
-        only ever replaces it wholesale. ``_frozen``/``_sat_history_buffer``
+        existing ``_infall_lists[g]`` in place, only ever replaces it
+        wholesale. ``_frozen``/``_sat_history_buffer``
         *are* mutated in place elsewhere, so those still get a real copy
         here (cheap regardless -- both are small, bounded containers).
 
@@ -334,7 +320,6 @@ class AssemblyTracker:
         """
         return {
             "infall_lists": dict(self._infall_lists),
-            "previous_birth_map": self._previous_birth_map,
             "frozen": set(self._frozen),
             "sat_history_buffer": list(self._sat_history_buffer),
             "last_snapshot": self._last_snapshot,
@@ -369,8 +354,8 @@ class AssemblyTracker:
         state : dict
         """
         return {
+            "format": _FORMAT,
             "infall_lists": {k: list(v) for k, v in ref["infall_lists"].items()},
-            "previous_birth_map": {k: list(v) for k, v in ref["previous_birth_map"].items()},
             "frozen": ref["frozen"],
             "sat_history_buffer": ref["sat_history_buffer"],
             "last_snapshot": ref["last_snapshot"],
@@ -383,9 +368,17 @@ class AssemblyTracker:
         Parameters
         ----------
         state : dict
+
+        Raises
+        ------
+        ValueError
+            If the checkpoint was written before the birth tracker handed over its
+            changes: restart the run.
         """
+        if state.get("format") != _FORMAT:
+            raise ValueError("The checkpoint holds the state of an earlier assembly tracker, "
+                             "which this tracker cannot continue: delete it and start a fresh run.")
         self._infall_lists = defaultdict(set, {k: set(v) for k, v in state["infall_lists"].items()})
-        self._previous_birth_map = defaultdict(set, {k: set(v) for k, v in state["previous_birth_map"].items()})
         self._frozen = state["frozen"]
         self._sat_history_buffer = deque(state["sat_history_buffer"], maxlen=self._sat_history_buffer.maxlen)
         self._last_snapshot = state["last_snapshot"]
