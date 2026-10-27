@@ -402,7 +402,7 @@ class TestAccretionPipeline:
             return real_save(path, data, *a, **k)
 
         monkeypatch.setattr(ap_mod, "save_checkpoint", spy_save)
-        pipeline._save_error_checkpoint((0, None, {}, None, None, None), [0])
+        pipeline._save_error_checkpoint(ap_mod.ResumePoint(0, None, {}, None, None, None), [0])
 
         assert seen["during"] is not before
         assert signal_mod.getsignal(signal_mod.SIGINT) is before

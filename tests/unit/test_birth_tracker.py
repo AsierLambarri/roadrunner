@@ -289,7 +289,7 @@ class TestCheckpoint:
         tracker = BirthTracker()
         self._run(tracker, range(4))
         restored = BirthTracker()
-        restored._set_state(tracker._get_state())
+        restored.restore(tracker.serialize(tracker.capture()))
         assert restored._last_snapshot == 3 and restored.budget == tracker.budget
         self._run(restored, range(4, 8))
         assert restored.finalize().equals(ref.finalize())
@@ -297,15 +297,15 @@ class TestCheckpoint:
     def test_an_earlier_tracker_checkpoint_is_refused(self):
         tracker = BirthTracker()
         with pytest.raises(ValueError, match="earlier birth tracker"):
-            tracker._set_state({"format": 3, "active": {}, "evidence": {}, "finalized": {}, "last_snapshot": 0})
+            tracker.restore({"format": 3, "active": {}, "evidence": {}, "finalized": {}, "last_snapshot": 0})
         with pytest.raises(ValueError, match="earlier birth tracker"):
-            tracker._set_state({"active": {}, "finalized": {}, "heap": [], "last_snapshot": 0})
+            tracker.restore({"active": {}, "finalized": {}, "heap": [], "last_snapshot": 0})
 
-    def test_cheap_snapshot_unaffected_by_later_update(self):
+    def test_capture_unaffected_by_later_update(self):
         # C02: a reference captured now must survive later updates untouched
         tracker = BirthTracker()
         _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.4, 0.4], [0.6, 0.4])
-        ref = tracker._cheap_snapshot()
+        ref = tracker.capture()
         before = {k: v.copy() for k, v in ref["ev"].items()}
         before_act = {k: v.copy() for k, v in ref["act"].items()}
         _update(tracker, 0.1, 1, [1, 1, 2], [10, 20, 10], [0.4, 0.4, 0.2], [0.1, 0.9, 1.0])

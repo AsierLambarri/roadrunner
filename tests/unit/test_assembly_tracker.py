@@ -264,9 +264,9 @@ class TestAssemblyTracker:
             birth_map={1: {10, 20}, 2: {30}},
             satellites_map={1: {2}},
         )
-        state = tracker._get_state()
+        state = tracker.serialize(tracker.capture())
         tracker2 = AssemblyTracker(n_sat_history=2)
-        tracker2._set_state(state)
+        tracker2.restore(state)
         assert dict(tracker2.current()) == dict(tracker.current())
         assert tracker2._last_snapshot == tracker._last_snapshot
 
@@ -304,7 +304,7 @@ class TestAssemblyTracker:
 
 class TestAssemblyTrackerRecovery:
     """C02: `_last_snapshot` must not advance on a partial failure, and a
-    `_cheap_snapshot()` reference must survive later updates untouched."""
+    `capture()` reference must survive later updates untouched."""
 
     def test_last_snapshot_not_advanced_on_partial_failure(self):
         tracker = AssemblyTracker(n_sat_history=2)
@@ -357,7 +357,7 @@ class TestAssemblyTrackerRecovery:
         )
         assert tracker.current()[1] == {10}
 
-    def test_cheap_snapshot_infall_lists_unaffected_by_later_update(self):
+    def test_capture_infall_lists_unaffected_by_later_update(self):
         tracker = AssemblyTracker(n_sat_history=2)
         _update(tracker, 
             snapshot_id=0,
@@ -365,7 +365,7 @@ class TestAssemblyTrackerRecovery:
             birth_map={1: {10, 20}, 2: {30}},
             satellites_map={1: {2}},
         )
-        ref = tracker._cheap_snapshot()
+        ref = tracker.capture()
         captured_1 = set(ref["infall_lists"][1])
 
         # snapshot 1 erases 20 from galaxy 1 (Pass 1) and drives accretion
@@ -379,7 +379,7 @@ class TestAssemblyTrackerRecovery:
         )
         assert ref["infall_lists"][1] == captured_1
 
-    def test_cheap_snapshot_frozen_unaffected_by_later_freeze(self):
+    def test_capture_frozen_unaffected_by_later_freeze(self):
         tracker = AssemblyTracker(n_sat_history=2)
         _update(tracker, 
             snapshot_id=0,
@@ -387,7 +387,7 @@ class TestAssemblyTrackerRecovery:
             birth_map={1: {10}, 2: {20}},
             satellites_map={},
         )
-        ref = tracker._cheap_snapshot()
+        ref = tracker.capture()
         captured_frozen = set(ref["frozen"])
         assert 1 not in captured_frozen
         _update(tracker, 
@@ -561,4 +561,4 @@ class TestAssemblyTrackerContract:
         old = {"infall_lists": {}, "previous_birth_map": {}, "frozen": set(), "sat_history_buffer": [], "last_snapshot": 0,
                "unbound_default": -1}
         with pytest.raises(ValueError, match="earlier assembly tracker"):
-            tracker._set_state(old)
+            tracker.restore(old)

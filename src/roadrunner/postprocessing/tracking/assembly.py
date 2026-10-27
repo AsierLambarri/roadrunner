@@ -301,7 +301,7 @@ class AssemblyTracker:
         """
         return self._infall_lists
 
-    def _cheap_snapshot(self):
+    def capture(self):
         """Cheap, checkpoint-safe reference capture (C02).
 
         O(n_galaxies), not O(total particles ever accreted): safe to
@@ -314,7 +314,7 @@ class AssemblyTracker:
         Returns
         -------
         ref : dict
-            Pass to :meth:`_serialize` to get a checkpoint-write-safe,
+            Pass to :meth:`serialize` to get a checkpoint-write-safe,
             fully independent form (only worth doing at actual
             checkpoint-write time, not every snapshot).
         """
@@ -326,18 +326,9 @@ class AssemblyTracker:
             "unbound_default": self._unbound_default,
         }
 
-    def _get_state(self):
-        """Serialise the tracker state for checkpointing.
-
-        Returns
-        -------
-        state : dict
-        """
-        return self._serialize(self._cheap_snapshot())
-
     @staticmethod
-    def _serialize(ref):
-        """Convert a :meth:`_cheap_snapshot` reference into a fully
+    def serialize(ref):
+        """Convert a :meth:`capture` reference into a fully
         independent, plain-container form safe for pickling/disk
         checkpointing.
 
@@ -347,7 +338,7 @@ class AssemblyTracker:
         Parameters
         ----------
         ref : dict
-            Output of :meth:`_cheap_snapshot`.
+            Output of :meth:`capture`.
 
         Returns
         -------
@@ -362,7 +353,7 @@ class AssemblyTracker:
             "unbound_default": ref["unbound_default"],
         }
 
-    def _set_state(self, state):
+    def restore(self, state):
         """Restore tracker state from a checkpoint.
 
         Parameters

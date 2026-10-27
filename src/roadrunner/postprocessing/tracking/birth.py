@@ -39,7 +39,7 @@ costs what changed, not what exists.
 The state is kept as NumPy arrays: open particles sorted by ID, one
 evidence row per (open particle, host), and the finalised records. Arrays
 are replaced, never edited in place (and are read-only), so a
-``_cheap_snapshot()`` reference stays valid across later updates (C02).
+``capture()`` reference stays valid across later updates (C02).
 """
 
 import numpy as np
@@ -420,7 +420,7 @@ class BirthTracker:
         return float(self._act["lag"][self._act["pid"] == particle_id][0])
 
     # ── checkpointing ──────────────────────────────────────────────────
-    def _cheap_snapshot(self):
+    def capture(self):
         """Cheap, checkpoint-safe reference capture (C02).
 
         Every array is replaced rather than edited by later updates (and
@@ -429,7 +429,7 @@ class BirthTracker:
         Returns
         -------
         ref : dict
-            Pass to :meth:`_serialize` for a plain, fully independent form.
+            Pass to :meth:`serialize` for a plain, fully independent form.
         """
         return {
             "act": dict(self._act),
@@ -440,23 +440,14 @@ class BirthTracker:
             "last_snapshot": self._last_snapshot,
         }
 
-    def _get_state(self):
-        """Serialise the tracker state for checkpointing.
-
-        Returns
-        -------
-        state : dict
-        """
-        return self._serialize(self._cheap_snapshot())
-
     @staticmethod
-    def _serialize(ref):
-        """Convert a :meth:`_cheap_snapshot` reference into its checkpoint form.
+    def serialize(ref):
+        """Convert a :meth:`capture` reference into its checkpoint form.
 
         Parameters
         ----------
         ref : dict
-            Output of :meth:`_cheap_snapshot`.
+            Output of :meth:`capture`.
 
         Returns
         -------
@@ -472,7 +463,7 @@ class BirthTracker:
             "last_snapshot": ref["last_snapshot"],
         }
 
-    def _set_state(self, state):
+    def restore(self, state):
         """Restore tracker state from a checkpoint.
 
         Parameters

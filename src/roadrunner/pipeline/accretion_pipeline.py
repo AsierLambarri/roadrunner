@@ -10,6 +10,7 @@ import signal
 import time
 import traceback
 import warnings
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,30 @@ from roadrunner.physics.merger_tree import MergerTreeHandlerCSV
 from roadrunner.readers.equivalence import EquivalenceTable
 from roadrunner.readers.snapshot import SnapshotReader
 from roadrunner.pipeline.snapshot_orchestrator import SnapshotOrchestrator
+
+
+class ResumePoint(NamedTuple):
+    """What a failed run keeps of the last snapshot that fully completed: the state its checkpoint is written from.
+
+    The trackers are held as references (``capture``), which stay valid however far the failing snapshot got (C02).
+
+    Attributes
+    ----------
+    snap_id : int or None
+        The snapshot; ``None`` when nothing has completed yet, and the references then hold the untouched pre-run state.
+    previous_resp_sim : SparseCSC or None
+    fitted_parameters : dict or None
+    plausibility_state : dict or None
+    birth_ref, assembly_ref : dict or None
+        ``capture()`` of the trackers (``None`` without trackers).
+    """
+
+    snap_id: int | None
+    previous_resp_sim: SparseCSC | None
+    fitted_parameters: dict | None
+    plausibility_state: dict | None
+    birth_ref: dict | None
+    assembly_ref: dict | None
 
 
 class AccretionPipeline:
@@ -158,21 +183,14 @@ class AccretionPipeline:
         )
 
         t_start = time.time()
-        # last_good: (snap_id, previous_resp_sim, fitted_parameters,
-        # plausibility_state, birth_tracker_ref, assembly_tracker_ref) for the last snapshot
-        # that fully completed -- seeded from the checkpoint on a real
-        # resume. When nothing has completed yet, capture the trackers'
-        # still-untouched state here, before the first snapshot can
-        # mutate them (C02): reading them live at failure time instead
-        # would pick up whatever that first snapshot already applied.
+        # last_good: the resume point of the last snapshot that fully
+        # completed -- seeded from the checkpoint on a real resume. When
+        # nothing has completed yet, capture the trackers' still-untouched
+        # state here, before the first snapshot can mutate them (C02):
+        # reading them live at failure time instead would pick up whatever
+        # that first snapshot already applied.
         if last_good is None:
-            bt = self.orchestrator.birth_tracker
-            at = self.orchestrator.assembly_tracker
-            last_good = (
-                None, previous_resp_sim, None, None,
-                bt._cheap_snapshot() if bt is not None else None,
-                at._cheap_snapshot() if at is not None else None,
-            )
+            last_good = self._resume_point(None, previous_resp_sim, None, None)
         for idx in range(start_idx, len(snapshot_ids)):
             snap_id = snapshot_ids[idx]
             print(f"\nSnapshot {snap_id}  ({idx + 1}/{len(snapshot_ids)})")
@@ -199,19 +217,25 @@ class AccretionPipeline:
             if snap_result is None:
                 continue  # this snapshot had zero halos or zero particles
             previous_resp_sim = snap_result.previous_resp_sim
-            bt = self.orchestrator.birth_tracker
-            at = self.orchestrator.assembly_tracker
             plaus = self._plausibility()
-            last_good = (
+            last_good = self._resume_point(
                 snap_id, previous_resp_sim, snap_result.result.fitted_parameters,
                 plaus.state if plaus is not None else None,
-                bt._cheap_snapshot() if bt is not None else None,
-                at._cheap_snapshot() if at is not None else None,
             )
             self._write_progress(snapshot_ids, snap_id, False)
 
         self._finalize(t_start)
         self._write_progress(snapshot_ids, snapshot_ids[-1], True)
+
+    def _resume_point(self, snap_id, previous_resp_sim, fitted_parameters, plausibility_state) -> ResumePoint:
+        """The resume point of the trackers as they are now."""
+        bt = self.orchestrator.birth_tracker
+        at = self.orchestrator.assembly_tracker
+        return ResumePoint(
+            snap_id, previous_resp_sim, fitted_parameters, plausibility_state,
+            bt.capture() if bt is not None else None,
+            at.capture() if at is not None else None,
+        )
 
     def _save_error_checkpoint(self, last_good, snapshot_ids) -> None:
         """Persist resume state after a snapshot failure (best effort).
@@ -238,13 +262,9 @@ class AccretionPipeline:
 
         Parameters
         ----------
-        last_good : tuple
-            ``(snap_id, previous_resp_sim, fitted_parameters,
-            plausibility_state, birth_tracker_ref, assembly_tracker_ref)``
-            for the last
-            snapshot that fully completed. ``snap_id`` is ``None`` when
-            nothing has completed yet, and the tracker references then
-            hold the untouched pre-run state.
+        last_good : ResumePoint
+            The last snapshot that fully completed (``snap_id`` is ``None``
+            when nothing has completed yet).
         snapshot_ids : list of int
         """
         deferred = {}
@@ -258,26 +278,25 @@ class AccretionPipeline:
             except ValueError:
                 old_handler = None  # non-main thread: proceed unguarded
             try:
-                snap_id, previous_resp_sim, fitted_parameters, plaus_state, bt_ref, at_ref = last_good
                 bt_state = (
-                    self.orchestrator.birth_tracker._serialize(bt_ref)
-                    if bt_ref is not None else None
+                    self.orchestrator.birth_tracker.serialize(last_good.birth_ref)
+                    if last_good.birth_ref is not None else None
                 )
                 at_state = (
-                    self.orchestrator.assembly_tracker._serialize(at_ref)
-                    if at_ref is not None else None
+                    self.orchestrator.assembly_tracker.serialize(last_good.assembly_ref)
+                    if last_good.assembly_ref is not None else None
                 )
                 save_checkpoint(self._checkpoint_path, {
-                    "last_snapshot": snap_id,
+                    "last_snapshot": last_good.snap_id,
                     "snapshots": list(snapshot_ids),
                     "seed": self._base_seed,
                     "precision": {
                         "data": np.dtype(data_dtype()).name,
                         "math": np.dtype(math_dtype()).name,
                     },
-                    "previous_resp": previous_resp_sim,
-                    "previous_parameters": fitted_parameters,
-                    "plausibility": plaus_state,
+                    "previous_resp": last_good.previous_resp_sim,
+                    "previous_parameters": last_good.fitted_parameters,
+                    "plausibility": last_good.plausibility_state,
                     "birth_tracker": bt_state,
                     "assembly_tracker": at_state,
                 })
@@ -386,10 +405,8 @@ class AccretionPipeline:
         previous_resp_sim : SparseCSC or None
         start_idx : int
             Index in ``snapshot_ids`` to resume from.
-        last_good : tuple or None
-            ``(last_completed, previous_resp_sim, previous_parameters,
-            plausibility_state, birth_tracker_ref, assembly_tracker_ref)``,
-            seeded from this
+        last_good : ResumePoint or None
+            Seeded from this
             checkpoint's own (just-restored) state so a failure on the
             very first snapshot of this resumed run has a correct
             fallback to persist (C02) -- or ``None`` if the checkpoint
@@ -479,10 +496,10 @@ class AccretionPipeline:
         at = self.orchestrator.assembly_tracker
         bt_state = ckpt.get("birth_tracker")
         if bt_state is not None and bt is not None:
-            bt._set_state(bt_state)
+            bt.restore(bt_state)
         at_state = ckpt.get("assembly_tracker")
         if at_state is not None and at is not None:
-            at._set_state(at_state)
+            at.restore(at_state)
 
         # Seed `last_good` from this checkpoint's own (just-restored)
         # state (C02): if the very first snapshot of this resumed run
@@ -491,11 +508,7 @@ class AccretionPipeline:
         # with a bogus "nothing succeeded" checkpoint.
         last_good = None
         if last_completed is not None:
-            last_good = (
-                last_completed, previous_resp_sim, previous_parameters, plaus_state,
-                bt._cheap_snapshot() if bt is not None else None,
-                at._cheap_snapshot() if at is not None else None,
-            )
+            last_good = self._resume_point(last_completed, previous_resp_sim, previous_parameters, plaus_state)
 
         if next_idx >= len(snapshot_ids):
             print(f"Snapshot {last_completed} was the last snapshot. Nothing to resume.")
