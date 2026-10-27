@@ -70,6 +70,8 @@ def build_config_from_args(args):
         search_factor=args.search_factor,
         track_births=args.track_births,
         birth_budget=args.birth_budget,
+        birth_window_scale=args.birth_window_scale,
+        birth_max_window=args.birth_max_window,
         birth_min_initial_resp=args.birth_min_initial_resp,
         output_dir=args.output_dir,
         resume=args.resume,
@@ -146,6 +148,8 @@ def main():
     parser.add_argument("--track-births", type=lambda x: x.lower() == "true",
                         default=True)
     parser.add_argument("--birth-budget", type=float, default=5.0)
+    parser.add_argument("--birth-window-scale", type=float, default=1.0)
+    parser.add_argument("--birth-max-window", type=float, default=float("inf"))
     parser.add_argument("--birth-min-initial-resp", type=float, default=0.01)
 
     # Output

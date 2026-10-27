@@ -138,6 +138,40 @@ class TestWindow:
         assert tracker.window(2) == pytest.approx(0.3)
         assert tracker.window(3) == MAX_DYN_TIMESCALE  # nothing to average
 
+    def test_window_scale_multiplies_the_mean_time(self):
+        tracker = BirthTracker(window_scale=3.0)
+        _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.2, 0.4], [0.6, 0.4])
+        assert tracker.window(1) == pytest.approx(3.0 * (0.6 * 0.2 + 0.4 * 0.4))
+
+    def test_max_window_caps_the_scaled_window(self):
+        tracker = BirthTracker(window_scale=3.0, max_window=0.4)
+        _update(
+            tracker, 0.0, 0,
+            particles=[1, 1, 2, 2],
+            hosts=[10, 20, 10, 20],
+            dynamical_times=[0.05, 0.05, 0.3, 0.3],
+            weights=[0.6, 0.4, 0.6, 0.4],
+        )
+        assert tracker.window(1) == pytest.approx(0.15)     # 3 x 0.05, under the cap
+        assert tracker.window(2) == pytest.approx(0.4)      # 3 x 0.3 = 0.9, capped
+
+    def test_a_particle_without_times_gets_the_unscaled_default_window(self):
+        tracker = BirthTracker(window_scale=3.0)
+        _update(tracker, 0.0, 0, [1, 1], [10, 20], [NAN, NAN], [0.6, 0.4])
+        assert tracker.window(1) == MAX_DYN_TIMESCALE
+        capped = BirthTracker(window_scale=3.0, max_window=0.1)
+        _update(capped, 0.0, 0, [1, 1], [10, 20], [NAN, NAN], [0.6, 0.4])
+        assert capped.window(1) == pytest.approx(0.1)
+
+    def test_a_longer_window_keeps_the_evidence_flowing(self):
+        # L = 0.02: an output 0.05 later is past the window; with a scale of 3
+        # (L = 0.06) it still counts
+        for scale, still_open in ((1.0, False), (3.0, True)):
+            tracker = BirthTracker(window_scale=scale)
+            _update(tracker, 0.0, 0, [1, 1], [10, 20], [0.02, 0.02], [0.55, 0.45])
+            _update(tracker, 0.05, 1, [1, 1], [10, 20], [0.02, 0.02], [0.1, 0.9])
+            assert (1 in _open(tracker)) == still_open
+
     def test_window_closes_after_the_lag(self):
         tracker = BirthTracker()
         # L = 0.2
@@ -488,6 +522,15 @@ class TestCheckpoint:
         self._run(restored, range(4, 8))
         assert restored.finalize().equals(uninterrupted.finalize())
 
+    def test_the_window_settings_survive_a_checkpoint(self):
+        tracker = BirthTracker(
+            budget=3.0, min_initial_resp=1e-9, window_scale=2.0, max_window=0.4
+        )
+        restored = BirthTracker()
+        restored.restore(tracker.serialize(tracker.capture()))
+        assert restored.window_scale == 2.0 and restored.max_window == 0.4
+        assert restored.budget == 3.0 and restored.min_initial_resp == 1e-9
+
     def test_an_earlier_tracker_checkpoint_is_refused(self):
         tracker = BirthTracker()
         earlier = {
@@ -499,6 +542,9 @@ class TestCheckpoint:
         older = {"active": {}, "finalized": {}, "heap": [], "last_snapshot": 0}
         with pytest.raises(ValueError, match="earlier birth tracker"):
             tracker.restore(older)
+        before_the_window_settings = {"format": 5}
+        with pytest.raises(ValueError, match="earlier birth tracker"):
+            tracker.restore(before_the_window_settings)
 
     def test_capture_unaffected_by_later_update(self):
         # C02: a reference captured now must survive later updates untouched
@@ -534,11 +580,19 @@ class _Reference:
         The evidence budget ``N``.
     min_initial_resp : float
         The first-output share a host must exceed to compete.
+    window_scale : float, default=1.0
+        Factor on the weighted mean dynamical time that gives the window.
+    max_window : float, default=inf
+        Upper limit of the window.
     """
 
-    def __init__(self, budget, min_initial_resp):
+    def __init__(
+        self, budget, min_initial_resp, window_scale=1.0, max_window=np.inf
+    ):
         self.budget = budget
         self.min_initial_resp = min_initial_resp
+        self.window_scale = window_scale
+        self.max_window = max_window
         self.open = {}
         self.done = {}
 
@@ -593,11 +647,12 @@ class _Reference:
         ]
         with_time = [i for i in candidates if np.isfinite(times[i]) and times[i] > 0]
         if with_time:
-            window = sum(share[i] * times[i] for i in with_time) / sum(
+            mean_time = sum(share[i] * times[i] for i in with_time) / sum(
                 share[i] for i in with_time
             )
+            window = min(self.window_scale * mean_time, self.max_window)
         else:
-            window = MAX_DYN_TIMESCALE
+            window = min(MAX_DYN_TIMESCALE, self.max_window)
         self.open[particle] = {
             "first_time": time,
             "last_time": time,
@@ -711,13 +766,28 @@ def _random_feeds(rng, n_particles=120, n_snapshots=25, n_galaxies=7):
 
 
 @pytest.mark.parametrize(
-    "budget, min_initial_resp",
-    [(5.0, 0.01), (2.0, 0.01), (7.0, 0.0), (5.0, 0.2), (3.0, 0.4)],
+    "budget, min_initial_resp, window_scale, max_window",
+    [
+        (5.0, 0.01, 1.0, np.inf),
+        (2.0, 0.01, 1.0, np.inf),
+        (7.0, 0.0, 1.0, np.inf),
+        (5.0, 0.2, 1.0, np.inf),
+        (3.0, 0.4, 1.0, np.inf),
+        (5.0, 1e-9, 3.0, 0.4),
+        (5.0, 0.01, 2.0, 0.1),
+    ],
 )
-def test_matches_the_reference_on_random_feeds(budget, min_initial_resp):
+def test_matches_the_reference_on_random_feeds(
+    budget, min_initial_resp, window_scale, max_window
+):
     for seed in range(8):
-        tracker = BirthTracker(budget=budget, min_initial_resp=min_initial_resp)
-        reference = _Reference(budget, min_initial_resp)
+        tracker = BirthTracker(
+            budget=budget,
+            min_initial_resp=min_initial_resp,
+            window_scale=window_scale,
+            max_window=max_window,
+        )
+        reference = _Reference(budget, min_initial_resp, window_scale, max_window)
         # the birth hosts as a consumer of the changes sees them
         leaders = {}
         feeds = _random_feeds(np.random.default_rng(seed))

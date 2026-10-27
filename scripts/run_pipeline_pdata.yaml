@@ -34,6 +34,8 @@ dynstate_snapshots: [-2, -1]
 
 track_births: true
 birth_budget: 5.0
+birth_window_scale: 1.0
+birth_max_window: .inf
 birth_min_initial_resp: 0.01
 
 output_dir: test_output/halo685x12_pdata

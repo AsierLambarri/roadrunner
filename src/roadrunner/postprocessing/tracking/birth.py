@@ -17,11 +17,12 @@ further apart count fully. When the window closes the candidate with the
 most evidence is the birth host, and its softmax probability is kept.
 
 The window ``L`` is the responsibility-weighted arithmetic mean of the
-candidates' own dynamical times (the ``dynamical_times`` of the pairs), and
-``tau_c = L / budget``. A look adds at most ``dt / tau_c`` nats, so the
-window adds at most ``budget`` nats in all: a particle whose first-output
-share is at least ``1 / (1 + exp(-budget))`` can never be overturned and is
-decided at once, as is one with a single candidate. Evidence is added only
+candidates' own dynamical times (the ``dynamical_times`` of the pairs), times
+``window_scale`` and at most ``max_window``, and ``tau_c = L / budget``. A
+look adds at most ``dt / tau_c`` nats, so the window adds at most ``budget``
+nats in all: a particle whose first-output share is at least
+``1 / (1 + exp(-budget))`` can never be overturned and is decided at once,
+as is one with a single candidate. Evidence is added only
 while every candidate is alive; after one has merged away the later
 outputs cannot tell the candidates apart, and the window closes.
 
@@ -53,7 +54,7 @@ from roadrunner.postprocessing.tracking.records import BirthChanges
 # Gyr: an output exactly at the end of the window still counts.
 _TIME_TOLERANCE = 1e-9
 # Checkpoint format of the tracker state.
-_FORMAT = 5
+_FORMAT = 6
 
 # What an update reports when no leader changed: no IDs, and no hosts left or entered.
 _NO_MOVES = (
@@ -280,6 +281,13 @@ class BirthTracker:
         Only the hosts whose first-output share is above this compete
         (``0``: every host the particle is bound to). A negative value lets
         any host compete and decides nothing at once.
+    window_scale : float, default=1.0
+        Factor on the weighted mean of the candidates' dynamical times that
+        gives the window ``L``. A particle none of whose candidates has a
+        dynamical time gets the window ``MAX_DYN_TIMESCALE``, unscaled.
+    max_window : float, default=inf
+        Upper limit of the window ``L``, in the unit of the dynamical times
+        (Gyr); ``inf`` for none.
 
     Attributes
     ----------
@@ -287,6 +295,10 @@ class BirthTracker:
         The evidence budget ``N``.
     min_initial_resp : float
         The first-output share a host must exceed to compete.
+    window_scale : float
+        The factor on the mean dynamical time.
+    max_window : float
+        The upper limit of the window.
 
     Notes
     -----
@@ -303,9 +315,13 @@ class BirthTracker:
       finalised, with all their IDs kept sorted to answer membership queries.
     """
 
-    def __init__(self, budget=5.0, min_initial_resp=0.01):
+    def __init__(
+        self, budget=5.0, min_initial_resp=0.01, window_scale=1.0, max_window=np.inf
+    ):
         self.budget = float(budget)
         self.min_initial_resp = float(min_initial_resp)
+        self.window_scale = float(window_scale)
+        self.max_window = float(max_window)
         self._decide_share = 1.0 / (1.0 + np.exp(-self.budget))
         self._last_snapshot = -1
         self._open_table = _empty_open_table()
@@ -647,11 +663,11 @@ class BirthTracker:
             time_weight * np.where(has_time, dynamical_times, 0.0), starts
         )
         has_any_time = weight_sum > 0
+        mean_time = weighted_time / np.where(has_any_time, weight_sum, 1.0)
         window = np.where(
-            has_any_time,
-            weighted_time / np.where(has_any_time, weight_sum, 1.0),
-            MAX_DYN_TIMESCALE,
+            has_any_time, self.window_scale * mean_time, MAX_DYN_TIMESCALE
         )
+        window = np.minimum(window, self.max_window)
 
         is_opened = ~is_decided
         n_opened = int(is_opened.sum())
@@ -858,6 +874,8 @@ class BirthTracker:
             "finalized_chunks": list(self._finalized_chunks),
             "budget": self.budget,
             "min_initial_resp": self.min_initial_resp,
+            "window_scale": self.window_scale,
+            "max_window": self.max_window,
             "last_snapshot": self._last_snapshot,
         }
 
@@ -883,6 +901,8 @@ class BirthTracker:
             "finalized": finalized,
             "budget": reference["budget"],
             "min_initial_resp": reference["min_initial_resp"],
+            "window_scale": reference["window_scale"],
+            "max_window": reference["max_window"],
             "last_snapshot": reference["last_snapshot"],
         }
 
@@ -907,6 +927,8 @@ class BirthTracker:
             )
         self.budget = state["budget"]
         self.min_initial_resp = state["min_initial_resp"]
+        self.window_scale = state["window_scale"]
+        self.max_window = state["max_window"]
         self._decide_share = 1.0 / (1.0 + np.exp(-self.budget))
         self._open_table = _freeze(dict(state["open_particles"]))
         self._evidence_table = _freeze(dict(state["evidence"]))

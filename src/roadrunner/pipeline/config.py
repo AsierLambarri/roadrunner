@@ -63,6 +63,8 @@ class RunConfig:
 
     track_births: bool = True
     birth_budget: float = 5.0
+    birth_window_scale: float = 1.0
+    birth_max_window: float = float("inf")
     birth_min_initial_resp: float = 0.01
     use_gmm_centers: bool = True
     min_particles_structural: int = 30
@@ -131,7 +133,8 @@ class RunConfig:
 
         for field_name in (
             "tol", "reg_covar", "search_factor", "birth_budget",
-            "birth_min_initial_resp", "float_atol", "ssc_alpha", "tempering",
+            "birth_window_scale", "birth_max_window", "birth_min_initial_resp",
+            "float_atol", "ssc_alpha", "tempering",
         ):
             val = getattr(self, field_name, None)
             if val is not None:
@@ -142,6 +145,14 @@ class RunConfig:
             raise ValueError(
                 "birth_budget must be > 0 (track_births: false switches the "
                 f"trackers off), got {self.birth_budget}"
+            )
+        if self.track_births and not self.birth_window_scale > 0:
+            raise ValueError(
+                f"birth_window_scale must be > 0, got {self.birth_window_scale}"
+            )
+        if self.track_births and not self.birth_max_window > 0:
+            raise ValueError(
+                f"birth_max_window must be > 0, got {self.birth_max_window}"
             )
 
         if self.selection_snapshot is not None:

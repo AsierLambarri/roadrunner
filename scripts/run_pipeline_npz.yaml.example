@@ -76,6 +76,8 @@ dynstate_snapshots: [-2, -1]   # Which snapshots get dynstate:
 # ── Birth tracker ────────────────────────────────────────────────────────────
 track_births: true     # Follow where each particle is born and each galaxy's assembly (false: neither tracker)
 birth_budget: 5.0       # Birth window in correlation times (must be > 0)
+birth_window_scale: 1.0     # Factor on the candidates' mean dynamical time that gives the birth window
+birth_max_window: .inf      # Upper limit of the birth window in Gyr (.inf: none)
 birth_min_initial_resp: 0.01    # Hosts competing for a birth: first-output share above this (0: all bound, < 0: any)
 
 # ── Output ───────────────────────────────────────────────────────────────────
