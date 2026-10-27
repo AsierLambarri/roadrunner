@@ -54,7 +54,7 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers
         plausibility=plausibility,
     )
 
-    bt = BirthTracker(factor=5, enforce_initial_hosts=False) if with_trackers else None
+    bt = BirthTracker(min_initial_resp=-1) if with_trackers else None
     at = AssemblyTracker(n_sat_history=2) if with_trackers else None
 
     orchestrator = SnapshotOrchestrator(

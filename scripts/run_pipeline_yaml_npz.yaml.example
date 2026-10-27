@@ -73,8 +73,8 @@ dynstate_snapshots: [-2, -1]   # Which snapshots get dynstate:
                                #   /path/snaps.txt → load from file
 
 # ── Birth tracker ────────────────────────────────────────────────────────────
-birth_window_factor: 5.0       # Birth scoring window (set ≤ 0 to disable)
-enforce_initial_hosts: true    # Keep particles in initial host galaxy
+birth_budget: 5.0       # Birth window in correlation times (set ≤ 0 to disable)
+birth_min_initial_resp: 0.01    # Hosts competing for a birth: first-output share above this (0: all bound, < 0: any)
 
 # ── Output ───────────────────────────────────────────────────────────────────
 output_dir: ./output

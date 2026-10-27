@@ -6,6 +6,8 @@ import numpy as np
 
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
 from roadrunner._defaults import GALAXY_ID, LOCAL_IDX, SIM_ID, UNBOUND, math_dtype
+from roadrunner.physics.constants import DYN_TIME_FACTOR
+from roadrunner.physics.timescales import pair_dynamical_timescales
 
 
 def responsibilities_to_sim(csc, snap_data: SnapshotData):
@@ -48,13 +50,16 @@ def responsibilities_from_sim(csc, snap_data: SnapshotData):
     return csc.remap_rows(src, dst)
 
 
-def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult) -> None:
+def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, ensemble) -> None:
     """Update the birth tracker with the current snapshot assignment.
 
     The evidence is soft: one (particle, host) pair per non-zero
-    responsibility, weighted by it. Particles without responsibilities
-    (unbound) count fully for ``UNBOUND``. Without a responsibility matrix
-    the hard assignment is used, one pair per particle with weight 1.
+    responsibility, weighted by it and carrying the particle's dynamical
+    time in that host. Particles without responsibilities (unbound) count
+    fully for ``UNBOUND``, without a dynamical time. The galaxies that exist
+    at this snapshot are the columns of the responsibility matrix. Without a
+    responsibility matrix the hard assignment is used, one pair per particle
+    with weight 1 and the particle's timescale.
 
     Parameters
     ----------
@@ -64,38 +69,40 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     result : AssignmentResult
         Assigner result containing particle assignment, responsibilities
         and timescales.
+    ensemble : HaloEnsemble
+        The halos the assignment was fit to, with boundness computed: the
+        source of the dynamical time of each pair.
     """
     df = result.particle_df
     arr_idx = df["array_index"].values
-    if "timescale" in df.columns:
-        timescales = df["timescale"].values
-    else:
-        timescales = np.full(len(df), 0.1, dtype=math_dtype())
 
     resp = result.responsibilities
     if resp is None or len(resp) == 0:
-        rows, hosts, weights = arr_idx, df["Sub_tree_id"].values, None
+        timescales = df["timescale"].values if "timescale" in df.columns else np.full(len(df), 0.1, dtype=math_dtype())
+        rows, hosts, weights, alive = arr_idx, df["Sub_tree_id"].values, None, None
     else:
         sizes = [len(c) for c in resp.column_indices]
         rows = np.concatenate(resp.column_indices).astype(np.int64)
         hosts = np.repeat(np.asarray(resp.column_id, dtype=GALAXY_ID), sizes)
         weights = np.concatenate(resp.column_values).astype(math_dtype(), copy=False)
+        timescales = pair_dynamical_timescales(ensemble, resp, DYN_TIME_FACTOR)
         positive = weights > 0
-        rows, hosts, weights = rows[positive], hosts[positive], weights[positive]
+        rows, hosts, weights, timescales = rows[positive], hosts[positive], weights[positive], timescales[positive]
         unbound = arr_idx[~np.isin(arr_idx, rows)]
         rows = np.concatenate([rows, unbound])
         hosts = np.concatenate([hosts, np.full(unbound.size, UNBOUND, dtype=GALAXY_ID)])
         weights = np.concatenate([weights, np.ones(unbound.size, dtype=weights.dtype)])
+        timescales = np.concatenate([timescales, np.full(unbound.size, np.nan)])
+        alive = resp.column_id
 
-    tau_by_row = np.empty(snap_data.index.size, dtype=np.asarray(timescales).dtype)
-    tau_by_row[arr_idx] = timescales
     birth_tracker.update(
         t_snap=snap_data.time,
         snapshot_id=snap_id,
         particle_ids=snap_data.index[rows],
         host_ids=hosts,
-        timescales=tau_by_row[rows],
+        timescales=timescales,
         weights=weights,
+        alive=alive,
     )
 
 

@@ -14,8 +14,8 @@ class TestRunConfigDefaults:
         assert c.max_iter == 10
         assert c.tol == 1e-2
         assert c.reg_covar == 1e-6
-        assert c.birth_window_factor == 5.0
-        assert c.enforce_initial_hosts is True
+        assert c.birth_budget == 5.0
+        assert c.birth_min_initial_resp == 0.01
         assert c.output_dir == "./output"
         assert c.save_particles is True
         assert c.save_assignment is True
@@ -75,8 +75,8 @@ class TestRunConfigFromDict:
             n_los=25,
             search_factor=2.0,
             min_particles=5,
-            birth_window_factor=3.0,
-            enforce_initial_hosts=False,
+            birth_budget=3.0,
+            birth_min_initial_resp=-1,
             output_dir="/out",
             save_particles=False,
             save_assignment=False,
@@ -85,7 +85,7 @@ class TestRunConfigFromDict:
         assert c.merger_tree_path == "/path/tree.csv"
         assert c.accretion_id == 42
         assert c.n_los == 25
-        assert c.enforce_initial_hosts is False
+        assert c.birth_min_initial_resp == -1.0
 
 
 class TestRunConfigFrozen:

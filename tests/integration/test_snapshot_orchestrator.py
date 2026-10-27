@@ -78,7 +78,7 @@ class TestSnapshotOrchestratorWithoutTrackers:
 class TestSnapshotOrchestratorWithTrackers:
     def test_trackers_accumulate_state_across_snapshots(self):
         tree, coords, masses, snap_data = _load_mock()
-        bt = BirthTracker(factor=5, enforce_initial_hosts=False)
+        bt = BirthTracker(min_initial_resp=-1)
         at = AssemblyTracker(n_sat_history=2)
         orchestrator = SnapshotOrchestrator(
             processing_config=ProcessingConfig(halo_model="kepler"),

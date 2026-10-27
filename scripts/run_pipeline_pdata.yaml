@@ -32,8 +32,8 @@ ssc_nmin: 30
 ssc_alpha: 0.9
 dynstate_snapshots: [-2, -1]
 
-birth_window_factor: 5.0
-enforce_initial_hosts: true
+birth_budget: 5.0
+birth_min_initial_resp: 0.01
 
 output_dir: test_output/halo685x12_pdata
 save_particles: true

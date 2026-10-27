@@ -61,8 +61,8 @@ class RunConfig:
     comoving: bool = True
     stars: str = "free"
 
-    birth_window_factor: float = 5.0
-    enforce_initial_hosts: bool = True
+    birth_budget: float = 5.0
+    birth_min_initial_resp: float = 0.01
     use_gmm_centers: bool = True
     min_particles_structural: int = 30
     ssc_nmin: int = 30
@@ -130,7 +130,7 @@ class RunConfig:
 
         for field_name in (
             "tol", "reg_covar", "search_factor",
-            "birth_window_factor", "float_atol", "ssc_alpha", "tempering",
+            "birth_budget", "birth_min_initial_resp", "float_atol", "ssc_alpha", "tempering",
         ):
             val = getattr(self, field_name, None)
             if val is not None:

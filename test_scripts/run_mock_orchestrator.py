@@ -86,7 +86,7 @@ def main():
         min_particles=10, reg_covar=1e-6, prior_type="", verbose=0,
     )
 
-    bt = BirthTracker(factor=5, enforce_initial_hosts=False)
+    bt = BirthTracker(budget=5, min_initial_resp=-1)
     at = AssemblyTracker(n_sat_history=2)
 
     orchestrator = SnapshotOrchestrator(

@@ -96,7 +96,7 @@ def main():
     parser.add_argument("--search-factor", type=float, default=1.0)
 
     # Tracking
-    parser.add_argument("--birth-window", type=float, default=5.0)
+    parser.add_argument("--birth-budget", type=float, default=5.0)
     parser.add_argument("--no-birth", action="store_true",
                         help="Disable birth tracker")
 
@@ -161,8 +161,8 @@ def main():
     # ── 6. Trackers ────────────────────────────────────────────────
     birth_tracker = (
         BirthTracker(
-            factor=args.birth_window,
-            enforce_initial_hosts=False,
+            budget=args.birth_budget,
+            min_initial_resp=-1,
         ) if not args.no_birth else None
     )
     assembly_tracker = (

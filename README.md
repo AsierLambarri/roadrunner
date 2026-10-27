@@ -63,7 +63,7 @@ python scripts/run_pipeline.py \
 
 Notes on `run_pipeline.py`:
 
-- Flags: `--reader-type {yt,npz,pdata}`, `--code`, `--ptype`, the `--index-field`, `--mass-field`, `--position-field` and `--velocity-field` mappings, `--extra-field NAME:YT_FIELD` and `--assign-field ATTR` (both repeatable), `--halo-id`, `--start-snapshot`, `--end-snapshot`, `--assignment-method {gmm,bgmm}`, `--use-bgmm-priors true|false`, `--data-precision`, `--math-precision`, `--cov-type`, `--max-iter`, `--tol`, `--min-particles`, `--halo-model {kepler,nfw}`, `--n-los`, `--search-factor`, `--birth-window`, `--output-dir`, `--resume`, `--save-particles`, `--save-assignment`.
+- Flags: `--reader-type {yt,npz,pdata}`, `--code`, `--ptype`, the `--index-field`, `--mass-field`, `--position-field` and `--velocity-field` mappings, `--extra-field NAME:YT_FIELD` and `--assign-field ATTR` (both repeatable), `--halo-id`, `--start-snapshot`, `--end-snapshot`, `--assignment-method {gmm,bgmm}`, `--use-bgmm-priors true|false`, `--data-precision`, `--math-precision`, `--cov-type`, `--max-iter`, `--tol`, `--min-particles`, `--halo-model {kepler,nfw}`, `--n-los`, `--search-factor`, `--birth-budget`, `--birth-min-initial-resp`, `--output-dir`, `--resume`, `--save-particles`, `--save-assignment`.
 - `--save-particles` is off unless you pass it. In YAML, `save_particles` defaults to true.
 - `--config FILE` replaces every other flag with the YAML contents. argparse still requires `--merger-tree` and `--equivalence` to be present, so use `run_pipeline_yaml.py` for YAML runs.
 - Options without a flag (`mass_weighting`, `reg_covar`, `seed`, `threads`, the selection keys, centring keys, ...) are available only through YAML.
@@ -159,10 +159,10 @@ The hard label of each particle is the argmax of its responsibilities. Particles
 
 ### 5. Trackers (`postprocessing/tracking/`)
 
-- **`BirthTracker`:** a particle is born in a galaxy it is bound to when it first appears. Evidence, weighted by responsibility and by a window in units of the particle's dynamical timescale, is collected for `birth_window_factor x timescale`. The host with the most evidence becomes the birth host. With `enforce_initial_hosts`, only the hosts the particle was bound to at first appearance can compete.
+- **`BirthTracker`:** a particle is born in a galaxy it is bound to when it first appears. Each candidate host starts with its share of the particle's responsibility at that first output, and the outputs that follow within a window are fused in: each multiplies in a leaky persistence likelihood `ln[lam + (1 - lam) q]`, `q` the particle's share in the host at that output and `lam = exp(-dt / tau_c)`, so outputs closer than the correlation time `tau_c` count little. The window `L` is the responsibility-weighted mean of the particle's dynamical times in the candidate hosts, `tau_c = L / birth_budget`, and it closes early when a candidate galaxy merges away. The host with the most evidence becomes the birth host, with its probability `p_birth`. A particle whose first-output share is at least `1 / (1 + exp(-birth_budget))`, or that has a single candidate, is decided at once. Only the hosts above `birth_min_initial_resp` compete (and always the largest).
 - **`AssemblyTracker`:** keeps an infall list per galaxy, meaning every particle it has ever acquired. That includes stars born in it, stars it acquired directly, and the infall lists of satellites that merged into it, using the merger-tree satellite relations.
 
-Setting `birth_window_factor <= 0` turns off both trackers.
+Setting `birth_budget <= 0` turns off both trackers.
 
 ### 6. Reduction (`pipeline/reduction.py`, `postprocessing/`)
 
@@ -228,8 +228,8 @@ All keys are fields of the frozen dataclass `RunConfig` (`src/roadrunner/pipelin
 | `min_particles_structural` | `30` | Minimum particles for structural properties. |
 | `ssc_nmin`, `ssc_alpha` | `30`, `0.9` | Shrinking-sphere minimum particles (raised to at least `min_particles_structural`) and shrink factor. |
 | `dynstate_snapshots` | `[-2, -1]` | Snapshots that get the Riley criterion: `null` (all), an int, a list (negative = from end), or a path to a text file of IDs. |
-| `birth_window_factor` | `5.0` | Birth window in dynamical timescales. `<= 0` disables both trackers. |
-| `enforce_initial_hosts` | `true` | Restrict birth hosts to the hosts bound at first appearance. |
+| `birth_budget` | `5.0` | Birth window in correlation times (the later outputs add at most this many nats of evidence). `<= 0` disables both trackers. |
+| `birth_min_initial_resp` | `0.01` | Only the hosts with a first-output share above this compete for a particle's birth (the largest always does). `0`: every bound host. `< 0`: any host, and nothing is decided at once. |
 
 **Run and output**
 
@@ -269,7 +269,7 @@ checkpoint.zst                   (after a failure)
 | `snapshots/<id>/galaxy_properties` | `Sub_tree_id`, `mb_host_id`, `position_x/y/z`, `velocity_x/y/z`, `Mtot`, `r20`, `rh`, `r80`, `Rhp`, `sigma`, `sigma_los`, `r_t`. Attribute `time`. |
 | `snapshots/<id>/riley_criterion` | `Sub_tree_id`, `mstar`, `f_bound`, `sigma50`, `dynstate`. Only on `dynstate_snapshots`. |
 | `snapshots/<id>/satellite_relations/<host_id>` | Satellite IDs of each host. |
-| `final/births` | `particle_index` (simulation ID), `birth_id` (birth galaxy). |
+| `final/births` | `particle_index` (simulation ID), `birth_id` (birth galaxy), `p_birth` (its probability). |
 | `final/assembly` | `particle_index`, `galaxy_id`: one row per particle in each galaxy's infall list. |
 
 A star in galaxy G's assembly set is in situ if its `birth_id == G`, and accreted otherwise. `roadrunner.io.HDF5CatalogueReader` reads these tables (`read_header`, `read_galaxy_properties`, `read_riley_criterion`, `read_births`, `read_assembly`).

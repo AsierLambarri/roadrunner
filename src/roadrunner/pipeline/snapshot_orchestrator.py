@@ -112,7 +112,7 @@ class SnapshotOrchestrator:
         )
 
         if self.birth_tracker is not None:
-            update_birth_tracker(self.birth_tracker, snap_id, snap_data, result)
+            update_birth_tracker(self.birth_tracker, snap_id, snap_data, result, ensemble)
 
         pop_ids = set(ensemble.sub_tree_ids[ensemble.populated_indices()])
         # Complete over the alive (populated) halos: every one is a key,

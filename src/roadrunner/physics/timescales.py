@@ -58,6 +58,40 @@ def compute_particle_dynamical_timescales(particle_df, ensemble, groups, td_fact
     return particle_df
 
 
+def pair_dynamical_timescales(ensemble, responsibilities, td_factor=1.0):
+    """Dynamical time of every (particle, galaxy) entry of a responsibility matrix.
+
+    Where :func:`compute_particle_dynamical_timescales` keeps the largest
+    time over the galaxies a particle is bound to, this gives the time the
+    boundness stored for the particle in each galaxy.
+
+    Parameters
+    ----------
+    ensemble : HaloEnsemble
+        The halos the responsibilities were fit to, with boundness computed.
+    responsibilities : SparseCSC
+        Responsibility matrix keyed by array index; its columns are halos of the ensemble.
+    td_factor : float, default=1.0
+        Multiplicative factor applied to the raw dynamical time.
+
+    Returns
+    -------
+    t_dyn : ndarray of float64
+        One value per entry, in the order of ``np.concatenate(responsibilities.column_indices)``;
+        ``NaN`` for an entry the halo holds no bound particle for.
+    """
+    _, csc_t = ensemble.get_particles()
+    column = {int(g): j for j, g in enumerate(csc_t.column_id)}
+    out = []
+    for g, rows in zip(responsibilities.column_id, responsibilities.column_indices):
+        j = column[int(g)]
+        bound = csc_t.column_indices[j]                              # sorted by particle index (C06)
+        tdyn = np.append(csc_t.column_values[j].astype(np.float64) * td_factor, np.nan)
+        pos = np.searchsorted(bound, rows)
+        out.append(np.where(np.append(bound, -1)[pos] == rows, tdyn[pos], np.nan))
+    return np.concatenate(out) if out else np.empty(0)
+
+
 def compute_tidal_radius(potential, satellite_mass, xyz):
     """Compute the tidal radius of a satellite in a host potential.
 

@@ -23,7 +23,7 @@ from contextlib import contextmanager
 import numpy as np
 
 # ── Birth tracker ──────────────────────────────────────────────────
-BIRTH_GAUSSIAN_WIDTH = 0.3        # width of the gaussian window function
+BIRTH_LATE_PRIOR = 0.01            # prior share of a host first seen after the particle's first output (tracker with min_initial_resp < 0)
 
 # ── Galaxy properties ──────────────────────────────────────────────
 MIN_PARTICLES_STRUCTURAL = 30      # min particles for rh/sigma/props
@@ -156,7 +156,7 @@ UNBOUND = MISSING = -1
 
 
 __all__ = [
-    "BIRTH_GAUSSIAN_WIDTH",
+    "BIRTH_LATE_PRIOR",
     "MIN_PARTICLES_STRUCTURAL",
     "FRAGMENT_THRESHOLD",
     "MASS_FRACTION_R20",

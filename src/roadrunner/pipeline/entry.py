@@ -170,9 +170,9 @@ def _run(config, equiv_table, snapshot_reader):
     )
 
     birth_tracker = BirthTracker(
-        factor=config.birth_window_factor,
-        enforce_initial_hosts=config.enforce_initial_hosts,
-    ) if config.birth_window_factor > 0 else None
+        budget=config.birth_budget,
+        min_initial_resp=config.birth_min_initial_resp,
+    ) if config.birth_budget > 0 else None
     assembly_tracker = (
         AssemblyTracker() if birth_tracker is not None else None
     )
