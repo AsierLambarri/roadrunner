@@ -6,24 +6,60 @@ import pytest
 from roadrunner.postprocessing.tracking.assembly import AssemblyTracker
 from roadrunner.postprocessing.tracking.records import BirthChanges
 
-_GONE = -999          # where a test device sends a particle that leaves the birth maps altogether (the birth tracker never does)
+# Where a test device sends a particle that leaves the birth maps altogether (the
+# birth tracker never does).
+_GONE = -999
 _PREVIOUS = weakref.WeakKeyDictionary()
 
 
 def _changes(previous, current):
-    """The birth changes that take the birth map ``previous`` to ``current`` (``{galaxy: set of particles}``)."""
-    was = {p: g for g, ps in previous.items() for p in ps}
-    now = {p: g for g, ps in current.items() for p in ps}
-    born = sorted((p, g) for p, g in now.items() if p not in was)
-    moved = sorted((p, was[p], now.get(p, _GONE)) for p in was if now.get(p, _GONE) != was[p])
-    return BirthChanges(np.array([p for p, _ in born], dtype=np.uint64), np.array([g for _, g in born], dtype=np.int64),
-                        np.array([p for p, _, _ in moved], dtype=np.uint64), np.array([f for _, f, _ in moved], dtype=np.int64),
-                        np.array([t for _, _, t in moved], dtype=np.int64), {})
+    """Make the birth changes that take one birth map to another.
+
+    Parameters
+    ----------
+    previous, current : dict of {int: set of int}
+        Birth maps, ``{galaxy: set of particles}``.
+
+    Returns
+    -------
+    changes : BirthChanges
+        The particles in ``current`` and not in ``previous`` are born; the ones
+        whose galaxy differs have moved.
+    """
+    host_before = {p: g for g, particles in previous.items() for p in particles}
+    host_now = {p: g for g, particles in current.items() for p in particles}
+    born = sorted((p, g) for p, g in host_now.items() if p not in host_before)
+    moved = sorted(
+        (p, host_before[p], host_now.get(p, _GONE))
+        for p in host_before
+        if host_now.get(p, _GONE) != host_before[p]
+    )
+    return BirthChanges(
+        born_ids=np.array([p for p, _ in born], dtype=np.uint64),
+        born_hosts=np.array([g for _, g in born], dtype=np.int64),
+        moved_ids=np.array([p for p, _, _ in moved], dtype=np.uint64),
+        moved_from=np.array([old for _, old, _ in moved], dtype=np.int64),
+        moved_to=np.array([new for _, _, new in moved], dtype=np.int64),
+        stats={},
+    )
 
 
-def _update(tracker, snapshot_id, assignment_map, birth_map, satellites_map, freeze_galaxies=None):
-    """Feed the tracker the changes from the birth map this helper fed it last (none before) to ``birth_map``."""
-    tracker.update(snapshot_id, assignment_map, _changes(_PREVIOUS.get(tracker, {}), birth_map), satellites_map, freeze_galaxies)
+def _update(
+    tracker,
+    snapshot_id,
+    assignment_map,
+    birth_map,
+    satellites_map,
+    freeze_galaxies=None,
+):
+    """Update the tracker with the changes to ``birth_map`` from the last one given.
+
+    The first call for a tracker changes it from an empty birth map.
+    """
+    changes = _changes(_PREVIOUS.get(tracker, {}), birth_map)
+    tracker.update(
+        snapshot_id, assignment_map, changes, satellites_map, freeze_galaxies
+    )
     _PREVIOUS[tracker] = birth_map
 
 
@@ -365,8 +401,8 @@ class TestAssemblyTrackerRecovery:
             birth_map={1: {10, 20}, 2: {30}},
             satellites_map={1: {2}},
         )
-        ref = tracker.capture()
-        captured_1 = set(ref["infall_lists"][1])
+        reference = tracker.capture()
+        captured_1 = set(reference["infall_lists"][1])
 
         # snapshot 1 erases 20 from galaxy 1 (Pass 1) and drives accretion
         # for galaxy 2 via the satellite link (Pass 2) -- both passes
@@ -377,7 +413,7 @@ class TestAssemblyTrackerRecovery:
             birth_map={1: {10}, 2: {30}},
             satellites_map={1: {2}},
         )
-        assert ref["infall_lists"][1] == captured_1
+        assert reference["infall_lists"][1] == captured_1
 
     def test_capture_frozen_unaffected_by_later_freeze(self):
         tracker = AssemblyTracker(n_sat_history=2)
@@ -387,8 +423,8 @@ class TestAssemblyTrackerRecovery:
             birth_map={1: {10}, 2: {20}},
             satellites_map={},
         )
-        ref = tracker.capture()
-        captured_frozen = set(ref["frozen"])
+        reference = tracker.capture()
+        captured_frozen = set(reference["frozen"])
         assert 1 not in captured_frozen
         _update(tracker, 
             snapshot_id=1,
@@ -397,8 +433,8 @@ class TestAssemblyTrackerRecovery:
             satellites_map={},
             freeze_galaxies=[1],
         )
-        assert ref["frozen"] == captured_frozen
-        assert 1 not in ref["frozen"]
+        assert reference["frozen"] == captured_frozen
+        assert 1 not in reference["frozen"]
 
 
 class TestAssemblyTrackerContract:
@@ -540,25 +576,35 @@ class TestAssemblyTrackerContract:
         assert tracker._infall_lists[1] is before
 
     def test_the_infall_lists_follow_the_birth_hosts_through_any_births_and_moves(self):
-        # without accretion (nothing assigned) a galaxy's infall list is exactly its birth set, however the
-        # particles are born in and move between the galaxies
+        # without accretion (nothing assigned) a galaxy's infall list is exactly
+        # its birth set, however the particles are born in and move between the
+        # galaxies
         rng = np.random.default_rng(1)
         tracker = AssemblyTracker(n_sat_history=2)
         host = {}
-        for snap in range(30):
-            for p in range(snap * 8, snap * 8 + 8):                         # new particles
-                host[p] = int(rng.integers(0, 6))
-            for p in rng.choice(list(host), 12):                             # leaders change
-                host[int(p)] = int(rng.integers(0, 6))
+        for snapshot in range(30):
+            # new particles
+            for particle in range(snapshot * 8, snapshot * 8 + 8):
+                host[particle] = int(rng.integers(0, 6))
+            # leaders change
+            for particle in rng.choice(list(host), 12):
+                host[int(particle)] = int(rng.integers(0, 6))
             births = {}
-            for p, g in host.items():
-                births.setdefault(g, set()).add(p)
-            _update(tracker, snap, {}, births, {g: set() for g in range(6)})
-            assert {g: v for g, v in tracker.current().items() if v} == births
+            for particle, galaxy in host.items():
+                births.setdefault(galaxy, set()).add(particle)
+            _update(tracker, snapshot, {}, births, {g: set() for g in range(6)})
+            infall_lists = {g: ids for g, ids in tracker.current().items() if ids}
+            assert infall_lists == births
 
     def test_a_checkpoint_from_before_the_changes_is_refused(self):
         tracker = AssemblyTracker(n_sat_history=2)
-        old = {"infall_lists": {}, "previous_birth_map": {}, "frozen": set(), "sat_history_buffer": [], "last_snapshot": 0,
-               "unbound_default": -1}
+        old = {
+            "infall_lists": {},
+            "previous_birth_map": {},
+            "frozen": set(),
+            "sat_history_buffer": [],
+            "last_snapshot": 0,
+            "unbound_default": -1,
+        }
         with pytest.raises(ValueError, match="earlier assembly tracker"):
             tracker.restore(old)

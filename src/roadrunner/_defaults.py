@@ -23,7 +23,9 @@ from contextlib import contextmanager
 import numpy as np
 
 # ── Birth tracker ──────────────────────────────────────────────────
-BIRTH_LATE_PRIOR = 0.01            # prior share of a host first seen after the particle's first output (tracker with min_initial_resp < 0)
+# Prior share of a host first seen after the particle's first output (only with
+# ``min_initial_resp < 0``).
+BIRTH_LATE_PRIOR = 0.01
 
 # ── Galaxy properties ──────────────────────────────────────────────
 MIN_PARTICLES_STRUCTURAL = 30      # min particles for rh/sigma/props

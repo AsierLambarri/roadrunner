@@ -33,19 +33,27 @@ from roadrunner.pipeline.snapshot_orchestrator import SnapshotOrchestrator
 
 
 class ResumePoint(NamedTuple):
-    """What a failed run keeps of the last snapshot that fully completed: the state its checkpoint is written from.
+    """What a failed run keeps of the last snapshot that fully completed.
 
-    The trackers are held as references (``capture``), which stay valid however far the failing snapshot got (C02).
+    It is the state the error checkpoint is written from. The trackers are
+    held as references (``capture``), which stay valid however far the
+    failing snapshot got (C02).
 
     Attributes
     ----------
     snap_id : int or None
-        The snapshot; ``None`` when nothing has completed yet, and the references then hold the untouched pre-run state.
+        The snapshot; ``None`` when nothing has completed yet, and the
+        references then hold the untouched pre-run state.
     previous_resp_sim : SparseCSC or None
+        The snapshot's responsibilities, keyed by simulation particle ID.
     fitted_parameters : dict or None
+        The mixture parameters the snapshot was fitted with.
     plausibility_state : dict or None
-    birth_ref, assembly_ref : dict or None
-        ``capture()`` of the trackers (``None`` without trackers).
+        The state of the plausibility model (``None`` without one).
+    birth_ref : dict or None
+        ``capture()`` of the birth tracker (``None`` without trackers).
+    assembly_ref : dict or None
+        ``capture()`` of the assembly tracker (``None`` without trackers).
     """
 
     snap_id: int | None
@@ -227,14 +235,36 @@ class AccretionPipeline:
         self._finalize(t_start)
         self._write_progress(snapshot_ids, snapshot_ids[-1], True)
 
-    def _resume_point(self, snap_id, previous_resp_sim, fitted_parameters, plausibility_state) -> ResumePoint:
-        """The resume point of the trackers as they are now."""
-        bt = self.orchestrator.birth_tracker
-        at = self.orchestrator.assembly_tracker
+    def _resume_point(
+        self, snap_id, previous_resp_sim, fitted_parameters, plausibility_state
+    ) -> ResumePoint:
+        """Build the resume point of a snapshot, with the trackers as they are now.
+
+        Parameters
+        ----------
+        snap_id : int or None
+            The snapshot, ``None`` when none has completed yet.
+        previous_resp_sim : SparseCSC or None
+            The snapshot's responsibilities, keyed by simulation particle ID.
+        fitted_parameters : dict or None
+            The mixture parameters the snapshot was fitted with.
+        plausibility_state : dict or None
+            The state of the plausibility model.
+
+        Returns
+        -------
+        resume_point : ResumePoint
+            The arguments, with a reference to the state of each tracker.
+        """
+        birth_tracker = self.orchestrator.birth_tracker
+        assembly_tracker = self.orchestrator.assembly_tracker
         return ResumePoint(
-            snap_id, previous_resp_sim, fitted_parameters, plausibility_state,
-            bt.capture() if bt is not None else None,
-            at.capture() if at is not None else None,
+            snap_id,
+            previous_resp_sim,
+            fitted_parameters,
+            plausibility_state,
+            None if birth_tracker is None else birth_tracker.capture(),
+            None if assembly_tracker is None else assembly_tracker.capture(),
         )
 
     def _save_error_checkpoint(self, last_good, snapshot_ids) -> None:
@@ -508,7 +538,9 @@ class AccretionPipeline:
         # with a bogus "nothing succeeded" checkpoint.
         last_good = None
         if last_completed is not None:
-            last_good = self._resume_point(last_completed, previous_resp_sim, previous_parameters, plaus_state)
+            last_good = self._resume_point(
+                last_completed, previous_resp_sim, previous_parameters, plaus_state
+            )
 
         if next_idx >= len(snapshot_ids):
             print(f"Snapshot {last_completed} was the last snapshot. Nothing to resume.")
@@ -641,7 +673,9 @@ class AccretionPipeline:
                 snap_result.result.particle_df["particle_index"] = snap_data.index[
                     snap_result.result.particle_df["array_index"].values
                 ]
-                snap_result.result.particle_df.drop(columns=["array_index"], inplace=True)
+                snap_result.result.particle_df.drop(
+                    columns=["array_index"], inplace=True
+                )
 
                 bound_csc, _ = snap_result.ensemble.get_particles(scaled_energies=True)
                 plaus = self._plausibility()
@@ -713,7 +747,8 @@ class AccretionPipeline:
             "groups": snap_result.result.statistics.get("groups", 0),
         }
         stats.update(snap_result.result.statistics)
-        stats.update({f"birth_{k}": v for k, v in (snap_result.birth_stats or {}).items()})
+        birth_stats = snap_result.birth_stats or {}
+        stats.update({f"birth_{name}": value for name, value in birth_stats.items()})
         self.logger.write_snapshot(stats)
 
     def _log_error(self, snap_id, exc):

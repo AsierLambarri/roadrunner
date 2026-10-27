@@ -9,7 +9,8 @@ from collections import defaultdict, deque
 from roadrunner._defaults import UNBOUND
 
 _EMPTY = frozenset()
-_FORMAT = 2                 # checkpoint format of the state
+# Checkpoint format of the tracker state.
+_FORMAT = 2
 
 
 class AssemblyTracker:
@@ -189,19 +190,24 @@ class AssemblyTracker:
                 ordered.extend(members * len(members))
         return ordered
 
-    def update(self, snapshot_id, assignment_map, changes, satellites_map, freeze_galaxies=None):
+    def update(
+        self, snapshot_id, assignment_map, changes, satellites_map, freeze_galaxies=None
+    ):
         """Update the assembly tracker with data from a new snapshot.
 
         Parameters
         ----------
         snapshot_id : int
+            Index of the snapshot; one already used is ignored.
         assignment_map : dict of {int: set of int}
+            The particles assigned to each galaxy at this snapshot.
         changes : BirthChanges
             What the birth tracker changed in this snapshot.
         satellites_map : dict of {int: set of int}
             Must list every galaxy alive this snapshot as a key, with an
             empty set when it has no satellites (see the class docstring).
-        freeze_galaxies : list of int or None, optional
+        freeze_galaxies : list of int or None, default=None
+            Galaxies whose infall lists stop accreting from now on.
         """
         if snapshot_id > self._last_snapshot:
             alive_galaxies = (
@@ -225,7 +231,14 @@ class AssemblyTracker:
             # skipped (`snapshot_id > self._last_snapshot` would be False).
             self._last_snapshot = snapshot_id
 
-    def _update(self, alive_galaxies, assignment_map, changes, satellites_history, freeze_galaxies):
+    def _update(
+        self,
+        alive_galaxies,
+        assignment_map,
+        changes,
+        satellites_history,
+        freeze_galaxies,
+    ):
         """Core update logic: propagate infall lists across satellites.
 
         Two flat passes, not one combined loop: birth changes have
@@ -248,11 +261,14 @@ class AssemblyTracker:
         alive_galaxies : set of int
             Galaxies alive this snapshot: pass 2's node set.
         assignment_map : dict of {int: set of int}
+            The particles assigned to each galaxy at this snapshot.
         changes : BirthChanges
+            What the birth tracker changed in this snapshot.
         satellites_history : dict of {int: set of int}
             The merged (current + buffered) satellite graph, already
             built by :meth:`_get_current_sat_history`.
         freeze_galaxies : list of int
+            Galaxies to freeze from now on.
         """
         for g in freeze_galaxies:
             self._frozen.add(g)
@@ -264,11 +280,13 @@ class AssemblyTracker:
         # accretion reads an infall list.
         #
         # Sets are replaced, never edited in place (C02): a checkpoint
-        # capture may still reference the old object. Parenthesized
-        # explicitly: the erase must run after the union.
+        # capture may still reference the old object. The union comes first
+        # and the erase after it.
         gained, lost = changes.by_galaxy()
-        for g in gained.keys() | lost.keys():
-            self._infall_lists[g] = (self._infall_lists.get(g, _EMPTY) | gained.get(g, _EMPTY)) - lost.get(g, _EMPTY)
+        for galaxy_id in gained.keys() | lost.keys():
+            infall_list = self._infall_lists.get(galaxy_id, _EMPTY)
+            infall_list = infall_list | gained.get(galaxy_id, _EMPTY)
+            self._infall_lists[galaxy_id] = infall_list - lost.get(galaxy_id, _EMPTY)
 
         # Pass 2: satellite accretion, SCC-ordered and flattened (see
         # _strongly_connected_components / _flatten_components). The
@@ -302,18 +320,18 @@ class AssemblyTracker:
         return self._infall_lists
 
     def capture(self):
-        """Cheap, checkpoint-safe reference capture (C02).
+        """Capture a cheap, checkpoint-safe reference to the state (C02).
 
         O(n_galaxies), not O(total particles ever accreted): safe to
         call every snapshot because ``_update`` never mutates an
         existing ``_infall_lists[g]`` in place, only ever replaces it
-        wholesale. ``_frozen``/``_sat_history_buffer``
-        *are* mutated in place elsewhere, so those still get a real copy
-        here (cheap regardless -- both are small, bounded containers).
+        wholesale. ``_frozen``/``_sat_history_buffer`` *are* mutated in
+        place elsewhere, so those still get a real copy here (cheap
+        regardless -- both are small, bounded containers).
 
         Returns
         -------
-        ref : dict
+        reference : dict
             Pass to :meth:`serialize` to get a checkpoint-write-safe,
             fully independent form (only worth doing at actual
             checkpoint-write time, not every snapshot).
@@ -327,50 +345,61 @@ class AssemblyTracker:
         }
 
     @staticmethod
-    def serialize(ref):
-        """Convert a :meth:`capture` reference into a fully
-        independent, plain-container form safe for pickling/disk
-        checkpointing.
+    def serialize(reference):
+        """Convert a :meth:`capture` reference into its checkpoint form.
 
-        This is the O(total elements) conversion -- call only at actual
+        The result is fully independent of the tracker and made of plain
+        containers, safe for pickling and writing to disk. This is the
+        O(total elements) conversion -- call only at actual
         checkpoint-write time (i.e. on failure), not every snapshot.
 
         Parameters
         ----------
-        ref : dict
+        reference : dict
             Output of :meth:`capture`.
 
         Returns
         -------
         state : dict
+            The state in the form :meth:`restore` reads.
         """
         return {
             "format": _FORMAT,
-            "infall_lists": {k: list(v) for k, v in ref["infall_lists"].items()},
-            "frozen": ref["frozen"],
-            "sat_history_buffer": ref["sat_history_buffer"],
-            "last_snapshot": ref["last_snapshot"],
-            "unbound_default": ref["unbound_default"],
+            "infall_lists": {
+                galaxy_id: list(ids)
+                for galaxy_id, ids in reference["infall_lists"].items()
+            },
+            "frozen": reference["frozen"],
+            "sat_history_buffer": reference["sat_history_buffer"],
+            "last_snapshot": reference["last_snapshot"],
+            "unbound_default": reference["unbound_default"],
         }
 
     def restore(self, state):
-        """Restore tracker state from a checkpoint.
+        """Restore the tracker from a checkpoint.
 
         Parameters
         ----------
         state : dict
+            Output of :meth:`serialize`.
 
         Raises
         ------
         ValueError
-            If the checkpoint was written before the birth tracker handed over its
-            changes: restart the run.
+            If the checkpoint was written before the birth tracker handed over
+            its changes: restart the run.
         """
         if state.get("format") != _FORMAT:
-            raise ValueError("The checkpoint holds the state of an earlier assembly tracker, "
-                             "which this tracker cannot continue: delete it and start a fresh run.")
-        self._infall_lists = defaultdict(set, {k: set(v) for k, v in state["infall_lists"].items()})
+            raise ValueError(
+                "The checkpoint holds the state of an earlier assembly tracker, "
+                "which this tracker cannot continue: delete it and start a fresh run."
+            )
+        self._infall_lists = defaultdict(set, {
+            galaxy_id: set(ids) for galaxy_id, ids in state["infall_lists"].items()
+        })
         self._frozen = state["frozen"]
-        self._sat_history_buffer = deque(state["sat_history_buffer"], maxlen=self._sat_history_buffer.maxlen)
+        self._sat_history_buffer = deque(
+            state["sat_history_buffer"], maxlen=self._sat_history_buffer.maxlen
+        )
         self._last_snapshot = state["last_snapshot"]
         self._unbound_default = state["unbound_default"]

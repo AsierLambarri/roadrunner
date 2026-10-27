@@ -115,8 +115,10 @@ class TestAccretionPipeline:
             rows = [l.split() for l in f.read().splitlines() if l.strip()]
         header = next(r for r in rows if "RUNTIME" in r)
         data = [r for r in rows if r[0].count(":") == 2][-2:]
-        new, opened = header.index("NEW") - len(header), header.index("OPEN") - len(header)
-        # every particle of the first snapshot is new, none of the second; the open windows are not more than the new particles
+        new = header.index("NEW") - len(header)
+        opened = header.index("OPEN") - len(header)
+        # every particle of the first snapshot is new, none of the second; the
+        # open windows are not more than the new particles
         assert int(data[0][new]) > 0 and int(data[1][new]) == 0
         assert int(data[0][opened]) <= int(data[0][new])
 
@@ -414,7 +416,8 @@ class TestAccretionPipeline:
             return real_save(path, data, *a, **k)
 
         monkeypatch.setattr(ap_mod, "save_checkpoint", spy_save)
-        pipeline._save_error_checkpoint(ap_mod.ResumePoint(0, None, {}, None, None, None), [0])
+        resume_point = ap_mod.ResumePoint(0, None, {}, None, None, None)
+        pipeline._save_error_checkpoint(resume_point, [0])
 
         assert seen["during"] is not before
         assert signal_mod.getsignal(signal_mod.SIGINT) is before
@@ -616,7 +619,7 @@ class TestAccretionPipeline:
         assert ckpt["last_snapshot"] is None
         assert ckpt["birth_tracker"]["last_snapshot"] == -1
         assert ckpt["assembly_tracker"]["last_snapshot"] == -1
-        assert ckpt["birth_tracker"]["active"]["pid"].size == 0
+        assert ckpt["birth_tracker"]["open_particles"]["particle_id"].size == 0
         assert len(ckpt["assembly_tracker"]["infall_lists"]) == 0
 
         resume_pipeline, _, _, _ = _build_mock_pipeline(tmp_path, n_duplicate=2)

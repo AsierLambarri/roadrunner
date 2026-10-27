@@ -4,7 +4,10 @@ from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.physics.halo_model import HaloModel
 from roadrunner.physics.potentials import KeplerPotential, NFWPotential
-from roadrunner.physics.timescales import compute_tidal_radius, pair_dynamical_timescales
+from roadrunner.physics.timescales import (
+    compute_tidal_radius,
+    pair_dynamical_timescales,
+)
 
 VCENTER = np.array([0.0, 0.0, 0.0])
 RVR = 100.0
@@ -37,24 +40,48 @@ class TestTidalRadius:
         assert compute_tidal_radius(halo.potential_model, 1e10, np.zeros((1, 3))) == 0   # the main host itself: the denominator vanishes at d = 0
 
 
+def _set_bound(halo, rows, dynamical_times):
+    """Bind the particles ``rows`` to a halo, with the given dynamical times."""
+    halo.set_bound(
+        np.array(rows),
+        np.full(len(rows), -0.5, dtype=np.float32),
+        np.array(dynamical_times, dtype=np.float32),
+    )
+
+
+def _responsibilities(columns):
+    """Make a responsibility matrix of unit weights from ``{galaxy: rows}``."""
+    return SparseCSC(
+        [np.array(rows) for rows in columns.values()],
+        [np.ones(len(rows), np.float32) for rows in columns.values()],
+        column_id=np.array(list(columns)),
+    )
+
+
 class TestPairDynamicalTimescales:
     def test_each_entry_gets_the_time_stored_for_it_in_its_galaxy(self):
-        h1 = _make_halo([0.0, 0.0, 0.0], sub_tree_id=1)
-        h2 = _make_halo([50.0, 0.0, 0.0], sub_tree_id=2)
-        h1.set_bound(np.array([0, 1, 2, 5]), np.full(4, -0.5, dtype=np.float32), np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32))
-        h2.set_bound(np.array([1, 2, 7]), np.full(3, -0.5, dtype=np.float32), np.array([1.0, 2.0, 3.0], dtype=np.float32))
-        resp = SparseCSC([np.array([2, 0]), np.array([1, 2, 7])], [np.ones(2, np.float32), np.ones(3, np.float32)], column_id=np.array([2, 1]))
-        out = pair_dynamical_timescales(HaloEnsemble([h1, h2]), resp, td_factor=2.0)
-        # the columns come in the order of the matrix (galaxy 2 first), the entries in the order of the column
-        np.testing.assert_allclose(out, [4.0, np.nan, 0.4, 0.6, np.nan], rtol=1e-6)    # galaxy 2: rows 2 and 0 (not bound); galaxy 1: rows 1, 2 and 7 (not bound)
+        halo_1 = _make_halo([0.0, 0.0, 0.0], sub_tree_id=1)
+        halo_2 = _make_halo([50.0, 0.0, 0.0], sub_tree_id=2)
+        _set_bound(halo_1, [0, 1, 2, 5], [0.1, 0.2, 0.3, 0.4])
+        _set_bound(halo_2, [1, 2, 7], [1.0, 2.0, 3.0])
+        responsibilities = _responsibilities({2: [2, 0], 1: [1, 2, 7]})
+        times = pair_dynamical_timescales(
+            HaloEnsemble([halo_1, halo_2]), responsibilities, td_factor=2.0
+        )
+        # The columns come in the order of the matrix (galaxy 2 first), the
+        # entries in the order of the column. Galaxy 2: row 2 is bound, row 0
+        # is not; galaxy 1: rows 1 and 2 are bound, row 7 is not.
+        np.testing.assert_allclose(times, [4.0, np.nan, 0.4, 0.6, np.nan], rtol=1e-6)
 
     def test_entry_without_a_stored_time_is_nan(self):
-        h1 = _make_halo([0.0, 0.0, 0.0], sub_tree_id=1)
-        h1.set_bound(np.array([0, 3]), np.full(2, -0.5, dtype=np.float32), np.array([0.1, 0.3], dtype=np.float32))
-        resp = SparseCSC([np.array([0, 1, 3, 9])], [np.ones(4, np.float32)], column_id=np.array([1]))
-        out = pair_dynamical_timescales(HaloEnsemble([h1]), resp)
-        np.testing.assert_allclose(out, [0.1, np.nan, 0.3, np.nan], rtol=1e-6)
+        halo = _make_halo([0.0, 0.0, 0.0], sub_tree_id=1)
+        _set_bound(halo, [0, 3], [0.1, 0.3])
+        times = pair_dynamical_timescales(
+            HaloEnsemble([halo]), _responsibilities({1: [0, 1, 3, 9]})
+        )
+        np.testing.assert_allclose(times, [0.1, np.nan, 0.3, np.nan], rtol=1e-6)
 
     def test_empty_matrix(self):
-        resp = SparseCSC([], [], column_id=np.array([], dtype=np.int64))
-        assert pair_dynamical_timescales(HaloEnsemble([_make_halo([0.0, 0.0, 0.0])]), resp).size == 0
+        empty = SparseCSC([], [], column_id=np.array([], dtype=np.int64))
+        ensemble = HaloEnsemble([_make_halo([0.0, 0.0, 0.0])])
+        assert pair_dynamical_timescales(ensemble, empty).size == 0

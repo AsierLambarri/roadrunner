@@ -40,8 +40,15 @@ class TestRunLogger:
         log = str(tmp_path / "birth.log")
         logger = RunLogger(log)
         logger.write_header({})
-        logger.write_snapshot({"snap": 1, "birth_new": 123, "birth_open": 45, "birth_moved": 6, "birth_closed": 7})
-        logger.write_snapshot({"snap": 2})                                   # no trackers: not available
+        logger.write_snapshot({
+            "snap": 1,
+            "birth_new": 123,
+            "birth_open": 45,
+            "birth_moved": 6,
+            "birth_closed": 7,
+        })
+        # no trackers: not available
+        logger.write_snapshot({"snap": 2})
         with open(log) as f:
             lines = f.read().splitlines()
         header = next(l for l in lines if "RUNTIME" in l)

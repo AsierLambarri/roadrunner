@@ -19,35 +19,49 @@ from roadrunner.mixture._math import row_squared_norms
 
 
 def pair_dynamical_timescales(ensemble, responsibilities, td_factor=1.0):
-    """Dynamical time of every (particle, galaxy) entry of a responsibility matrix.
+    """Find the dynamical time of every entry of a responsibility matrix.
 
-    The time the boundness stored for the particle in that galaxy.
+    An entry is a (particle, galaxy) pair. Its time is the one the boundness
+    stored for the particle in that galaxy.
 
     Parameters
     ----------
     ensemble : HaloEnsemble
         The halos the responsibilities were fit to, with boundness computed.
     responsibilities : SparseCSC
-        Responsibility matrix keyed by array index; its columns are halos of the ensemble.
+        Responsibility matrix keyed by array index; its columns are halos of the
+        ensemble.
     td_factor : float, default=1.0
         Multiplicative factor applied to the raw dynamical time.
 
     Returns
     -------
-    t_dyn : ndarray of float64
-        One value per entry, in the order of ``np.concatenate(responsibilities.column_indices)``;
-        ``NaN`` for an entry the halo holds no bound particle for.
+    dynamical_times : ndarray of float64, shape (n_entries,)
+        One value per entry, in the order of
+        ``np.concatenate(responsibilities.column_indices)``; ``NaN`` for an
+        entry the halo holds no bound particle for.
     """
-    _, csc_t = ensemble.get_particles()
-    column = {int(g): j for j, g in enumerate(csc_t.column_id)}
-    out = []
-    for g, rows in zip(responsibilities.column_id, responsibilities.column_indices):
-        j = column[int(g)]
-        bound = csc_t.column_indices[j]                              # sorted by particle index (C06)
-        tdyn = np.append(csc_t.column_values[j].astype(np.float64) * td_factor, np.nan)
-        pos = np.searchsorted(bound, rows)
-        out.append(np.where(np.append(bound, -1)[pos] == rows, tdyn[pos], np.nan))
-    return np.concatenate(out) if out else np.empty(0)
+    _, stored_times = ensemble.get_particles()
+    column_of_galaxy = {
+        int(galaxy_id): column
+        for column, galaxy_id in enumerate(stored_times.column_id)
+    }
+    times_per_column = []
+    entries = zip(responsibilities.column_id, responsibilities.column_indices)
+    for galaxy_id, rows in entries:
+        column = column_of_galaxy[int(galaxy_id)]
+        # Sorted by particle index (C06).
+        bound_rows = stored_times.column_indices[column]
+        # A trailing NaN and -1 are what a row that is not bound lands on.
+        bound_times = np.append(
+            stored_times.column_values[column].astype(np.float64) * td_factor, np.nan
+        )
+        position = np.searchsorted(bound_rows, rows)
+        is_bound = np.append(bound_rows, -1)[position] == rows
+        times_per_column.append(np.where(is_bound, bound_times[position], np.nan))
+    if not times_per_column:
+        return np.empty(0)
+    return np.concatenate(times_per_column)
 
 
 def compute_tidal_radius(potential, satellite_mass, xyz):

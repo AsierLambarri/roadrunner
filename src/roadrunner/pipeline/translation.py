@@ -52,7 +52,33 @@ def responsibilities_from_sim(csc, snap_data: SnapshotData):
     return csc.remap_rows(src, dst)
 
 
-def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, ensemble):
+def _concatenate(arrays, dtype):
+    """Join arrays into one.
+
+    Parameters
+    ----------
+    arrays : list of ndarray
+        Arrays to join; may be empty.
+    dtype : dtype
+        Type of the result, also when ``arrays`` is empty.
+
+    Returns
+    -------
+    joined : ndarray of ``dtype``
+        The arrays one after the other; an empty array if there are none.
+    """
+    if len(arrays) == 0:
+        return np.empty(0, dtype)
+    return np.concatenate(arrays).astype(dtype, copy=False)
+
+
+def update_birth_tracker(
+    birth_tracker,
+    snap_id: int,
+    snap_data: SnapshotData,
+    result: AssignmentResult,
+    ensemble,
+):
     """Update the birth tracker with the current snapshot assignment.
 
     The evidence is soft: one (particle, host) pair per non-zero
@@ -68,8 +94,11 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     Parameters
     ----------
     birth_tracker : BirthTracker
+        The tracker to update.
     snap_id : int
+        Index of the snapshot.
     snap_data : SnapshotData
+        The snapshot's particles.
     result : AssignmentResult
         Assigner result containing particle assignment and responsibilities.
     ensemble : HaloEnsemble
@@ -81,39 +110,64 @@ def update_birth_tracker(birth_tracker, snap_id: int, snap_data: SnapshotData, r
     changes : BirthChanges
         What the update changed in the birth hosts.
     """
-    todo = ~birth_tracker.settled(snap_data.index)                      # by array index
-    resp = result.responsibilities
-    keep = [todo[rows_c] & (w_c > 0) for rows_c, w_c in zip(resp.column_indices, resp.column_values)]
-    kept = SparseCSC([rows_c[m] for rows_c, m in zip(resp.column_indices, keep)],
-                     [w_c[m] for w_c, m in zip(resp.column_values, keep)], column_id=resp.column_id)
-    rows = np.concatenate(kept.column_indices).astype(np.int64) if len(kept) else np.empty(0, np.int64)
-    hosts = np.repeat(np.asarray(kept.column_id, dtype=GALAXY_ID), [len(c) for c in kept.column_indices])
-    weights = np.concatenate(kept.column_values).astype(math_dtype(), copy=False) if len(kept) else np.empty(0, math_dtype())
-    t_dyn = pair_dynamical_timescales(ensemble, kept, DYN_TIME_FACTOR)
-    paired = np.zeros(todo.size, dtype=bool)
-    paired[rows] = True
-    unbound = np.flatnonzero(todo & ~paired)
+    is_unsettled = ~birth_tracker.settled(snap_data.index)  # by array index
+    responsibilities = result.responsibilities
+    columns = zip(responsibilities.column_indices, responsibilities.column_values)
+    is_kept = [is_unsettled[rows] & (values > 0) for rows, values in columns]
+    kept = SparseCSC(
+        [rows[mask] for rows, mask in zip(responsibilities.column_indices, is_kept)],
+        [values[mask] for values, mask in zip(responsibilities.column_values, is_kept)],
+        column_id=responsibilities.column_id,
+    )
+
+    pair_rows = _concatenate(kept.column_indices, np.int64)
+    pair_hosts = np.repeat(
+        np.asarray(kept.column_id, dtype=GALAXY_ID),
+        [len(rows) for rows in kept.column_indices],
+    )
+    pair_weights = _concatenate(kept.column_values, math_dtype())
+    pair_times = pair_dynamical_timescales(ensemble, kept, DYN_TIME_FACTOR)
+
+    has_pair = np.zeros(is_unsettled.size, dtype=bool)
+    has_pair[pair_rows] = True
+    unbound_rows = np.flatnonzero(is_unsettled & ~has_pair)
+    n_unbound = unbound_rows.size
 
     return birth_tracker.update(Memberships(
-        t_snap=snap_data.time,
+        snapshot_time=snap_data.time,
         snapshot_id=snap_id,
-        particle_ids=snap_data.index[np.concatenate([rows, unbound])],
-        host_ids=np.concatenate([hosts, np.full(unbound.size, UNBOUND, dtype=GALAXY_ID)]),
-        weights=np.concatenate([weights, np.ones(unbound.size, dtype=weights.dtype)]),
-        t_dyn=np.concatenate([t_dyn, np.full(unbound.size, np.nan)]),
-        alive=resp.column_id,
+        particle_ids=snap_data.index[np.concatenate([pair_rows, unbound_rows])],
+        host_ids=np.concatenate(
+            [pair_hosts, np.full(n_unbound, UNBOUND, dtype=GALAXY_ID)]
+        ),
+        weights=np.concatenate(
+            [pair_weights, np.ones(n_unbound, dtype=pair_weights.dtype)]
+        ),
+        dynamical_times=np.concatenate([pair_times, np.full(n_unbound, np.nan)]),
+        alive=responsibilities.column_id,
     ))
 
 
-def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotData, result: AssignmentResult, satellites, changes) -> None:
+def update_assembly_tracker(
+    assembly_tracker,
+    snap_id: int,
+    snap_data: SnapshotData,
+    result: AssignmentResult,
+    satellites,
+    changes,
+) -> None:
     """Update the assembly tracker with current assignment and satellite data.
 
     Parameters
     ----------
     assembly_tracker : AssemblyTracker
+        The tracker to update.
     snap_id : int
+        Index of the snapshot.
     snap_data : SnapshotData
+        The snapshot's particles.
     result : AssignmentResult
+        Assigner result; its hard assignment gives the galaxy of each particle.
     satellites : dict of {int: set of int}
         Satellite map from the merger tree.
     changes : BirthChanges
@@ -126,7 +180,9 @@ def update_assembly_tracker(assembly_tracker, snap_id: int, snap_data: SnapshotD
     assembly_tracker.update(snap_id, assignment_map, changes, satellites)
 
 
-def build_reduction_input(snap_data: SnapshotData, ensemble, assembly_tracker) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
+def build_reduction_input(
+    snap_data: SnapshotData, ensemble, assembly_tracker
+) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
     """Build allowed and bound particle sets for each galaxy.
 
     Combines the ensemble's boundness matrix with the assembly tracker's

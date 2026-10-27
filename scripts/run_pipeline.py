@@ -143,7 +143,8 @@ def main():
     parser.add_argument("--search-factor", type=float, default=1.0)
 
     # Tracking
-    parser.add_argument("--track-births", type=lambda x: x.lower() == "true", default=True)
+    parser.add_argument("--track-births", type=lambda x: x.lower() == "true",
+                        default=True)
     parser.add_argument("--birth-budget", type=float, default=5.0)
     parser.add_argument("--birth-min-initial-resp", type=float, default=0.01)
 

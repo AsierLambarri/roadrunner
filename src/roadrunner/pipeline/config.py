@@ -130,8 +130,8 @@ class RunConfig:
             raise ValueError(f"threads must be a positive integer, got {self.threads}")
 
         for field_name in (
-            "tol", "reg_covar", "search_factor",
-            "birth_budget", "birth_min_initial_resp", "float_atol", "ssc_alpha", "tempering",
+            "tol", "reg_covar", "search_factor", "birth_budget",
+            "birth_min_initial_resp", "float_atol", "ssc_alpha", "tempering",
         ):
             val = getattr(self, field_name, None)
             if val is not None:
@@ -139,7 +139,10 @@ class RunConfig:
         if not 0.0 <= self.tempering < float("inf"):
             raise ValueError(f"tempering must be finite and >= 0, got {self.tempering}")
         if self.track_births and not self.birth_budget > 0:
-            raise ValueError(f"birth_budget must be > 0 (track_births: false switches the trackers off), got {self.birth_budget}")
+            raise ValueError(
+                "birth_budget must be > 0 (track_births: false switches the "
+                f"trackers off), got {self.birth_budget}"
+            )
 
         if self.selection_snapshot is not None:
             object.__setattr__(self, "selection_snapshot",
