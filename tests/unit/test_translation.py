@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
-from roadrunner._defaults import LOCAL_IDX
+from roadrunner._defaults import LOCAL_IDX, UNBOUND
 from roadrunner.clustering.sparse import SparseCSC
 from roadrunner.physics.halo_ensemble import HaloEnsemble
 from roadrunner.physics.halo_model import HaloModel
@@ -128,29 +128,23 @@ def _bound_halo(sid, rows, tdyn):
 
 class TestUpdateBirthTracker:
     def test_receives_sim_ids(self):
-        # no responsibilities: the hard assignment, one pair per particle, so one candidate each
-        snap = _make_snap_data(n=10, start_id=100)
-        df = pd.DataFrame({
-            "array_index": [0, 3, 5],
-            "Sub_tree_id": [100, 103, 105],
-            "timescale": [0.1, 0.2, 0.3],
-        })
-        result = _make_result_with_df(df)
+        # one galaxy each: the particles are decided at once, under their simulation ids
+        snap = _make_snap_data(n=3, start_id=100)
+        resp = SparseCSC([np.array([0]), np.array([1]), np.array([2])], [np.ones(1, np.float32)] * 3, column_id=np.array([100, 103, 105]))
+        result = AssignmentResult(particle_df=pd.DataFrame(), responsibilities=resp, fitted_parameters={}, statistics={})
+        ensemble = HaloEnsemble([_bound_halo(100, [0], [0.1]), _bound_halo(103, [1], [0.2]), _bound_halo(105, [2], [0.3])])
         bt = BirthTracker()
-        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
+        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=ensemble)
         assert bt._last_snapshot == 0
-        assert dict(zip(changes.born_pid.tolist(), changes.born_host.tolist())) == {100: 100, 103: 103, 105: 105}
+        assert dict(zip(changes.born_pid.tolist(), changes.born_host.tolist())) == {100: 100, 101: 103, 102: 105}
 
-    def test_without_timescale_column(self):
-        snap = _make_snap_data(n=10, start_id=200)
-        df = pd.DataFrame({
-            "array_index": [1, 2],
-            "Sub_tree_id": [201, 202],
-        })
-        result = _make_result_with_df(df)
+    def test_particles_without_a_responsibility_are_born_unbound(self):
+        snap = _make_snap_data(n=4, start_id=200)
+        resp = SparseCSC([np.array([1])], [np.ones(1, np.float32)], column_id=np.array([201]))
+        result = AssignmentResult(particle_df=pd.DataFrame(), responsibilities=resp, fitted_parameters={}, statistics={})
         bt = BirthTracker()
-        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
-        assert dict(zip(changes.born_pid.tolist(), changes.born_host.tolist())) == {201: 201, 202: 202}
+        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=HaloEnsemble([_bound_halo(201, [1], [0.1])]))
+        assert dict(zip(changes.born_pid.tolist(), changes.born_host.tolist())) == {200: UNBOUND, 201: 201, 202: UNBOUND, 203: UNBOUND}
 
     def _soft_case(self):
         # Particle 400 is split 0.7/0.3 between galaxies 500 and 501, 401 is
@@ -220,14 +214,11 @@ class TestUpdateAssemblyTracker:
 
     def test_with_birth_tracker(self):
         snap = _make_snap_data(n=10, start_id=300)
-        df = pd.DataFrame({
-            "array_index": [0, 1],
-            "Sub_tree_id": [300, 300],
-            "timescale": [0.1, 0.1],
-        })
-        result = _make_result_with_df(df)
+        resp = SparseCSC([np.array([0, 1])], [np.ones(2, np.float32)], column_id=np.array([300]))
+        result = AssignmentResult(particle_df=pd.DataFrame({"array_index": [0, 1], "Sub_tree_id": [300, 300]}),
+                                  responsibilities=resp, fitted_parameters={}, statistics={})
         bt = BirthTracker()
-        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=None)
+        changes = update_birth_tracker(bt, snap_id=0, snap_data=snap, result=result, ensemble=HaloEnsemble([_bound_halo(300, [0, 1], [0.1, 0.1])]))
         satellites = {300: set()}
         at = AssemblyTracker(n_sat_history=2)
         update_assembly_tracker(at, snap_id=0, snap_data=snap, result=result,

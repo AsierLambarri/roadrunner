@@ -14,7 +14,7 @@
 """HDF5 writer for per-snapshot assignment data.
 
 Writes log-responsibilities, log-plausibilities, fitted mixture parameters,
-hard labels, boundness values, and particle timescales to per-snapshot HDF5 files.
+hard labels and boundness values to per-snapshot HDF5 files.
 """
 
 import os
@@ -87,7 +87,6 @@ class HDF5AssignmentWriter:
         os.makedirs(output_dir, exist_ok=True)
         self._dir = os.path.join(output_dir, "assignment")
         self._float_atol = float_atol
-        self._written_timescale_ids = None
 
     def _snap_path(self, snapshot_id):
         """Path to the HDF5 file for a given snapshot.
@@ -102,16 +101,6 @@ class HDF5AssignmentWriter:
         """
         os.makedirs(self._dir, exist_ok=True)
         return os.path.join(self._dir, f"snapshot{snapshot_id:04d}.hdf5")
-
-    def _ts_path(self):
-        """Path to the timescales text file (``{dir}/assignment/timescales.txt``).
-
-        Returns
-        -------
-        path : str
-        """
-        os.makedirs(self._dir, exist_ok=True)
-        return os.path.join(self._dir, "timescales.txt")
 
     def _pick_float_dtype(self, arr, what):
         """Smallest float dtype that preserves the data within ``float_atol``.
@@ -307,49 +296,3 @@ class HDF5AssignmentWriter:
                 data=assignment_result.particle_df.to_records(index=False),
                 compression="gzip",
             )
-
-    def _load_existing_timescale_ids(self, path):
-        """Read back which particle IDs already have a recorded timescale.
-
-        Parameters
-        ----------
-        path : str
-
-        Returns
-        -------
-        ids : set of int
-        """
-        if not os.path.exists(path):
-            return set()
-        existing = np.atleast_1d(np.loadtxt(path, usecols=0, dtype=np.int64))
-        return set(existing.tolist())
-
-    def write_timescales(self, particle_timescales):
-        """Append newly-seen particle timescales to a text file.
-
-        A particle's timescale is recorded once, the first time it is
-        seen, and never rewritten afterward: rows already on disk are
-        never touched again, so a later snapshot's batch (which may no
-        longer include a particle that merged away) can never erase an
-        earlier snapshot's record.
-
-        Parameters
-        ----------
-        particle_timescales : ndarray of shape (n_particles,)
-            Structured array with ``particle_index`` and ``timescale`` fields.
-        """
-        path = self._ts_path()
-        if self._written_timescale_ids is None:
-            self._written_timescale_ids = self._load_existing_timescale_ids(path)
-
-        seen = self._written_timescale_ids
-        is_new = np.array([pid not in seen for pid in particle_timescales["particle_index"]])
-        new_records = particle_timescales[is_new]
-        if new_records.size == 0:
-            return
-
-        write_header = not os.path.exists(path)
-        with open(path, "a") as f:
-            np.savetxt(f, new_records, fmt="%u\t%.6f",
-                       header="particle_index\ttimescale" if write_header else "")
-        seen.update(new_records["particle_index"].tolist())

@@ -65,7 +65,6 @@ class TestProcessSnapshot:
         assert isinstance(ensemble, HaloEnsemble)
         assert result.particle_df is not None
         assert "Sub_tree_id" in result.particle_df.columns
-        assert "timescale" in result.particle_df.columns
 
     def test_with_previous_resp(self):
         tree, coords, masses, snap_data = _load_mock()

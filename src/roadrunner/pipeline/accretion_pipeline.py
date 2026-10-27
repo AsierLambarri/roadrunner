@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._exceptions import RestartError
-from roadrunner._defaults import SIM_ID, data_dtype, math_dtype
+from roadrunner._defaults import data_dtype, math_dtype
 from roadrunner.randomness import consumer_seed, random_seed
 from roadrunner.threads import thread_budget
 from roadrunner.clustering.sparse import SparseCSC
@@ -638,20 +638,10 @@ class AccretionPipeline:
                     snap_id, snap_data.time, snap_data.redshift, snap_data,
                 )
             if self.assign_writer:
-                if "timescale" in snap_result.result.particle_df.columns:
-                    sim_ids = snap_data.index[snap_result.result.particle_df["array_index"].values]
-                    recs = np.array(
-                        list(zip(sim_ids, snap_result.result.particle_df["timescale"].values)),
-                        dtype=[("particle_index", SIM_ID), ("timescale", np.float32)],
-                    )
-                    self.assign_writer.write_timescales(recs)
-
                 snap_result.result.particle_df["particle_index"] = snap_data.index[
                     snap_result.result.particle_df["array_index"].values
                 ]
-                snap_result.result.particle_df.drop(
-                    columns=["array_index", "timescale"], inplace=True, errors="ignore",
-                )
+                snap_result.result.particle_df.drop(columns=["array_index"], inplace=True)
 
                 bound_csc, _ = snap_result.ensemble.get_particles(scaled_energies=True)
                 plaus = self._plausibility()

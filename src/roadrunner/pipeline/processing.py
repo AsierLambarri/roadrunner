@@ -11,9 +11,7 @@ from roadrunner._mcf_types import AssignmentResult, ParticleAssigner, SnapshotDa
 from roadrunner.randomness import current_seed
 from roadrunner.clustering.segmentation import HaloSegmenter
 from roadrunner.physics.boundness import compute_halo_bound_particles
-from roadrunner.physics.constants import DYN_TIME_FACTOR
 from roadrunner.physics.halo_ensemble import HaloEnsemble
-from roadrunner.physics.timescales import compute_particle_dynamical_timescales
 
 
 @dataclass(frozen=True)
@@ -83,7 +81,7 @@ def bound_ensemble(snap_data, snap_df, config) -> tuple[HaloEnsemble, list]:
     # split from, and ties between two small halos go to whichever has the
     # higher boundness. HaloEnsemble.select()/__getitem__ return the same
     # HaloModel references, so mutating boundness here is what makes every
-    # downstream consumer (the assigner, timescales) see corrected data.
+    # downstream consumer (the assigner) see corrected data.
     removals = seg.resolve_ownership(candidates, values, ensemble.sub_tree_ids[pop_idx])
     for local_h, rows in removals.items():
         halo = ensemble[pop_idx[local_h]]
@@ -142,11 +140,6 @@ def process_snapshot(
         ensemble, particle_coords, groups,
         previous_resp=previous_resp, seed=current_seed("fit"),
         particle_masses=snap_data.mass,
-    )
-
-    result.particle_df = compute_particle_dynamical_timescales(
-        result.particle_df, ensemble, groups,
-        td_factor=DYN_TIME_FACTOR,
     )
 
     return ensemble, result

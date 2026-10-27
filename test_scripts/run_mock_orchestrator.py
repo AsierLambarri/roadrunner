@@ -182,14 +182,6 @@ def main():
 
     cat_w.write_finalize(birth_df, assembly_df)
 
-    timescales = np.array([
-        bt._finalized.get(i, {}).get("timescale", -1)
-        for i in range(len(bt._finalized))
-    ]) if bt._finalized else np.array([], dtype=np.float32)
-
-    if len(timescales) > 0:
-        assign_w.write_timescales(timescales)
-
     print(f"\nPipeline complete in {elapsed:.1f}s")
     print(f"Output written to {OUTPUT_DIR}")
 

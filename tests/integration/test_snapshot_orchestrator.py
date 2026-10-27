@@ -66,7 +66,6 @@ class TestSnapshotOrchestratorWithoutTrackers:
         assert result.properties is not None
         assert result.dynstate is not None
         assert "Sub_tree_id" in result.result.particle_df.columns
-        assert "timescale" in result.result.particle_df.columns
         assert len(result.properties) > 0
         assert "Mtot" in result.properties.columns
         assert result.previous_resp_sim is not None

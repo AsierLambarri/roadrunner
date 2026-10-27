@@ -2,7 +2,7 @@
 #
 # package:   roadrunner.physics
 # file:      timescales.py
-# brief:     Dynamical time-scale computation for bound particles.
+# brief:     Dynamical time-scales of bound particles and the tidal radius.
 #
 # copyright: GPLv3
 # author:    Asier Lambarri Martinez
@@ -11,59 +11,17 @@
 #
 #############################################################################
 
-"""Dynamical time-scale computation for bound particles."""
+"""Dynamical time-scales of bound particles and the tidal radius."""
 
 import numpy as np
 
 from roadrunner.mixture._math import row_squared_norms
-from roadrunner.physics.constants import MAX_DYN_TIMESCALE
-from roadrunner._defaults import math_dtype
-
-
-def compute_particle_dynamical_timescales(particle_df, ensemble, groups, td_factor=1.0):
-    """Compute dynamical timescales for bound particles and add them to the DataFrame.
-
-    For each overlapping group, the per-particle dynamical time is
-    taken from the boundness computation, multiplied by
-    ``td_factor``, and capped at ``MAX_DYN_TIMESCALE``.
-
-    Parameters
-    ----------
-    particle_df : DataFrame
-        Particle-level data with an ``array_index`` index.
-    ensemble : HaloEnsemble
-        The full halo ensemble with boundness computed.
-    groups : list of list of int
-        Overlapping group definitions.
-    td_factor : float, default=1.0
-        Multiplicative factor applied to the raw dynamical time.
-
-    Returns
-    -------
-    particle_df : DataFrame
-        The same DataFrame with a ``timescale`` column added.
-    """
-    particle_df["timescale"] = np.zeros(len(particle_df), dtype=math_dtype())
-
-    for group in groups:
-        sub = ensemble.select(group)
-        _, csc_t = sub.get_particles()
-
-        tdyn_dense = csc_t.to_dense()
-
-        max_tdyn = np.minimum(np.nanmax(tdyn_dense, axis=1) * td_factor, MAX_DYN_TIMESCALE)
-        gp_idx = csc_t.row_id
-        particle_df.loc[gp_idx, "timescale"] = max_tdyn
-
-    return particle_df
 
 
 def pair_dynamical_timescales(ensemble, responsibilities, td_factor=1.0):
     """Dynamical time of every (particle, galaxy) entry of a responsibility matrix.
 
-    Where :func:`compute_particle_dynamical_timescales` keeps the largest
-    time over the galaxies a particle is bound to, this gives the time the
-    boundness stored for the particle in each galaxy.
+    The time the boundness stored for the particle in that galaxy.
 
     Parameters
     ----------

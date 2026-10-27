@@ -114,7 +114,7 @@ All readers support a particle selection. With `selection_snapshot` plus one of 
 
 ### 2. Boundness (`physics/boundness.py`, `physics/potentials.py`)
 
-Each merger-tree halo becomes a `HaloModel` with a Kepler (a softened point mass: a Plummer sphere with a = 1e-3 kpc) or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Its boundness is -E over the halo's energy scale, the depth of its well: |Φ(0)|, or for a Kepler halo |Φ| at its innermost particle. Per-particle dynamical timescales are computed here too.
+Each merger-tree halo becomes a `HaloModel` with a Kepler (a softened point mass: a Plummer sphere with a = 1e-3 kpc) or NFW potential (`halo_model`). A KD-tree finds the particles within `search_factor x virial_radius`. A particle is bound when its specific energy E = Φ + v²/2 is negative. Its boundness is -E over the halo's energy scale, the depth of its well: |Φ(0)|, or for a Kepler halo |Φ| at its innermost particle. The dynamical time of each (particle, halo) pair is stored with the bound set: the birth tracker's windows read it.
 
 ### 3. Overlap groups and ownership (`clustering/segmentation.py`)
 
@@ -250,7 +250,6 @@ Everything goes to `output_dir`:
 ```
 catalogue.hdf5
 assignment/snapshotNNNN.hdf5     (save_assignment)
-assignment/timescales.txt        (save_assignment)
 particle_data/snapshotNNNN.hdf5  (save_particles)
 run.log
 progress.json
@@ -284,8 +283,6 @@ A star in galaxy G's assembly set is in situ if its `birth_id == G`, and accrete
   - `count`: effective particle count (summed responsibility, in the fit's weight units). A value below 1 marks a prior-only component.
 - `hard_assignment` holds `Sub_tree_id` and `particle_index` (simulation ID) for every loaded particle. `Sub_tree_id = -1` means unbound.
 - Attribute `time`.
-
-`assignment/timescales.txt` is a tab-separated file with columns `particle_index` and `timescale`. Each particle's dynamical timescale is recorded once, at its first appearance.
 
 ### `particle_data/snapshotNNNN.hdf5`
 
