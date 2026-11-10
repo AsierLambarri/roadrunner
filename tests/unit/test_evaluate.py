@@ -57,21 +57,24 @@ def test_run_snaps_starts_at_the_first_written_snapshot(tmp_path):
     assert run.snaps.tolist() == [1, 2, 3]
 
 
-def test_completion_does_not_fail_a_skipped_leading_snapshot_but_fails_a_gap(tmp_path):
-    run = _make_run(tmp_path, planned=[0, 1, 2, 3], present=[1, 2, 3], last_snapshot=3)
+def test_completion_does_not_fail_a_skipped_leading_snapshot_but_fails_a_gap_and_the_tail(tmp_path):
+    # planned 0..4: 0 is skipped outright (empty), 2 is a gap, and the run crashed after 3 (last_snapshot
+    # 3), so 4 was planned but never attempted
+    run = _make_run(tmp_path, planned=[0, 1, 2, 3, 4], present=[1, 2, 3], last_snapshot=3)
     (tmp_path / "assignment").mkdir()
     for s in (1, 3):                                    # 2 is left out: a real gap in the middle
         (tmp_path / "assignment" / f"snapshot{s:04d}.hdf5").touch()
     head = "RUNTIME SNAP REDSHIFT LOAD PROCESS REDUCTION BOUND UNASSIGNED AVG_CONF"
     rows = [f"00:0{s}:00.000 {s} 1.0 1.0 2.0 -- 10 0 0.9" for s in (1, 3)]
     (tmp_path / "run.log").write_text("\n".join([head, "-" * 40, *rows, "", "--- Run complete ---"]))
-    (tmp_path / "progress.json").write_text(json.dumps({"is_finished": True, "last_completed_snapshot": 3}))
+    (tmp_path / "progress.json").write_text(json.dumps({"is_finished": True, "last_completed_snapshot": 4}))
     log = read_runlog(tmp_path / "run.log")
     rep = Report("1", run)
     completion(run, rep, log)
     texts = [s["text"] for s in rep.symptoms]
     assert not any("snapshot 0" in t for t in texts)    # the skipped leading snapshot is not a FAIL
     assert any("snapshot 2" in t for t in texts)        # the gap after it still is
+    assert any("snapshot 4" in t for t in texts)        # the unwritten tail past last_snapshot still is
 
 
 def test_read_warnings_types_and_snapshots(tmp_path):
