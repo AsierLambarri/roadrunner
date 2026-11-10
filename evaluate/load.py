@@ -61,7 +61,13 @@ class Run(Catalogue):
         self.name = run_name(self.path)
         self.cat = h5py.File(self.path / "catalogue.hdf5", "r")
         self.planned = np.sort(self.cat["header/snapshots"][:].astype(int))   # written up front
-        self.snaps = self.planned[self.planned <= int(self.cat["header/last_snapshot"][()])]  # written ones
+        upto_last = self.planned[self.planned <= int(self.cat["header/last_snapshot"][()])]
+        # a leading snapshot with zero selected particles is skipped outright (no catalogue group, no
+        # assignment file, no run.log row): the run's range starts at the first one it actually wrote,
+        # not at the first planned snapshot; a gap after that stays in range (a real failure, caught by
+        # soundness 1.1)
+        written = upto_last[[f"snapshots/{s}" in self.cat for s in upto_last]]
+        self.snaps = upto_last[upto_last >= written[0]] if written.size else upto_last
         self.config = json.loads(self.cat["header/config"][()])
         self.host = int(self.cat["header/accretion_id"][()])
         eq = pd.DataFrame(json.loads(self.cat["header/equivalence"][()]))

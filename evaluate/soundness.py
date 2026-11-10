@@ -137,7 +137,8 @@ def completion(run, rep, log):
     err = run.path / "error.log"
     if err.exists() and err.stat().st_size:
         rep.symptom("1.1 error.log", "FAIL", f"{err.read_text().count(chr(10) + '---')} entries")
-    for s in run.planned:                               # a crashed run's unwritten snapshots fail here
+    for s in run.snaps:            # a crashed run's unwritten snapshots fail here; a leading snapshot the
+                                    # pipeline skipped outright (zero selected particles) is not in range
         for check, missing in (("1.1 assignment file missing", not run.assignment_file(s).exists()),
                                ("1.1 catalogue snapshot missing", f"snapshots/{s}" not in run.cat),
                                ("1.1 run.log row missing", s not in log.index)):

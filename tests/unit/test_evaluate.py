@@ -1,9 +1,13 @@
 """Unit tests of the evaluation rules (evaluate/): alignment, run.log, warnings, spikes, mass steps, transfers."""
+import json
+
+import h5py
 import numpy as np
 import pandas as pd
 
-from evaluate.load import ABSENT, on
-from evaluate.soundness import read_runlog, read_warnings, spikes
+from evaluate.load import ABSENT, Run, on
+from evaluate.report import Report
+from evaluate.soundness import completion, read_runlog, read_warnings, spikes
 from evaluate.stability import relation, steps
 
 
@@ -28,6 +32,46 @@ def test_read_runlog_keeps_last_row_of_a_resumed_snapshot(tmp_path):
     log = read_runlog(tmp_path / "run.log")
     assert log.index.tolist() == [0, 1]
     assert log.at[1, "UNASSIGNED"] == 5 and np.isnan(log.at[0, "AVG_CONF"])
+
+
+def _make_run(path, planned, present, last_snapshot):
+    """A run directory with just enough of a ``catalogue.hdf5`` (header + ``snapshots/<s>`` groups) for
+    :class:`Run` to open: ``present`` are the snapshots actually written, a subset of ``planned``."""
+    with h5py.File(path / "catalogue.hdf5", "w") as f:
+        hdr = f.create_group("header")
+        hdr.create_dataset("snapshots", data=np.array(planned, dtype=np.int64))
+        hdr.create_dataset("last_snapshot", data=last_snapshot)
+        hdr.create_dataset("config", data=json.dumps({}))
+        hdr.create_dataset("accretion_id", data=0)
+        eq = pd.DataFrame({"snapshot": planned, "time": np.array(planned, float), "redshift": 0.0})
+        hdr.create_dataset("equivalence", data=eq.to_json(orient="records"))
+        hdr.require_group("cosmology")
+        for s in present:
+            f.create_group(f"snapshots/{s}")
+    return Run(path)
+
+
+def test_run_snaps_starts_at_the_first_written_snapshot(tmp_path):
+    # planned 0..3, but 0 had zero selected particles and the pipeline skipped it outright
+    run = _make_run(tmp_path, planned=[0, 1, 2, 3], present=[1, 2, 3], last_snapshot=3)
+    assert run.snaps.tolist() == [1, 2, 3]
+
+
+def test_completion_does_not_fail_a_skipped_leading_snapshot_but_fails_a_gap(tmp_path):
+    run = _make_run(tmp_path, planned=[0, 1, 2, 3], present=[1, 2, 3], last_snapshot=3)
+    (tmp_path / "assignment").mkdir()
+    for s in (1, 3):                                    # 2 is left out: a real gap in the middle
+        (tmp_path / "assignment" / f"snapshot{s:04d}.hdf5").touch()
+    head = "RUNTIME SNAP REDSHIFT LOAD PROCESS REDUCTION BOUND UNASSIGNED AVG_CONF"
+    rows = [f"00:0{s}:00.000 {s} 1.0 1.0 2.0 -- 10 0 0.9" for s in (1, 3)]
+    (tmp_path / "run.log").write_text("\n".join([head, "-" * 40, *rows, "", "--- Run complete ---"]))
+    (tmp_path / "progress.json").write_text(json.dumps({"is_finished": True, "last_completed_snapshot": 3}))
+    log = read_runlog(tmp_path / "run.log")
+    rep = Report("1", run)
+    completion(run, rep, log)
+    texts = [s["text"] for s in rep.symptoms]
+    assert not any("snapshot 0" in t for t in texts)    # the skipped leading snapshot is not a FAIL
+    assert any("snapshot 2" in t for t in texts)        # the gap after it still is
 
 
 def test_read_warnings_types_and_snapshots(tmp_path):
