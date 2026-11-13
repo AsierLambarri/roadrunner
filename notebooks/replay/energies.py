@@ -12,8 +12,11 @@ from the run's particle_data/snapshotNNNN.hdf5 (it must exist: no fallback to th
 simulation) with roadrunner's own recipe, roadrunner.physics.boundness.stellar_composite, copied
 here in numpy (replay does not need roadrunner):
 
-  the tree halo as a point mass (KeplerPotential: a Plummer sphere of the tree mass with the
-  softening SOFTENING_KEPLER), plus, 'pinned' stars, STARS_ITERATIONS times, a ShellPotential of
+  the tree halo as a point mass of the tree mass, softened as a Plummer sphere of PLUMMER_SOFTENING
+  kpc (default 0: a pure point mass, whose star exactly on the centre, if any, takes the radius of
+  the nearest other star instead of r = 0; roadrunner's own KeplerPotential is a Plummer sphere of
+  SOFTENING_KEPLER = 1e-3 kpc: set PLUMMER_SOFTENING = 1e-3 to reproduce its energies, to ~1e-6),
+  plus, 'pinned' stars, STARS_ITERATIONS times, a ShellPotential of
   the stars bound so far (each star a thin shell about the tree centre, tabulated on N_NODES
   log-radius cells, linear in 1/r between nodes); E = Phi + 1/2 |v - v_tree|^2 for every star
   within search_factor * R_vir of the tree centre (catalogue units; physical for the potential).
@@ -21,6 +24,9 @@ here in numpy (replay does not need roadrunner):
 roadrunner's run settings (halo_model, stars, search_factor, comoving) come from the catalogue
 header and run.log. Each snapshot that needs it raises an EnergyFallbackWarning naming the
 galaxies. The recomputed energies keep roadrunner's stored membership (only E is replaced).
+
+PLUMMER_SOFTENING is read when the energies are recomputed: set it (replay.energies.PLUMMER_SOFTENING
+= ...) before the data are computed; data already in memory keep the value they were computed with.
 """
 import json
 import os
@@ -30,9 +36,12 @@ import numpy as np
 
 # roadrunner's constants (roadrunner.physics.constants, roadrunner._defaults, ShellPotential)
 G_KM = 4.300917270038E-6          # kpc (km/s)^2 / Msun
-SOFTENING_KEPLER = 1E-3           # kpc: the point mass's softening and the shells' radius floor
+SOFTENING_KEPLER = 1E-3           # kpc: roadrunner's point-mass softening and the shells' radius floor
 STARS_ITERATIONS = 3              # shell rebuilds of the stars' own potential
 N_NODES = 4096                    # ShellPotential cells
+
+PLUMMER_SOFTENING = 0.0           # kpc: the recomputed point mass's Plummer softening (0: pure point mass;
+                                  # roadrunner's own: SOFTENING_KEPLER)
 
 
 class EnergyFallbackWarning(UserWarning):
@@ -91,10 +100,12 @@ def _shell_potential(x, m, centre, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=N
     return potential
 
 
-def point_mass_energies(row, pos, vel, mass, halo_model='kepler', stars='pinned', search_factor=1.0, comoving=True):
+def point_mass_energies(row, pos, vel, mass, halo_model='kepler', stars='pinned', search_factor=1.0, comoving=True,
+                        softening=None):
     """roadrunner's energies of the stars within search_factor R_vir of a tree halo (stellar_composite
     with a point-mass halo). row: its merger-tree row; pos (catalogue units), vel (km/s), mass: every
-    star of the snapshot. (rows of those stars, their E in (km/s)^2)."""
+    star of the snapshot; softening: the point mass's Plummer softening, kpc (None: PLUMMER_SOFTENING).
+    (rows of those stars, their E in (km/s)^2)."""
     if halo_model != 'kepler' or stars not in ('pinned', 'none'):
         raise NotImplementedError(f"energy fallback: only halo_model 'kepler' with 'pinned' or 'none' stars is "
                                   f"implemented (roadrunner's recipe for this run: {halo_model!r}, {stars!r})")
@@ -107,7 +118,13 @@ def point_mass_energies(row, pos, vel, mass, halo_model='kepler', stars='pinned'
     c = centre * a
     r = np.sqrt(np.sum((x - c) ** 2, axis=1))
     kin = 0.5 * np.sum((np.asarray(vel[local], dtype=np.float64) - v_tree) ** 2, axis=1)  # pinned: v_com = v_tree
-    phi_dm = -G_KM * float(row['mass']) / np.sqrt(r * r + SOFTENING_KEPLER ** 2)
+    eps = PLUMMER_SOFTENING if softening is None else float(softening)
+    if eps > 0:
+        phi_dm = -G_KM * float(row['mass']) / np.sqrt(r * r + eps * eps)
+    else:                                        # pure point mass: a star on the centre takes the nearest other's radius
+        on_centre = r == 0
+        r_dm = np.where(on_centre, r[~on_centre].min() if (~on_centre).any() else SOFTENING_KEPLER, r)
+        phi_dm = -G_KM * float(row['mass']) / r_dm
     E = phi_dm + kin
     for _ in range(STARS_ITERATIONS * (stars != 'none')):
         b = E < 0
@@ -190,8 +207,9 @@ def stored_energies(fa, s, fallback=None):
             f"{', ...' if len(lost) > 3 else ''} for galaxies {[k for k, _, _ in lost]} (halo_model "
             f"{st['halo_model']!r}: a star sits on the centre of the point mass, so its depth G M / r_in is "
             f"infinite), so their stored boundness is all 0 and their energies are lost. Recomputed from "
-            f"{fallback.particle_dir}/snapshot{s:04d}.hdf5 with roadrunner's recipe (point mass + the stars' "
-            f"shells, stars {st['stars']!r}; replay/energies.py); roadrunner's membership is kept.",
+            f"{fallback.particle_dir}/snapshot{s:04d}.hdf5 with roadrunner's recipe (point mass, Plummer softening "
+            f"{PLUMMER_SOFTENING:g} kpc, + the stars' shells, stars {st['stars']!r}; replay/energies.py); "
+            f"roadrunner's membership is kept.",
             EnergyFallbackWarning, stacklevel=2)
         for k, _, idx in lost:
             out[k] = (idx, fallback.energies(s, k, idx))
