@@ -1,6 +1,6 @@
 import numpy as np
 
-from roadrunner._defaults import STARS_ITERATIONS
+from roadrunner._defaults import STARS_ITERATIONS, UNBOUND
 from roadrunner._mcf_types import SnapshotData
 from roadrunner.mixture._math import row_squared_norms
 from roadrunner.physics.boundness import compute_halo_bound_particles
@@ -15,7 +15,7 @@ RVR = 100.0
 
 def _row(position, velocity, mass, rvir, rs, hid, redshift=0.0):
     return {
-        "Sub_tree_id": hid,
+        "Sub_tree_id": hid, "host_id": UNBOUND,
         "position_x": position[0], "position_y": position[1], "position_z": position[2],
         "velocity_x": velocity[0], "velocity_y": velocity[1], "velocity_z": velocity[2],
         "mass": mass, "virial_radius": rvir, "scale_radius": rs, "Redshift": redshift,
@@ -139,7 +139,7 @@ class TestStars:
         halo = compute_halo_bound_particles([self.ROW], _snap(coords, masses), config)[0]
         assert len(halo) == 1
 
-        dm = tree_potential(self.ROW, "nfw", 1.0)
+        dm = tree_potential(self.ROW, "nfw", True)
         x, v = coords[:, :3], coords[:, 3:6]
         E_ref = dm.potential(x) + 0.5 * row_squared_norms(v - dm.velocity)
         mask = E_ref < 0
@@ -160,7 +160,7 @@ class TestStars:
 
         # Replay the self-consistent loop up to the second-to-last bound set
         # (the one that builds the final, 3rd Shell).
-        dm = tree_potential(self.ROW, "nfw", 1.0)
+        dm = tree_potential(self.ROW, "nfw", True)
         energy = lambda p: p.potential(x) + 0.5 * row_squared_norms(v - p.com_velocity)
         potential = CompositeSphericalPotential(dark_matter=dm)
         E = energy(potential)

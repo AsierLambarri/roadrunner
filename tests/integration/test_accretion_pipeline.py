@@ -62,7 +62,7 @@ def _build_mock_pipeline(tmp_path, cov_type="full", n_duplicate=2, with_trackers
             halo_model=halo_model, search_factor=1.0, min_particles=10,
         ),
         reduction_config=ReductionConfig(
-            accretion_id=1, halo_model=halo_model, n_los=3,
+            accretion_id=1, n_los=3,
         ),
         assigner=assigner,
         birth_tracker=bt,

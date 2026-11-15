@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
+from roadrunner.physics.halo_model import HaloModel
 from roadrunner.postprocessing.mixing import compute_riley_criterion
 from roadrunner.postprocessing.properties import compute_galaxy_properties
 from roadrunner.randomness import current_seed
@@ -21,8 +22,6 @@ class ReductionConfig:
     ----------
     accretion_id : int
         ``Sub_tree_id`` of the accretion host galaxy.
-    halo_model : str, default='kepler'
-        Potential model name.
     n_los : int, default=15
         Number of lines of sight for property estimation.
     use_gmm_centers : bool, default=True
@@ -42,7 +41,6 @@ class ReductionConfig:
         the Riley criterion's local velocity-dispersion computation.
     """
     accretion_id: int
-    halo_model: str = "kepler"
     n_los: int = 15
     use_gmm_centers: bool = True
     min_particles_structural: int = 30
@@ -58,6 +56,7 @@ def reduce_snapshot(
     result: AssignmentResult,
     galaxy_particles: dict[int, np.ndarray],
     galaxy_bound: dict[int, np.ndarray],
+    host: HaloModel,
     config: ReductionConfig,
     compute_dynstate: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -75,6 +74,8 @@ def reduce_snapshot(
         Allowed particle indices per galaxy.
     galaxy_bound : dict of int → ndarray
         Bound particle indices per galaxy.
+    host : HaloModel
+        The accretion host's halo, from the snapshot's ensemble (its potential gives the tidal radii).
     config : ReductionConfig
         Reduction configuration.
     compute_dynstate : bool, default=True
@@ -92,9 +93,6 @@ def reduce_snapshot(
     galaxy_table = snap_df[["Sub_tree_id", "host_id", "mass", "distance_to_acc_id"]].copy()
     galaxy_table.set_index("Sub_tree_id", inplace=True)
 
-    host_rows = snap_df[snap_df["Sub_tree_id"] == config.accretion_id]
-    host_props = host_rows.iloc[0] if not host_rows.empty else snap_df.iloc[0]
-
     galaxy_centers = None
     if result.fitted_parameters:
         centers = {}
@@ -111,8 +109,7 @@ def reduce_snapshot(
         particle_coords=coords,
         galaxy_bound=galaxy_bound,
         galaxy_table=galaxy_table,
-        host_props=host_props,
-        halo_model=config.halo_model,
+        host=host,
         n_los=config.n_los,
         galaxy_centers=galaxy_centers,
         use_gmm_centers=config.use_gmm_centers,

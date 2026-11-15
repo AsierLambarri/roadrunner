@@ -8,6 +8,7 @@ warnings.filterwarnings("ignore")
 
 from roadrunner.pipeline.reduction import ReductionConfig, reduce_snapshot
 from roadrunner._mcf_types import AssignmentResult, SnapshotData
+from roadrunner.physics.halo_model import HaloModel, tree_potential
 
 
 _RNG = np.random.default_rng(42)
@@ -65,6 +66,13 @@ def _make_snap_df(accretion_id=100, satellite_ids=None):
     return pd.DataFrame(rows)
 
 
+def _make_host(snap_df, accretion_id=100):
+    """The accretion host's HaloModel from its row of ``snap_df``."""
+    row = snap_df[snap_df["Sub_tree_id"] == accretion_id].iloc[0]
+    return HaloModel(tree_potential(row, "kepler", True), [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
+                     row["virial_radius"], accretion_id, row["Redshift"], True)
+
+
 def _make_result(fitted_parameters=None):
     if fitted_parameters is None:
         fitted_parameters = {}
@@ -94,7 +102,6 @@ class TestReductionConfig:
     def test_defaults(self):
         cfg = ReductionConfig(accretion_id=100)
         assert cfg.accretion_id == 100
-        assert cfg.halo_model == "kepler"
         assert cfg.n_los == 15
 
     def test_frozen(self):
@@ -114,7 +121,7 @@ class TestReduceSnapshot:
         cfg = ReductionConfig(accretion_id=100)
 
         props, dyn = reduce_snapshot(
-            snap_data, snap_df, result, galaxy_particles, galaxy_bound, cfg,
+            snap_data, snap_df, result, galaxy_particles, galaxy_bound, _make_host(snap_df), cfg,
         )
         assert isinstance(props, pd.DataFrame)
         assert isinstance(dyn, pd.DataFrame)
@@ -137,7 +144,7 @@ class TestReduceSnapshot:
         cfg = ReductionConfig(accretion_id=100)
 
         props, dyn = reduce_snapshot(
-            snap_data, snap_df, result, {}, {}, cfg,
+            snap_data, snap_df, result, {}, {}, _make_host(snap_df), cfg,
         )
         assert len(props) == 0
         assert len(dyn) == 0
@@ -155,6 +162,6 @@ class TestReduceSnapshot:
         cfg = ReductionConfig(accretion_id=100)
 
         props, _ = reduce_snapshot(
-            snap_data, snap_df, result, galaxy_particles, galaxy_bound, cfg,
+            snap_data, snap_df, result, galaxy_particles, galaxy_bound, _make_host(snap_df), cfg,
         )
         assert len(props) > 0

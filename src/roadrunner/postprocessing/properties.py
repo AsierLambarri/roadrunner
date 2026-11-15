@@ -12,8 +12,6 @@ import pandas as pd
 from roadrunner._defaults import (
     MIN_PARTICLES_STRUCTURAL, SSC_NMIN, SSC_ALPHA, UNBOUND, math_dtype,
 )
-from roadrunner.physics.halo_model import physical_length_factor
-from roadrunner.physics.potentials import get_potential
 from roadrunner.physics.timescales import compute_tidal_radius
 
 
@@ -249,8 +247,7 @@ def compute_galaxy_properties(
     particle_coords,
     galaxy_bound,
     galaxy_table,
-    host_props,
-    halo_model,
+    host,
     n_los=15,
     galaxy_centers=None,
     use_gmm_centers=True,
@@ -276,10 +273,9 @@ def compute_galaxy_properties(
         Bound particle array indices per galaxy.
     galaxy_table : DataFrame
         Merger-tree rows indexed by ``Sub_tree_id``.
-    host_props : dict
-        Host galaxy properties (``mass``, ``scale_radius``, ...).
-    halo_model : str
-        ``"kepler"`` or ``"nfw"``.
+    host : HaloModel
+        The accretion host's halo (from the snapshot's ensemble): its potential, tree halo plus stars,
+        and length scale give the tidal radii.
     n_los : int, default=15
         Number of lines of sight.
     galaxy_centers : dict or None, optional
@@ -315,18 +311,7 @@ def compute_galaxy_properties(
     los_matrices = np.array([rotation_matrix_from_los(los) for los in los_vectors],
                             dtype=math_dtype())
 
-    # Merger-tree lengths (host_Rs, distance_to_acc_id below) are
-    # hardcoded comoving (C08 -- same assumption as physics/merger_tree.py),
-    # so both use the same conversion factor consistently.
-    merger_tree_factor = physical_length_factor(host_props["Redshift"], comoving=True)
-
-    host_mass = host_props["mass"]
-    if halo_model.lower() == "kepler":
-        host_potential = get_potential(halo_model, M=host_mass)
-    else:
-        host_Rs = host_props["scale_radius"] * merger_tree_factor
-        host_c = host_props["virial_radius"] / host_props["scale_radius"]
-        host_potential = get_potential(halo_model, M=host_mass, Rs=host_Rs, c=host_c)
+    host_potential, ls = host.potential_model, host.length_scale
 
     if UNBOUND in galaxy_bound:
         del galaxy_bound[UNBOUND]
@@ -340,12 +325,8 @@ def compute_galaxy_properties(
         sat_mass = galaxy_table.at[sid, "mass"]
         distance = galaxy_table.at[sid, "distance_to_acc_id"]
 
-        # host_Rs (above) is already physical; distance must be too before
-        # they're combined in the tidal-radius denominator (C08 -- this was
-        # previously mixing a physical potential with a comoving distance).
-        physical_distance = distance * merger_tree_factor
-        rt_physical = compute_tidal_radius(host_potential, sat_mass, np.array([[physical_distance, 0.0, 0.0]]))
-        r_t = rt_physical / merger_tree_factor  # back to the catalogue's comoving convention
+        xyz = host_potential.centre + np.array([[distance * ls, 0.0, 0.0]])      # physical, ``distance_to_acc_id`` away
+        r_t = compute_tidal_radius(host_potential, sat_mass, xyz) / ls          # back to catalogue units
 
         indices_int = np.asarray(indices, dtype=np.intp)
         gal_pos = particle_coords[indices_int, :3]

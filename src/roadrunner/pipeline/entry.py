@@ -159,7 +159,6 @@ def _run(config, equiv_table, snapshot_reader):
     )
     reduction_config = ReductionConfig(
         accretion_id=accretion_id,
-        halo_model=config.halo_model,
         n_los=config.n_los,
         use_gmm_centers=config.use_gmm_centers,
         min_particles_structural=config.min_particles_structural,

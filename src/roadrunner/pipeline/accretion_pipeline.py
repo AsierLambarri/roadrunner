@@ -565,6 +565,10 @@ class AccretionPipeline:
         """
         self.merger_handler.compute_scale_radii()
         self.merger_handler.compute_most_bound_satellite()
+        config = self.orchestrator.processing_config
+        if config.halo_model.lower() == "errani_navarro":      # its satellites read their infall NFW and its cut
+            self.merger_handler.compute_infall()
+            self.merger_handler.compute_cut_radii(config.comoving)
         self.merger_handler.compute_distance_to_host()
         acc_id = self.orchestrator.reduction_config.accretion_id
         self.merger_handler.set_constant_column("acc_id", acc_id)

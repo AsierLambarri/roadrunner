@@ -13,6 +13,15 @@ from roadrunner.postprocessing.properties import (
     line_of_sight_velocity_dispersion,
     compute_galaxy_properties,
 )
+from roadrunner.physics.halo_model import HaloModel, tree_potential
+
+
+def _host_halo(row, model="kepler"):
+    """The accretion host's HaloModel from its tree row (comoving, at the origin, at rest)."""
+    row = {**row, "position_x": 0.0, "position_y": 0.0, "position_z": 0.0,
+           "velocity_x": 0.0, "velocity_y": 0.0, "velocity_z": 0.0}
+    return HaloModel(tree_potential(row, model, True), np.zeros(3), np.zeros(3),
+                     row["virial_radius"], 1, row["Redshift"], True)
 
 
 class TestRandomLinesOfSight:
@@ -291,7 +300,7 @@ class TestComputeGalaxyProperties:
             "mass": [5e10, 1e10],
             "distance_to_acc_id": [50.0, 120.0],
         }, index=pd.Index([10, 20], name="Sub_tree_id"))
-        host_props = pd.Series({
+        host = _host_halo({
             "mass": 1e12, "scale_radius": 10.0,
             "virial_radius": 200.0, "Redshift": 0.1,
         })
@@ -301,8 +310,7 @@ class TestComputeGalaxyProperties:
             particle_coords=coords,
             galaxy_bound=galaxy_particles,
             galaxy_table=galaxy_table,
-            host_props=host_props,
-            halo_model="kepler",
+            host=host,
             n_los=3,
         )
         expected_cols = [
@@ -349,10 +357,10 @@ class TestComputeGalaxyProperties:
             "host_id": [1], "mass": [sat_mass],
             "distance_to_acc_id": [distance_comoving],
         }, index=pd.Index([10], name="Sub_tree_id"))
-        host_props = pd.Series({
+        host = _host_halo({
             "mass": host_mass, "scale_radius": host_scale_radius_comoving,
             "virial_radius": host_virial_radius, "Redshift": z,
-        })
+        }, "nfw")
         rng = np.random.default_rng(1)
         coords = np.column_stack([
             rng.normal(0, 1, (50, 3)), rng.normal(0, 10, (50, 3)),
@@ -362,7 +370,7 @@ class TestComputeGalaxyProperties:
         result = compute_galaxy_properties(
             accretion_id=1, particle_masses=masses, particle_coords=coords,
             galaxy_bound=galaxy_particles, galaxy_table=galaxy_table,
-            host_props=host_props, halo_model="nfw", n_los=3,
+            host=host, n_los=3,
         )
         assert result.iloc[0]["r_t"] == pytest.approx(expected_rt, rel=1e-6)
 
@@ -381,7 +389,7 @@ class TestComputeGalaxyProperties:
             "mass": pd.array([5e10, 1e10], dtype="float64"),
             "distance_to_acc_id": pd.array([50.0, 120.0], dtype="float64"),
         }, index=pd.Index([10, 20], name="Sub_tree_id"))
-        host_props = pd.Series({
+        host = _host_halo({
             "mass": 1e12, "scale_radius": 10.0,
             "virial_radius": 200.0, "Redshift": 0.1,
         })
@@ -391,8 +399,7 @@ class TestComputeGalaxyProperties:
             particle_coords=coords,
             galaxy_bound=galaxy_particles,
             galaxy_table=galaxy_table,
-            host_props=host_props,
-            halo_model="kepler",
+            host=host,
             n_los=1,
         )
         result = result.set_index("Sub_tree_id")
@@ -411,7 +418,7 @@ class TestComputeGalaxyProperties:
             "host_id": [1], "mass": [1e10],
             "distance_to_acc_id": [100.0],
         }, index=pd.Index([7], name="Sub_tree_id"))
-        host_props = pd.Series({
+        host = _host_halo({
             "mass": 1e12, "scale_radius": 10.0,
             "virial_radius": 200.0, "Redshift": 0.1,
         })
@@ -421,8 +428,7 @@ class TestComputeGalaxyProperties:
             particle_coords=coords,
             galaxy_bound=galaxy_particles,
             galaxy_table=galaxy_table,
-            host_props=host_props,
-            halo_model="kepler",
+            host=host,
             n_los=3,
         )
         row = result.iloc[0]
@@ -437,7 +443,7 @@ class TestComputeGalaxyProperties:
             "host_id": [1], "mass": [1e10],
             "distance_to_acc_id": [100.0],
         }, index=pd.Index([7], name="Sub_tree_id"))
-        host_props = pd.Series({
+        host = _host_halo({
             "mass": 1e12, "scale_radius": 10.0,
             "virial_radius": 200.0, "Redshift": 0.1,
         })
@@ -447,8 +453,7 @@ class TestComputeGalaxyProperties:
             particle_coords=coords,
             galaxy_bound=galaxy_particles,
             galaxy_table=galaxy_table,
-            host_props=host_props,
-            halo_model="kepler",
+            host=host,
             n_los=3,
         )
         row = result.iloc[0]
@@ -464,7 +469,7 @@ class TestComputeGalaxyProperties:
             "host_id": [1, 1], "mass": [1e10, 2e10],
             "distance_to_acc_id": [50.0, 100.0],
         }, index=pd.Index([10, 20], name="Sub_tree_id"))
-        host_props = pd.Series({
+        host = _host_halo({
             "mass": 1e12, "scale_radius": 10.0,
             "virial_radius": 200.0, "Redshift": 0.1,
         })
@@ -474,8 +479,7 @@ class TestComputeGalaxyProperties:
             particle_coords=coords,
             galaxy_bound=galaxy_particles,
             galaxy_table=galaxy_table,
-            host_props=host_props,
-            halo_model="kepler",
+            host=host,
             n_los=3,
         )
         assert len(result) == 1
@@ -490,7 +494,7 @@ class TestComputeGalaxyProperties:
             "host_id": [1], "mass": [1e10],
             "distance_to_acc_id": [100.0],
         }, index=pd.Index([5], name="Sub_tree_id"))
-        host_props = pd.Series({
+        host = _host_halo({
             "mass": 1e12, "scale_radius": 10.0,
             "virial_radius": 200.0, "Redshift": 0.1,
         })
@@ -500,8 +504,7 @@ class TestComputeGalaxyProperties:
             particle_coords=coords,
             galaxy_bound=galaxy_particles,
             galaxy_table=galaxy_table,
-            host_props=host_props,
-            halo_model="kepler",
+            host=host,
             n_los=3,
         )
         assert len(result) == 1

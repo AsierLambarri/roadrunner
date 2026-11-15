@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from roadrunner.physics.merger_tree import MergerTreeHandlerCSV, concentration
+from roadrunner.physics.potentials import ERRANI_NAVARRO_MIN_CUT
 
 TEST_TREE = "test_data/test_tree.csv"
 
@@ -225,3 +226,32 @@ class TestComputeSatellites:
         original = three_halo_bound_df.copy()
         _ = MergerTreeHandlerCSV.compute_satellites(three_halo_bound_df, rvir_factor=2.0)
         assert three_halo_bound_df.equals(original)
+
+
+def _infall_handler():
+    """Toy tree, ids shuffled: 1 never a satellite; 2 central -> satellite -> splashback -> satellite; 3 satellite from its first row."""
+    rows = []
+    for sid, host in {1: [-1, -1, -1, -1], 2: [-1, 9, -1, 9], 3: [9, 9, 9, 9]}.items():
+        for snap, h in enumerate(host):
+            rows.append({"Sub_tree_id": sid, "Snapshot": snap, "host_id": h, "Redshift": 0.0, "mass": 10.0 * sid + snap,
+                         "scale_radius": 2.0, "virial_radius": 20.0, "rmax": 1.0, "vmax": 100.0 / (1 + snap)})
+    handler = MergerTreeHandlerCSV.__new__(MergerTreeHandlerCSV)
+    handler._df = pd.DataFrame(rows).sample(frac=1.0, random_state=0)
+    return handler
+
+
+def test_infall_and_cut_radii():
+    h = _infall_handler()
+    h.compute_infall()
+    df = h._df.set_index(["Sub_tree_id", "Snapshot"])
+    assert df.loc[(2, 0), "M_vir_infall"] != df.loc[(2, 0), "M_vir_infall"]                  # NaN before infall
+    assert df.loc[(1, 3), "M_vir_infall"] != df.loc[(1, 3), "M_vir_infall"]                  # never a satellite
+    assert np.all(df.loc[[(2, 1), (2, 2), (2, 3)], "M_vir_infall"] == 20.0)                  # the row before infall, splashback included
+    assert np.all(df.loc[3, "M_vir_infall"] == 30.0)                                         # satellite from its first row: its own
+    h._df.loc[(h._df["Sub_tree_id"] == 2) & (h._df["Snapshot"] == 3), "vmax"] = 1e6          # mu > 1 (noise)
+    h._df.loc[(h._df["Sub_tree_id"] == 3) & (h._df["Snapshot"] == 3), "vmax"] = 0.0          # a bad vmax
+    h.compute_cut_radii(True)
+    df = h._df.set_index(["Sub_tree_id", "Snapshot"])
+    assert np.isfinite(df.loc[(2, 3), "x_cut"]) and df.loc[(2, 3), "x_cut"] > 100.0
+    assert df.loc[(3, 3), "x_cut"] == ERRANI_NAVARRO_MIN_CUT
+    assert np.isnan(df.loc[(2, 0), "x_cut"]) and np.isnan(df.loc[(1, 2), "x_cut"])

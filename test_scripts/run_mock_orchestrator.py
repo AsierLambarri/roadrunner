@@ -97,7 +97,6 @@ def main():
         ),
         reduction_config=ReductionConfig(
             accretion_id=ACCRETION_ID,
-            halo_model="kepler",
             n_los=3,
         ),
         assigner=assigner,

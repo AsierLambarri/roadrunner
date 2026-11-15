@@ -11,6 +11,7 @@ from roadrunner.physics.potentials import (
     get_potential,
     CompositeSphericalPotential,
     KeplerPotential,
+    ErraniNavarroPotential,
     NFWPotential,
     PlummerPotential,
     HernquistPotential,
@@ -104,6 +105,36 @@ class TestNFWPotential:
         r = np.array([0.0])
         result = nfw.potential(_xyz(r))
         assert np.isfinite(result).all()
+
+
+class TestErraniNavarroPotential:
+    @pytest.mark.parametrize("b", [1e-3, 10.0])
+    def test_errani_navarro_profile(self, b):
+        Rs = 5.0
+        p = ErraniNavarroPotential(M=1e10, Rs=Rs, c=10.0, r_cut=Rs / b, G=4.3e-6)
+        r = np.array([1e-6, 1e-3 * Rs / (1 + b), 0.5, 5.0, 40.0])      # straddles the series switch
+        rho = lambda s: p._density(np.array([s]))[0]
+        for ri, mi in zip(r, p._enclosed_mass(r)):
+            np.testing.assert_allclose(mi, quad(lambda s: 4 * np.pi * s * s * rho(s), 0, ri, epsabs=0, epsrel=1e-10, limit=200)[0], rtol=1e-6)
+        mid = np.array([0.5, 5.0, 40.0])
+        for ri, phi in zip(mid, p._potential(mid)):
+            outer = quad(lambda s: 4 * np.pi * s * rho(s), ri, np.inf, epsabs=0, epsrel=1e-10, limit=200)[0]
+            np.testing.assert_allclose(phi, -p.G * (p._enclosed_mass(np.array([ri]))[0] / ri + outer), rtol=1e-6)
+        np.testing.assert_allclose(p.central_potential(), p._potential(np.array([0.0]))[0], rtol=1e-12)
+        rows = p.profile()
+        np.testing.assert_allclose(profile_potential(rows, r), p._potential(r), rtol=1e-10)
+        np.testing.assert_allclose(profile_mass(rows, r), p.G * p._enclosed_mass(r), rtol=1e-8)
+        nfw = NFWPotential(M=1e10, Rs=Rs, c=10.0, G=4.3e-6)
+        far = ErraniNavarroPotential(M=1e10, Rs=Rs, c=10.0, r_cut=1e6 * Rs, G=4.3e-6)
+        np.testing.assert_allclose(far._potential(mid), nfw._potential(mid), rtol=1e-4)
+
+    def test_errani_navarro_composite(self):
+        dm = ErraniNavarroPotential(M=1e11, Rs=8.0, c=10.0, r_cut=4.0)
+        comp = CompositeSphericalPotential(dark_matter=dm, stars=PlummerPotential(1e8, 0.5, centre=_C0 + np.array([0.3, 0.0, 0.0])))
+        r = np.array([0.1, 1.0, 10.0, 50.0])
+        np.testing.assert_allclose(profile_potential(comp.profile(), r), comp._potential(r), rtol=1e-10)
+        E = np.array([0.9, 0.5, 0.1]) * comp.central_potential()
+        assert np.all(comp.distribution_function(E, density="dark_matter") >= 0.0)
 
 
 class TestShellPotential:

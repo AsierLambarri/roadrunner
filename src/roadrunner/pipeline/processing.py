@@ -21,7 +21,8 @@ class ProcessingConfig:
     Parameters
     ----------
     halo_model : str, default='kepler'
-        Potential model name.
+        Potential model name; ``"errani_navarro"`` (satellites only, centrals stay NFW) needs the tree's
+        ``rmax`` and ``vmax``.
     search_factor : float, default=1.0
         Virial radius multiplier for boundness search.
     min_particles : int, default=10

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from roadrunner._mcf_types import AssignmentResult, ParticleAssigner, SnapshotData
@@ -148,9 +149,10 @@ class SnapshotOrchestrator:
             snap_data, ensemble, self.assembly_tracker,
         )
 
+        host = ensemble[int(np.argmax(ensemble.sub_tree_ids == self.reduction_config.accretion_id))]   # first halo if absent
         properties, dynstate = reduce_snapshot(
             snap_data, snap_df, result,
-            galaxy_particles, galaxy_bound,
+            galaxy_particles, galaxy_bound, host,
             self.reduction_config,
             compute_dynstate=compute_dynstate,
         )

@@ -81,7 +81,9 @@ _X = np.geomspace(1e-7, 1e10, 34000)           # radial grid of the inversion
 GL_NODES, GL_WEIGHTS = np.polynomial.legendre.leggauss(96)   # Gauss–Legendre on [-1, 1]: the quadratures here and composite shell averages
 _W, _WW = 0.5 * (GL_NODES + 1.0), 0.5 * GL_WEIGHTS  # Gauss-Legendre on [0, 1]
 _TINY = 2.2250738585072014e-308                 # smallest normal float64
-PROFILE_PLUMMER, PROFILE_HERNQUIST, PROFILE_NFW, PROFILE_SHELL = 0.0, 1.0, 2.0, 3.0   # kinds of profile rows (see profile_phi)
+PROFILE_PLUMMER, PROFILE_HERNQUIST, PROFILE_NFW, PROFILE_SHELL, PROFILE_ERRANI_NAVARRO = 0.0, 1.0, 2.0, 3.0, 4.0   # kinds of profile rows (see profile_phi)
+ERRANI_NAVARRO_SERIES = 1e-2       # (1 + b) x below this: M(<r) by its Taylor series (the closed form cancels as eps / x²)
+_EULER_GAMMA = 0.5772156649015329
 
 
 @njit(cache=True)
@@ -179,11 +181,53 @@ def _cell(r, c, inv_d, K):
 
 
 @njit(cache=True)
+def _e1(z):
+    """Exponential integral ``E1(z)``, ``z > 0``: ``scipy.special.exp1``, which numba cannot call (relative error ~1e-14).
+
+    ``z <= 1``: the series ``-γ - ln z - Σ_{n>=1} (-z)^n / (n n!)`` (25 terms). ``z > 1``: ``e^{-z}`` times the
+    continued fraction of ``e^z E1(z)`` (modified Lentz, Numerical Recipes §6.3), at most 400 terms.
+    """
+    if z <= 1.0:
+        term, total = 1.0, 0.0
+        for n in range(1, 26):
+            term *= -z / n
+            total += term / n
+        return -_EULER_GAMMA - np.log(z) - total
+    b = z + 1.0
+    c = 1e300
+    d = 1.0 / b
+    h = d
+    for i in range(1, 400):
+        an = -float(i * i)
+        b += 2.0
+        d = 1.0 / (an * d + b)
+        c = b + an / c
+        delta = c * d
+        h *= delta
+        if abs(delta - 1.0) < 4e-16:
+            break
+    return h * np.exp(-z)
+
+
+@njit(cache=True)
+def _row_span(profile, j):
+    """Rows held by profile row ``j``: itself and its payload (``PROFILE_SHELL``: ``k`` table rows; ``PROFILE_ERRANI_NAVARRO``: ``(b, 0, 0, d)``)."""
+    kind = profile[j, 0]
+    if kind == PROFILE_SHELL:
+        return 1 + int(profile[j, 1])
+    if kind == PROFILE_ERRANI_NAVARRO:
+        return 2
+    return 1
+
+
+@njit(cache=True)
 def _row_phi(profile, j, r):
     """Potential at radius ``r`` of profile row ``j`` by its own formula (no offset).
 
     ``PROFILE_SHELL``: the row's own tabulated cell at ``r`` (see :func:`profile_phi`); the cell
     0 (inside the innermost node) is the constant intercept, avoiding the ``1/r`` term at ``r = 0``.
+    ``PROFILE_ERRANI_NAVARRO``: the shells inside (:func:`_row_mass`) plus the shells outside, its payload row
+    ``(b, 0, 0, d)`` holding ``b = Rs / r_cut``, ``k = G m``.
     """
     kind, k, a = profile[j, 0], profile[j, 1], profile[j, 2]
     if kind == PROFILE_PLUMMER:
@@ -195,6 +239,12 @@ def _row_phi(profile, j, r):
         if b == 0:
             return profile[j + 2, 1]
         return profile[j + 2 + b, 0] / r + profile[j + 2 + b, 1]
+    if kind == PROFILE_ERRANI_NAVARRO:
+        b, x = profile[j + 1, 0], r / a
+        outer = np.exp(-b * x) / (1.0 + x) - b * np.exp(b) * _e1(b * (1.0 + x))
+        if r == 0.0:
+            return -k / a * outer
+        return -_row_mass(profile, j, r) / r - k / a * outer
     if r == 0.0:
         return -k / a
     return -k * np.log1p(r / a) / r
@@ -206,6 +256,7 @@ def _row_mass(profile, j, r):
 
     ``PROFILE_SHELL``: exact, ``G M(<r) = -`` the row's cell slope (:class:`~roadrunner.physics.potentials.ShellPotential`'s
     ``Φ = slope / r + intercept``, so ``G M = r² dΦ/dr`` is ``-slope`` in each cell, 0 inside the innermost node).
+    ``PROFILE_ERRANI_NAVARRO``: ``k`` is ``G m``, ``G M(<r) = k I(x)`` (Taylor series of ``I`` below ``ERRANI_NAVARRO_SERIES``).
     """
     kind, k, a = profile[j, 0], profile[j, 1], profile[j, 2]
     if kind == PROFILE_PLUMMER:
@@ -215,17 +266,26 @@ def _row_mass(profile, j, r):
     if kind == PROFILE_SHELL:
         b = _cell(r, profile[j + 1, 0], profile[j + 1, 1], int(k) - 3)
         return -profile[j + 2 + b, 0]
+    if kind == PROFILE_ERRANI_NAVARRO:
+        b, x = profile[j + 1, 0], r / a
+        if (1.0 + b) * x < ERRANI_NAVARRO_SERIES:
+            c1, c2, c3 = -(2.0 + b), 3.0 + 2.0 * b + 0.5 * b * b, -(4.0 + 3.0 * b + b * b + b * b * b / 6.0)
+            return k * x * x * (0.5 + x * (c1 / 3.0 + x * (c2 / 4.0 + x * c3 / 5.0)))
+        return k * ((1.0 + b) * np.exp(b) * (_e1(b) - _e1(b * (1.0 + x))) - 1.0 + np.exp(-b * x) / (1.0 + x))
     x = r / a
     return k * (np.log1p(x) - x / (1.0 + x))
 
 
 @njit(cache=True)
-def _row_rho(kind, k, a, r):
-    """``G ρ`` of one profile row, own formula (no offset); infinite at ``r = 0`` in a cusp (Hernquist, NFW)."""
+def _row_rho(profile, j, r):
+    """``G ρ`` of profile row ``j``, own formula (no offset); infinite at ``r = 0`` in a cusp (Hernquist, NFW, Errani–Navarro)."""
+    kind, k, a = profile[j, 0], profile[j, 1], profile[j, 2]
     if kind == PROFILE_PLUMMER:
         return 0.75 / np.pi * k / a**3 * (1.0 + (r / a) ** 2) ** -2.5
     if kind == PROFILE_HERNQUIST:
         return k * a / (2.0 * np.pi * r * (r + a) ** 3)
+    if kind == PROFILE_ERRANI_NAVARRO:
+        return k * np.exp(-profile[j + 1, 0] * r / a) / (4.0 * np.pi * a * a * r * (1.0 + r / a) ** 2)
     return k / (4.0 * np.pi * a * a * r * (1.0 + r / a) ** 2)   # NFW: k = G M / A(c)
 
 
@@ -242,11 +302,15 @@ def profile_phi(profile, r):
     profile's centre: 0 evaluates the row's own formula (:func:`_row_phi`); ``d > 0`` its shell
     average about the centre, ``Σ_k w_k s_k Φ(s_k) / (2 max(r, d))``,
     ``s_k = max(r, d) + min(r, d) x_k`` (Gauss–Legendre on [-1, 1]; the composite's monopole
-    pathway). A composite potential stacks its components' rows.
+    pathway). A composite potential stacks its components' rows. ``PROFILE_ERRANI_NAVARRO``: the
+    header ``(kind, G m, Rs, d)`` and a payload row ``(b, 0, 0, d)``, ``b = Rs / r_cut``
+    (see :class:`~roadrunner.physics.potentials.ErraniNavarroPotential`).
     """
     phi = 0.0
     j = 0
-    while j < profile.shape[0]:
+    for _ in range(profile.shape[0]):      # at most one header per row
+        if j >= profile.shape[0]:
+            break
         d = profile[j, 3]
         if d > 0.0:
             mid, half = max(r, d), min(r, d)
@@ -257,7 +321,7 @@ def profile_phi(profile, r):
             phi += acc / (2.0 * mid)
         else:
             phi += _row_phi(profile, j, r)
-        j += (1 + int(profile[j, 1])) if profile[j, 0] == PROFILE_SHELL else 1
+        j += _row_span(profile, j)
     return phi
 
 
@@ -305,24 +369,21 @@ def profile_mass(profile, r):
     for i in prange(r.size):
         ri = r[i]
         j = 0
-        while j < profile.shape[0]:
-            kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
-            if kind == PROFILE_SHELL:
-                if d == 0.0:
-                    gm[i] += _row_mass(profile, j, ri)
-                j += 1 + int(k)
-            else:
-                if d > 0.0:
-                    mid, half, inner = max(ri, d), min(ri, d), max(ri - d, 0.0)
-                    acc = 0.0
-                    for m in range(GL_NODES.size):
-                        x = GL_NODES[m]
-                        s = mid + half * x
-                        acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s) * half * (1.0 - x) * (ri + inner + half * x)
-                    gm[i] += _row_mass(profile, j, inner) + np.pi / d * half * acc
-                else:
-                    gm[i] += _row_mass(profile, j, ri)
-                j += 1
+        for _ in range(profile.shape[0]):      # at most one header per row
+            if j >= profile.shape[0]:
+                break
+            d = profile[j, 3]
+            if d == 0.0:
+                gm[i] += _row_mass(profile, j, ri)
+            elif profile[j, 0] != PROFILE_SHELL:
+                mid, half, inner = max(ri, d), min(ri, d), max(ri - d, 0.0)
+                acc = 0.0
+                for m in range(GL_NODES.size):
+                    x = GL_NODES[m]
+                    s = mid + half * x
+                    acc += GL_WEIGHTS[m] * s * _row_rho(profile, j, s) * half * (1.0 - x) * (ri + inner + half * x)
+                gm[i] += _row_mass(profile, j, inner) + np.pi / d * half * acc
+            j += _row_span(profile, j)
     return gm
 
 
@@ -350,8 +411,10 @@ def profile_density(profile, r):
     for i in prange(r.size):
         ri = r[i]
         j = 0
-        while j < profile.shape[0]:
-            kind, k, a, d = profile[j, 0], profile[j, 1], profile[j, 2], profile[j, 3]
+        for _ in range(profile.shape[0]):      # at most one header per row
+            if j >= profile.shape[0]:
+                break
+            kind, d = profile[j, 0], profile[j, 3]
             if kind != PROFILE_SHELL:
                 if d > 0.0:
                     mid, half = max(ri, d), min(ri, d)
@@ -359,11 +422,11 @@ def profile_density(profile, r):
                     for m in range(GL_NODES.size):
                         x = GL_NODES[m]
                         s = mid + half * x
-                        acc += GL_WEIGHTS[m] * s * _row_rho(kind, k, a, s)
+                        acc += GL_WEIGHTS[m] * s * _row_rho(profile, j, s)
                     rho[i] += acc / (2.0 * mid)
                 else:
-                    rho[i] += _row_rho(kind, k, a, ri)
-            j += (1 + int(k)) if kind == PROFILE_SHELL else 1
+                    rho[i] += _row_rho(profile, j, ri)
+            j += _row_span(profile, j)
     return rho
 
 
@@ -387,14 +450,12 @@ def _radial_potential(p, r):
 def _has_offset_shell(rows):
     """Whether profile rows hold an offset (``d > 0``) ``PROFILE_SHELL`` header row, walking the header-by-header structure."""
     j = 0
-    while j < len(rows):
-        kind, k, _, d = rows[j]
-        if kind == PROFILE_SHELL:
-            if d > 0.0:
-                return True
-            j += 1 + int(k)
-        else:
-            j += 1
+    for _ in range(len(rows)):
+        if j >= len(rows):
+            break
+        if rows[j, 0] == PROFILE_SHELL and rows[j, 3] > 0.0:
+            return True
+        j += _row_span(rows, j)
     return False
 
 

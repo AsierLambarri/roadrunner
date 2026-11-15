@@ -154,7 +154,6 @@ def main():
     )
     reduction_config = ReductionConfig(
         accretion_id=accretion_id,
-        halo_model=args.halo_model,
         n_los=args.n_los,
     )
 

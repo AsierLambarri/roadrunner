@@ -18,7 +18,7 @@ from scipy.spatial import KDTree
 
 from roadrunner._defaults import LOCAL_IDX, STARS_ITERATIONS, math_dtype
 from roadrunner.mixture._math import row_squared_norms
-from roadrunner.physics.halo_model import HaloModel, physical_length_factor, tree_potential
+from roadrunner.physics.halo_model import HaloModel, physical_length_factor, tree_models, tree_potential
 from roadrunner.physics.potentials import CompositeSphericalPotential, ShellPotential
 from roadrunner.postprocessing.centering import ssc_center
 
@@ -78,7 +78,8 @@ def compute_halo_bound_particles(rows, snap_data, config):
     snap_data : SnapshotData
         Particle positions and velocities (``data``) and masses (``mass``).
     config : ProcessingConfig
-        ``halo_model``, ``comoving``, ``search_factor``, ``stars``.
+        ``halo_model``, ``comoving``, ``search_factor``, ``stars``. Rows carry ``host_id``:
+        satellites take ``halo_model``, centrals its unstripped counterpart (:func:`tree_models`).
 
     Returns
     -------
@@ -87,7 +88,8 @@ def compute_halo_bound_particles(rows, snap_data, config):
     positions, velocities = snap_data.data[:, :3], snap_data.data[:, 3:6]
     tree = KDTree(positions)
     halos = []
-    for row in rows:
+    models = tree_models([row["host_id"] for row in rows], config.halo_model)
+    for row, model in zip(rows, models):
         ls = physical_length_factor(row["Redshift"], config.comoving)
         centre = np.array([row["position_x"], row["position_y"], row["position_z"]])
         local = np.asarray(
@@ -97,7 +99,7 @@ def compute_halo_bound_particles(rows, snap_data, config):
         pos, vel = positions[local], velocities[local]
 
         potential, E = stellar_composite(
-            tree_potential(row, config.halo_model, ls),
+            tree_potential(row, model, config.comoving),
             np.asarray(pos, dtype=np.float64) * ls,
             vel,
             snap_data.mass[local],

@@ -2,8 +2,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from roadrunner.physics.halo_model import HaloModel, physical_length_factor, tree_potential
-from roadrunner.physics.potentials import KeplerPotential, NFWPotential, PlummerPotential
+from roadrunner._defaults import UNBOUND
+from roadrunner.physics.halo_model import HaloModel, physical_length_factor, tree_models, tree_potential
+from roadrunner.physics.potentials import ErraniNavarroPotential, KeplerPotential, NFWPotential, PlummerPotential
 
 VCENTER = np.array([0.0, 0.0, 0.0])
 RVR = 100.0
@@ -144,7 +145,7 @@ class TestTreePotential:
             "Snapshot": 0,
         })
         ls = physical_length_factor(row["Redshift"], comoving=True)
-        pot = tree_potential(row, "kepler", ls)
+        pot = tree_potential(row, "kepler", True)
         assert isinstance(pot, KeplerPotential)
         assert pot.M == 1e12
         np.testing.assert_allclose(pot.centre, np.array([1.0, 2.0, 3.0]) * ls)
@@ -162,12 +163,26 @@ class TestTreePotential:
             "Snapshot": 0,
         })
         ls = physical_length_factor(row["Redshift"], comoving=True)
-        pot = tree_potential(row, "nfw", ls)
+        pot = tree_potential(row, "nfw", True)
         result = pot.potential(np.array([[10.0, 20.0, 30.0]]) * ls)
         assert np.isscalar(result) or result.size == 1
         assert np.all(np.isfinite(result))
         np.testing.assert_allclose(pot.centre, [5.0, 10.0, 15.0])
-        assert np.isclose(tree_potential(row, "plummer", ls).a, 4.0)
+        assert np.isclose(tree_potential(row, "plummer", True).a, 4.0)
+
+    def test_errani_navarro_row(self):
+        assert list(tree_models([7, UNBOUND], "errani_navarro")) == ["errani_navarro", "nfw"]
+        assert set(tree_models([7, UNBOUND], "nfw")) == {"nfw"}
+        row = pd.Series({
+            "Sub_tree_id": 7, "position_x": 1.0, "position_y": 2.0, "position_z": 3.0,
+            "velocity_x": 0.0, "velocity_y": 0.0, "velocity_z": 0.0,
+            "mass": 1e10, "virial_radius": 50.0, "scale_radius": 5.0, "Redshift": 0.5,
+            "M_vir_infall": 5e10, "r_s_infall": 8.0, "virial_radius_infall": 80.0, "Redshift_infall": 1.0, "x_cut": 0.7,
+        })
+        pot = tree_potential(row, "errani_navarro", True)
+        assert isinstance(pot, ErraniNavarroPotential)
+        assert pot.M == 5e10 and np.isclose(pot.c, 10.0)
+        assert np.isclose(pot.Rs, 8.0 / 2.0) and np.isclose(pot.r_cut, 0.7 * pot.Rs)
 
     def test_nfw_row_rs_respects_comoving_flag(self):
         # C08: comoving=False must not also halve Rs -- same physical Rs
@@ -183,8 +198,8 @@ class TestTreePotential:
         row_physical = row_comoving.copy()
         row_physical["scale_radius"] = 20.0 / (1 + z)  # already physical
 
-        pot_comoving = tree_potential(row_comoving, "nfw", physical_length_factor(z, comoving=True))
-        pot_physical = tree_potential(row_physical, "nfw", physical_length_factor(z, comoving=False))
+        pot_comoving = tree_potential(row_comoving, "nfw", True)
+        pot_physical = tree_potential(row_physical, "nfw", False)
         assert np.isclose(pot_comoving.Rs, pot_physical.Rs)
 
 
@@ -250,7 +265,7 @@ class TestCentreOfMass:
             "mass": 5e11, "virial_radius": 80.0, "scale_radius": 8.0, "Redshift": 1.0, "Snapshot": 0,
         })
         ls = physical_length_factor(row["Redshift"], comoving=True)
-        inner = tree_potential(row, "nfw", ls)
+        inner = tree_potential(row, "nfw", True)
         tree_centre = np.array([row["position_x"], row["position_y"], row["position_z"]])
         tree_velocity = np.array([row["velocity_x"], row["velocity_y"], row["velocity_z"]])
         halo = HaloModel(inner, tree_centre, tree_velocity, row["virial_radius"],

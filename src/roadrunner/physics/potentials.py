@@ -1,4 +1,4 @@
-"""Spherical gravitational potentials: Plummer, Kepler, Hernquist, NFW and particle sets.
+"""Spherical gravitational potentials: Plummer, Kepler, Hernquist, NFW, Errani–Navarro and particle sets.
 
 :class:`SphericalPotential` implements :class:`~roadrunner._mcf_types.PotentialModel`
 for any spherical density: a concrete potential implements the potential and
@@ -10,7 +10,8 @@ potentials are co-centred (otherwise it is the summed potential at the
 composite's own well bottom). Provides
 :class:`PlummerPotential`, :class:`KeplerPotential` (a Plummer sphere with the
 fixed softening :const:`SOFTENING_KEPLER`), :class:`HernquistPotential`,
-:class:`NFWPotential`, :class:`ShellPotential` (the spherical potential of a
+:class:`NFWPotential`, :class:`ErraniNavarroPotential` (a tidally stripped NFW subhalo),
+:class:`ShellPotential` (the spherical potential of a
 set of particles), :class:`CompositeSphericalPotential` (a sum of them) and
 :func:`get_potential` for dispatch by model name. Potentials take absolute
 physical positions ``xyz`` and measure them from their own ``centre`` (an
@@ -32,7 +33,7 @@ from abc import abstractmethod
 import numpy as np
 from numba import get_num_threads, njit, prange
 from scipy.integrate import cumulative_trapezoid
-from scipy.special import betainc
+from scipy.special import betainc, exp1
 
 from roadrunner._defaults import CONCENTRIC_OFFSET, MONOPOLE_MAX_PULL
 from roadrunner._mcf_types import PotentialModel
@@ -41,6 +42,8 @@ from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
 from roadrunner.physics.distribution import (
     GL_NODES,
     GL_WEIGHTS,
+    ERRANI_NAVARRO_SERIES,
+    PROFILE_ERRANI_NAVARRO,
     PROFILE_HERNQUIST,
     PROFILE_NFW,
     PROFILE_PLUMMER,
@@ -998,6 +1001,154 @@ class NFWPotential(SphericalPotential):
         return nfw_log_phase_space_fraction(np.asarray(E, dtype=np.float64) / self.central_potential(), r_max / self.Rs)
 
 
+ERRANI_NAVARRO_KAPPA = 0.3                  # EN21 eq. 7: the central depletion (1 + Rs / r_cut)^-κ
+ERRANI_NAVARRO_MASS_RATIO = (1e-4, 0.999)   # μ = M_mx / M_mx0 kept in [floor, cap]: noise can push it past 1, where eq. 9's
+                                            # r_cut diverges (≈ 3300 r_mx0 at the cap); a bad vmax can drive it to 0 (r_cut -> 0)
+ERRANI_NAVARRO_MIN_CUT = 1e-2               # r_cut / Rs at least this (b <= 100): the mass is good to 1e-6 there, and e^b overflows past 709
+
+
+def errani_navarro_cut_radius(mass_ratio):
+    """Cut radius of a stripped NFW subhalo in units of ``r_mx0``, Errani & Navarro (2021) eq. 9 (vectorised).
+
+    ``r_cut / r_mx0 = 0.44 μ^0.44 (1 - μ^0.3)^-1.1``, ``μ = M_mx / M_mx0``: the mass inside the peak of the
+    circular velocity now over at infall, clipped to :data:`ERRANI_NAVARRO_MASS_RATIO`. Above the cap (tree
+    noise, or growth just after infall) the profile is the infall NFW to far beyond its virial radius; below
+    the paper's resolved range, ``μ ≳ 1/300``, the fit is extrapolated down to the floor. NaN stays NaN.
+
+    Parameters
+    ----------
+    mass_ratio : ndarray
+        ``μ``.
+
+    Returns
+    -------
+    r_cut : ndarray
+        In units of ``r_mx0``.
+    """
+    mu = np.clip(mass_ratio, *ERRANI_NAVARRO_MASS_RATIO)
+    return 0.44 * mu**0.44 * (1 - mu**0.3) ** -1.1
+
+
+class ErraniNavarroPotential(SphericalPotential):
+    """Tidally stripped NFW subhalo (Errani & Navarro 2021): its infall NFW, cut exponentially.
+
+    ``ρ(r) = ρ_NFW(r) e^{-r/r_cut} / (1 + b)^κ`` (their eq. 7, ``b = Rs / r_cut``, ``κ = 0.3``), ``ρ_NFW`` the
+    infall NFW of virial mass ``M`` and concentration ``c``. With ``x = r / Rs``,
+    ``A(c) = ln(1 + c) - c/(1 + c)`` and ``E1`` the exponential integral:
+    ``M(<r) = M (1 + b)^-κ I(x) / A(c)``, ``I(x) = (1 + b) e^b [E1(b) - E1(b(1 + x))] - 1 + e^{-bx}/(1 + x)``,
+    and ``Φ(r) = -G M(<r) / r - G M (1 + b)^-κ O(x) / (A(c) Rs)``, the shells outside ``r`` adding
+    ``O(x) = e^{-bx}/(1 + x) - b e^b E1(b(1 + x))``: finite at ``r = 0`` (``Φ₀``), over the density's ``1/r``
+    cusp. Its total mass is finite; ``r_cut -> ∞`` is the infall NFW, ``r_cut << Rs`` their eq. 8's
+    exponentially truncated cusp (``r_mx ≈ 1.76 r_cut``). ``e^b`` bounds ``r_cut > Rs / 709``.
+
+    Parameters
+    ----------
+    M : float
+        Virial mass of the infall NFW, ``M(<c Rs)`` before stripping.
+    Rs : float
+        Scale radius of the infall NFW (physical).
+    c : float
+        Concentration of the infall NFW, ``R_vir / Rs``.
+    r_cut : float
+        Cut radius (physical): :func:`errani_navarro_cut_radius`.
+    G : float, default=G_KM
+        Gravitational constant.
+    centre : ndarray of shape (3,), optional
+        See :class:`SphericalPotential`.
+    velocity : ndarray of shape (3,), optional
+        See :class:`SphericalPotential`.
+    """
+
+    def __init__(self, M, Rs, c, r_cut, G=G_KM, centre=None, velocity=None):
+        super().__init__(M, G=G, centre=centre, velocity=velocity)
+        self.Rs = Rs
+        self.c = c
+        self.r_cut = r_cut
+
+    @property
+    def _scale_radius(self):
+        """The length a composite compares this component's offset with (`CONCENTRIC_OFFSET`): ``Rs``, or ``r_cut`` once stripped inside it."""
+        return min(self.Rs, self.r_cut)
+
+    def _potential(self, r):
+        """``-G M(<r) / r - G M (1 + b)^-κ O(x) / (A(c) Rs)``, ``x = r / Rs``: ``Φ₀`` at ``r = 0`` (the 0/0 limit).
+
+        Parameters
+        ----------
+        r : ndarray
+
+        Returns
+        -------
+        phi : ndarray
+        """
+        x = r / self.Rs
+        b = self.Rs / self.r_cut
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        outer = np.exp(-b * x) / (1 + x) - b * np.exp(b) * exp1(b * (1 + x))
+        phi0 = self.central_potential()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            phi = -self.G * (self._enclosed_mass(r) / r + self.M * (1 + b) ** -ERRANI_NAVARRO_KAPPA * outer / (A * self.Rs))
+        return np.nan_to_num(phi, nan=phi0)
+
+    def _density(self, r):
+        """``M (1 + b)^-κ e^{-bx} / (4π A(c) Rs² r (1 + x)²)``, ``x = r / Rs``; infinite at ``r = 0`` (the cusp).
+
+        Parameters
+        ----------
+        r : ndarray
+
+        Returns
+        -------
+        rho : ndarray
+        """
+        x = r / self.Rs
+        b = self.Rs / self.r_cut
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        with np.errstate(divide="ignore"):
+            return self.M * (1 + b) ** -ERRANI_NAVARRO_KAPPA * np.exp(-b * x) / (4 * np.pi * A * self.Rs**2 * r * (1 + x) ** 2)
+
+    def _enclosed_mass(self, r):
+        """Exact: ``M (1 + b)^-κ I(x) / A(c)``, ``x = r / Rs``.
+
+        ``I``'s closed form cancels as ``~eps / x²`` at small ``x``: where ``(1 + b) x`` is below
+        ``ERRANI_NAVARRO_SERIES`` its Taylor series ``x²/2 + c1 x³/3 + c2 x⁴/4 + c3 x⁵/5`` stands in
+        (relative error <= 4e-9 for ``b <= 10``, <= 1e-6 for ``b <= 100``).
+
+        Parameters
+        ----------
+        r : ndarray
+
+        Returns
+        -------
+        menc : ndarray
+        """
+        x = r / self.Rs
+        b = self.Rs / self.r_cut
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        closed = (1 + b) * np.exp(b) * (exp1(b) - exp1(b * (1 + x))) - 1 + np.exp(-b * x) / (1 + x)
+        c1, c2, c3 = -(2 + b), 3 + 2 * b + b**2 / 2, -(4 + 3 * b + b**2 + b**3 / 6)
+        series = x**2 * (1 / 2 + x * (c1 / 3 + x * (c2 / 4 + x * c3 / 5)))
+        return self.M * (1 + b) ** -ERRANI_NAVARRO_KAPPA / A * np.where((1 + b) * x < ERRANI_NAVARRO_SERIES, series, closed)
+
+    def central_potential(self, inner=None):
+        """Exact: ``Φ₀ = -G M (1 + b)^-κ (1 - b e^b E1(b)) / (A(c) Rs)``, the potential at ``r = 0``.
+
+        Returns
+        -------
+        phi0 : float
+        """
+        b = self.Rs / self.r_cut
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        return -self.G * self.M * (1 + b) ** -ERRANI_NAVARRO_KAPPA * (1 - b * np.exp(b) * exp1(b)) / (A * self.Rs)
+
+    def profile(self):
+        """One Errani–Navarro row ``(PROFILE_ERRANI_NAVARRO, G M (1 + b)^-κ / A(c), Rs, 0)`` and its payload ``(b, 0, 0, 0)``."""
+        b = self.Rs / self.r_cut
+        A = np.log(1 + self.c) - self.c / (1 + self.c)
+        return np.array([[PROFILE_ERRANI_NAVARRO, self.G * self.M * (1 + b) ** -ERRANI_NAVARRO_KAPPA / A, self.Rs, 0.0],
+                         [b, 0.0, 0.0, 0.0]])
+
+
 @njit(parallel=True, cache=True)
 def _cells(r, c, inv_d, K):
     """:func:`_cell` of every radius (parallel).
@@ -1288,6 +1439,11 @@ def _about(p, method, r, d):
 _OWN_METHODS = ("orbital_time", "log_phase_space_fraction", "central_potential")
 
 
+def _stacked_rows(profiles, offsets):
+    """Components' profile rows stacked, every row (payload included) carrying its component's pathway offset ``d``."""
+    return np.column_stack((np.vstack(profiles)[:, :3], np.repeat(offsets, [len(p) for p in profiles])))
+
+
 class _GroupDensity:
     """Some groups of a composite: their density in the composite's whole potential (the two-model route).
 
@@ -1319,12 +1475,11 @@ class _GroupDensity:
         """Radial density of its components about the composite's ``x_min``, each along its pathway (compiled, U1).
 
         Reached only when :attr:`has_distribution` holds: every component then has a ``profile()``
-        (Plummer, Hernquist, NFW), so :func:`~roadrunner.physics.distribution.profile_density`
+        (Plummer, Hernquist, NFW, Errani–Navarro), so :func:`~roadrunner.physics.distribution.profile_density`
         covers every row.
         """
         comp = self._composite
-        rows = np.column_stack((np.vstack([comp[i].profile() for i in self._index])[:, :3],
-                                comp._offsets[list(self._index)]))
+        rows = _stacked_rows([comp[i].profile() for i in self._index], comp._offsets[list(self._index)])
         return profile_density(rows, np.ascontiguousarray(r, dtype=np.float64)) / comp.G
 
     def distribution_function(self, E):
@@ -1655,7 +1810,7 @@ class CompositeSphericalPotential(SphericalPotential):
         rows = [p.profile() for p in self._components]
         if any(row is None for row in rows):
             return None
-        return np.column_stack((np.vstack(rows)[:, :3], np.repeat(self._offsets, [len(row) for row in rows])))
+        return _stacked_rows(rows, self._offsets)
 
     def release(self):
         """Drop every cached :class:`~roadrunner.physics.distribution.SphericalDistribution` (U6).
@@ -1731,6 +1886,7 @@ POTENTIAL_MODELS: dict[str, type[SphericalPotential]] = {
     "nfw": NFWPotential,
     "plummer": PlummerPotential,
     "hernquist": HernquistPotential,
+    "errani_navarro": ErraniNavarroPotential,
 }
 
 

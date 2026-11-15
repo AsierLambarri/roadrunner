@@ -14,6 +14,8 @@ from roadrunner._defaults import GALAXY_ID, UNBOUND
 
 from roadrunner.cosmology import current_cosmology
 from roadrunner.physics.constants import G_KM, DUFFY_A, DUFFY_B, DUFFY_C, DUFFY_PIVOT_MASS, MIN_DISTANCE
+from roadrunner.physics.halo_model import physical_length_factor
+from roadrunner.physics.potentials import ERRANI_NAVARRO_MIN_CUT, errani_navarro_cut_radius
 from roadrunner.readers.merger_tree import MergerTreeReaderCSV
 from roadrunner.threads import tree_workers
 
@@ -59,6 +61,10 @@ def concentration(m_vir: float | np.ndarray, z: float | np.ndarray) -> float | n
     return current_cosmology().concentration(m_vir, z)
 
 
+INFALL_COLUMNS = {"mass": "M_vir_infall", "scale_radius": "r_s_infall", "virial_radius": "virial_radius_infall",
+                  "rmax": "rmax_infall", "vmax": "vmax_infall", "Redshift": "Redshift_infall"}
+
+
 class MergerTreeHandlerCSV(MergerTreeReaderCSV):
     """Merger-tree handler extended with accretion-host computations.
 
@@ -78,6 +84,46 @@ class MergerTreeHandlerCSV(MergerTreeReaderCSV):
         df = self._df
         c = concentration(df["mass"].to_numpy(dtype=np.float64), df["Redshift"].to_numpy(dtype=np.float64))
         df["scale_radius"] = df["scale_radius"].fillna(df["virial_radius"] / c)
+
+    def compute_infall(self):
+        """Copy each branch's initial quantities onto its rows from its first infall on: the :data:`INFALL_COLUMNS`.
+
+        The initial row of a ``Sub_tree_id`` is the one just before its first row with a host (``host_id`` set);
+        a branch that is a satellite from its first row takes that row. Every row from the first infall on carries
+        its values, splashbacks included (stripping accumulates); earlier rows get NaN. Lengths stay as in the tree
+        (comoving); ``Redshift_infall`` converts them. Needs ``host_id`` (:meth:`compute_most_bound_satellite`).
+        """
+        df = self._df.sort_values(["Sub_tree_id", "Snapshot"])
+        branch = df["Sub_tree_id"]
+        columns = list(INFALL_COLUMNS)
+        satellite = (df["host_id"] != UNBOUND).groupby(branch).cummax()           # from the first infall on
+        infall = satellite & ~satellite.groupby(branch).shift(fill_value=False)    # the first satellite row
+        initial = df.groupby(branch)[columns].shift(1)                             # each row's predecessor in its branch
+        opens = ~branch.duplicated()
+        initial.loc[opens] = df.loc[opens, columns]                                # a branch's first row is its own
+        initial.loc[~infall] = np.nan
+        self._df[list(INFALL_COLUMNS.values())] = initial.groupby(branch).ffill().rename(columns=INFALL_COLUMNS)
+
+    def compute_cut_radii(self, comoving):
+        """Errani & Navarro (2021)'s cut of every row past its infall: ``x_cut = r_cut / r_s_infall`` (eq. 9).
+
+        ``μ = M_mx / M_mx0 = r_max v_max² / (r_max0 v_max0²)``, with both peak radii physical (each at its own
+        redshift), is clipped by :func:`~roadrunner.physics.potentials.errani_navarro_cut_radius`; ``x_cut`` is floored
+        at :data:`~roadrunner.physics.potentials.ERRANI_NAVARRO_MIN_CUT` (eq. 9 scales ``r_cut`` with ``r_max0``, which
+        the tree need not keep at ``2.163 r_s``). NaN before infall, like the ``*_infall`` columns
+        (:meth:`compute_infall`, which it needs).
+
+        Parameters
+        ----------
+        comoving : bool
+            Whether the tree's lengths are comoving.
+        """
+        df = self._df
+        r_mx = df["rmax"] * physical_length_factor(df["Redshift"], comoving)
+        r_mx0 = df["rmax_infall"] * physical_length_factor(df["Redshift_infall"], comoving)
+        mass_ratio = r_mx * df["vmax"] ** 2 / (r_mx0 * df["vmax_infall"] ** 2)
+        self._df["x_cut"] = np.maximum(errani_navarro_cut_radius(mass_ratio) * df["rmax_infall"] / df["r_s_infall"],
+                                       ERRANI_NAVARRO_MIN_CUT)
 
     def set_constant_column(self, name: str, value):
         """Set a column to a constant value for all rows.

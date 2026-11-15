@@ -5,7 +5,7 @@ import numpy as np
 from roadrunner.mixture._math import row_squared_norms
 from roadrunner.physics.constants import G_KM
 from roadrunner.physics.potentials import CompositeSphericalPotential, get_potential
-from roadrunner._defaults import LOCAL_IDX, math_dtype
+from roadrunner._defaults import LOCAL_IDX, UNBOUND, math_dtype
 from roadrunner._mcf_types import PotentialModel
 
 
@@ -368,28 +368,74 @@ class HaloModel:
         return E.astype(math_dtype(), copy=False)
 
 
-def tree_potential(row, model, length_scale):
+_UNSTRIPPED = {"errani_navarro": "nfw"}     # a stripped family's profile for a halo nothing strips (no host)
+
+
+def tree_models(host_ids, model):
+    """Each tree row's potential family: ``model`` for a satellite (``host_id`` set), its unstripped
+    counterpart (:data:`_UNSTRIPPED`; ``model`` itself for an unstripped family) for a central.
+
+    Parameters
+    ----------
+    host_ids : array_like
+        The rows' ``host_id``.
+    model : str
+        The run's ``halo_model``.
+
+    Returns
+    -------
+    models : ndarray of str
+    """
+    model = model.lower()
+    return np.where(np.asarray(host_ids) != UNBOUND, model, _UNSTRIPPED.get(model, model))
+
+
+def _point_mass(row, comoving):
+    """The row's mass alone (Kepler)."""
+    return {"M": row["mass"]}
+
+
+def _nfw(row, comoving):
+    """The row's mass, scale radius (physical) and concentration."""
+    return {"M": row["mass"], "Rs": row["scale_radius"] * physical_length_factor(row["Redshift"], comoving),
+            "c": row["virial_radius"] / row["scale_radius"]}
+
+
+def _scaled_sphere(row, comoving):
+    """Plummer or Hernquist: the row's mass, and its scale radius (physical) as ``a``."""
+    return {"M": row["mass"], "a": row["scale_radius"] * physical_length_factor(row["Redshift"], comoving)}
+
+
+def _errani_navarro(row, comoving):
+    """A satellite's stripped NFW: its infall NFW ``(M, Rs, c)`` and its cut ``x_cut Rs``, physical
+    (:meth:`~roadrunner.physics.merger_tree.MergerTreeHandlerCSV.compute_infall`, ``compute_cut_radii``)."""
+    Rs = row["r_s_infall"] * physical_length_factor(row["Redshift_infall"], comoving)
+    return {"M": row["M_vir_infall"], "Rs": Rs, "c": row["virial_radius_infall"] / row["r_s_infall"],
+            "r_cut": row["x_cut"] * Rs}
+
+
+_TREE_PARAMETERS = {"nfw": _nfw, "plummer": _scaled_sphere, "hernquist": _scaled_sphere, "errani_navarro": _errani_navarro}
+
+
+def tree_potential(row, model, comoving):
     """The tree halo's potential (dark matter): physical, at the row's centre and velocity.
 
     Parameters
     ----------
     row : mapping
-        Merger-tree row (position, velocity, mass, virial and scale radius).
+        Merger-tree row: position, velocity, mass, virial and scale radius; for ``"errani_navarro"`` the
+        ``*_infall`` columns and ``x_cut`` (:meth:`~roadrunner.physics.merger_tree.MergerTreeHandlerCSV.compute_cut_radii`).
     model : str
-        Potential family (``POTENTIAL_MODELS``).
-    length_scale : float
-        Catalogue-to-physical length factor (:func:`physical_length_factor`).
+        The row's potential family (:func:`tree_models`).
+    comoving : bool
+        Whether the tree's lengths are comoving (:func:`physical_length_factor`).
 
     Returns
     -------
     potential : SphericalPotential
     """
-    scale = row["scale_radius"] * length_scale
-    kwargs = {
-        "nfw": {"Rs": scale, "c": row["virial_radius"] / row["scale_radius"]},
-        "plummer": {"a": scale},
-        "hernquist": {"a": scale},
-    }.get(model.lower(), {})
-    centre = np.array([row["position_x"], row["position_y"], row["position_z"]], dtype=np.float64)
+    ls = physical_length_factor(row["Redshift"], comoving)
+    centre = np.array([row["position_x"], row["position_y"], row["position_z"]], dtype=np.float64) * ls
     velocity = np.array([row["velocity_x"], row["velocity_y"], row["velocity_z"]], dtype=np.float64)
-    return get_potential(model, M=row["mass"], G=G_KM, centre=centre * length_scale, velocity=velocity, **kwargs)
+    parameters = _TREE_PARAMETERS.get(model.lower(), _point_mass)(row, comoving)   # unknown names: get_potential raises
+    return get_potential(model, G=G_KM, centre=centre, velocity=velocity, **parameters)
