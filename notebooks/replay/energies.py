@@ -41,7 +41,8 @@ SOFTENING_KEPLER = 1E-3           # kpc: roadrunner's point-mass softening and t
 STARS_ITERATIONS = 3              # shell rebuilds of the stars' own potential
 N_NODES = 4096                    # ShellPotential cells
 
-PLUMMER_SOFTENING = 0.0           # kpc: the recomputed point mass's Plummer softening (0: pure point mass;
+PLUMMER_SOFTENING = 0.0
+HALO_MODEL = None                 # None: the run's halo_model; 'kepler' | 'nfw' | 'errani_navarro': the halo of the recomputed energies           # kpc: the recomputed point mass's Plummer softening (0: pure point mass;
                                   # roadrunner's own: SOFTENING_KEPLER)
 
 
@@ -225,15 +226,17 @@ class Fallback:
 
     def __init__(self, rr_out, particle_dir, tree, particles=None):
         self.rr_out, self.particle_dir, self.tree = rr_out, particle_dir, tree
-        if 'x_cut' not in tree.dtype.names and run_settings(rr_out)['halo_model'] == 'errani_navarro':
-            self.tree = en21_columns(tree, run_settings(rr_out)['comoving'])   # as roadrunner appends them
         self._particles = particles
         self._settings = None
         self._cache = (None, None)                     # (snapshot, its particles)
+        if 'x_cut' not in tree.dtype.names and self.settings()['halo_model'] == 'errani_navarro':
+            self.tree = en21_columns(tree, self.settings()['comoving'])        # as roadrunner appends them
 
     def settings(self):
         if self._settings is None:
             self._settings = run_settings(self.rr_out)
+            if HALO_MODEL is not None:                  # the fallback's own halo, whatever the run used
+                self._settings['halo_model'] = str(HALO_MODEL).lower()
         return self._settings
 
     def particles(self, s):
@@ -290,10 +293,10 @@ def stored_energies(fa, s, fallback=None):
         st = fallback.settings()
         warnings.warn(
             f"snapshot {s}: roadrunner stored energy_scale = {', '.join(f'{sc:g}' for _, sc, _ in lost[:3])}"
-            f"{', ...' if len(lost) > 3 else ''} for galaxies {[k for k, _, _ in lost]} (halo_model "
-            f"{st['halo_model']!r}: a star sits on the centre of the point mass, so its depth G M / r_in is "
-            f"infinite), so their stored boundness is all 0 and their energies are lost. Recomputed from "
-            f"{fallback.particle_dir}/snapshot{s:04d}.hdf5 with roadrunner's recipe (point mass, Plummer softening "
+            f"{', ...' if len(lost) > 3 else ''} for galaxies {[k for k, _, _ in lost]} (the run's halo_model "
+            f"{run_settings(fallback.rr_out)['halo_model']!r}: a star sits on the centre of the point mass, so its depth "
+            f"G M / r_in is infinite), so their stored boundness is all 0 and their energies are lost. Recomputed from "
+            f"{fallback.particle_dir}/snapshot{s:04d}.hdf5 with roadrunner's recipe (halo {st['halo_model']!r}; point-mass Plummer softening "
             f"{PLUMMER_SOFTENING:g} kpc, + the stars' shells, stars {st['stars']!r}; replay/energies.py); "
             f"roadrunner's membership is kept.",
             EnergyFallbackWarning, stacklevel=2)
