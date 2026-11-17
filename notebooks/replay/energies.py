@@ -16,7 +16,8 @@ here in numpy (replay does not need roadrunner):
   kpc (default 0: a pure point mass, whose star exactly on the centre, if any, takes the radius of
   the nearest other star instead of r = 0; roadrunner's own KeplerPotential is a Plummer sphere of
   SOFTENING_KEPLER = 1e-3 kpc: set PLUMMER_SOFTENING = 1e-3 to reproduce its energies, to ~1e-6),
-  plus, 'pinned' stars, STARS_ITERATIONS times, a ShellPotential of
+  (halo_model 'nfw', or 'errani_navarro' (EN21; satellites: infall NFW cut at x_cut Rs, centrals NFW):
+  that halo's own potential, finite at the centre), plus, 'pinned' stars, STARS_ITERATIONS times, a ShellPotential of
   the stars bound so far (each star a thin shell about the tree centre, tabulated on N_NODES
   log-radius cells, linear in 1/r between nodes); E = Phi + 1/2 |v - v_tree|^2 for every star
   within search_factor * R_vir of the tree centre (catalogue units; physical for the potential).
@@ -100,15 +101,54 @@ def _shell_potential(x, m, centre, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=N
     return potential
 
 
+ERRANI_NAVARRO_KAPPA = 0.3        # EN21 eq. 7: the central depletion (1 + Rs / r_cut)^-kappa
+
+
+def _nfw_family(row, halo_model, comoving):
+    """(M, Rs, c, b) of a tree row's NFW-type halo, physical; b = Rs / r_cut for a stripped satellite
+    (halo_model 'errani_navarro' with a host: its infall NFW and cut, as roadrunner.physics.halo_model.
+    tree_potential), else 0 (plain NFW: the tree halo, or a central of an 'errani_navarro' run)."""
+    ls = 1.0 / (1.0 + float(row['Redshift'])) if comoving else 1.0
+    if halo_model == 'errani_navarro' and int(row['host_id']) != -1:
+        Rs = float(row['r_s_infall']) / (1.0 + float(row['Redshift_infall'])) if comoving else float(row['r_s_infall'])
+        return (float(row['M_vir_infall']), Rs, float(row['virial_radius_infall']) / float(row['r_s_infall']),
+                1.0 / float(row['x_cut']))
+    return float(row['mass']), float(row['scale_radius']) * ls, float(row['virial_radius']) / float(row['scale_radius']), 0.0
+
+
+def _nfw_family_potential(M, Rs, c, b, r):
+    """Phi(r) of an NFW (b = 0) or of EN21's stripped NFW (b = Rs / r_cut > 0; Errani & Navarro 2021, as
+    roadrunner.physics.potentials.ErraniNavarroPotential): finite at r = 0 (Phi_0)."""
+    from scipy.special import exp1
+    x = r / Rs
+    A = np.log(1 + c) - c / (1 + c)
+    if b == 0:
+        phi0 = -G_KM * M / (Rs * A)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            phi = phi0 * np.log1p(x) / x
+        return np.nan_to_num(phi, nan=phi0)
+    k = (1 + b) ** -ERRANI_NAVARRO_KAPPA
+    closed = (1 + b) * np.exp(b) * (exp1(b) - exp1(b * (1 + x))) - 1 + np.exp(-b * x) / (1 + x)
+    c1, c2, c3 = -(2 + b), 3 + 2 * b + b ** 2 / 2, -(4 + 3 * b + b ** 2 + b ** 3 / 6)
+    series = x ** 2 * (1 / 2 + x * (c1 / 3 + x * (c2 / 4 + x * c3 / 5)))      # the closed form cancels at small x
+    menc = M * k / A * np.where((1 + b) * x < 1e-2, series, closed)
+    outer = np.exp(-b * x) / (1 + x) - b * np.exp(b) * exp1(b * (1 + x))
+    phi0 = -G_KM * M * k * (1 - b * np.exp(b) * exp1(b)) / (A * Rs)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        phi = -G_KM * (menc / r + M * k * outer / (A * Rs))
+    return np.nan_to_num(phi, nan=phi0)
+
+
 def point_mass_energies(row, pos, vel, mass, halo_model='kepler', stars='pinned', search_factor=1.0, comoving=True,
                         softening=None):
     """roadrunner's energies of the stars within search_factor R_vir of a tree halo (stellar_composite
-    with a point-mass halo). row: its merger-tree row; pos (catalogue units), vel (km/s), mass: every
+    with a point-mass, NFW or Errani-Navarro halo). row: its merger-tree row; pos (catalogue units), vel (km/s), mass: every
     star of the snapshot; softening: the point mass's Plummer softening, kpc (None: PLUMMER_SOFTENING).
     (rows of those stars, their E in (km/s)^2)."""
-    if halo_model != 'kepler' or stars not in ('pinned', 'none'):
-        raise NotImplementedError(f"energy fallback: only halo_model 'kepler' with 'pinned' or 'none' stars is "
-                                  f"implemented (roadrunner's recipe for this run: {halo_model!r}, {stars!r})")
+    if halo_model not in ('kepler', 'nfw', 'errani_navarro') or stars not in ('pinned', 'none'):
+        raise NotImplementedError(f"energy fallback: only halo_model 'kepler', 'nfw' or 'errani_navarro' with "
+                                  f"'pinned' or 'none' stars is implemented (roadrunner's recipe for this run: "
+                                  f"{halo_model!r}, {stars!r})")
     a = 1.0 / (1.0 + float(row['Redshift'])) if comoving else 1.0
     centre = np.array([row['position_x'], row['position_y'], row['position_z']], dtype=np.float64)
     v_tree = np.array([row['velocity_x'], row['velocity_y'], row['velocity_z']], dtype=np.float64)
@@ -119,7 +159,9 @@ def point_mass_energies(row, pos, vel, mass, halo_model='kepler', stars='pinned'
     r = np.sqrt(np.sum((x - c) ** 2, axis=1))
     kin = 0.5 * np.sum((np.asarray(vel[local], dtype=np.float64) - v_tree) ** 2, axis=1)  # pinned: v_com = v_tree
     eps = PLUMMER_SOFTENING if softening is None else float(softening)
-    if eps > 0:
+    if halo_model != 'kepler':                   # NFW / EN21: finite at the centre, no softening
+        phi_dm = _nfw_family_potential(*_nfw_family(row, halo_model, comoving), r)
+    elif eps > 0:
         phi_dm = -G_KM * float(row['mass']) / np.sqrt(r * r + eps * eps)
     else:                                        # pure point mass: a star on the centre takes the nearest other's radius
         on_centre = r == 0
