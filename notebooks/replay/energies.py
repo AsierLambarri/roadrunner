@@ -101,6 +101,48 @@ def _shell_potential(x, m, centre, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=N
     return potential
 
 
+ERRANI_NAVARRO_MASS_RATIO = (1e-4, 0.999)   # roadrunner.physics.potentials: mu = M_mx / M_mx0 kept in [floor, cap]
+ERRANI_NAVARRO_MIN_CUT = 1e-2               # x_cut = r_cut / Rs at least this
+INFALL_COLUMNS = {'mass': 'M_vir_infall', 'scale_radius': 'r_s_infall', 'virial_radius': 'virial_radius_infall',
+                  'rmax': 'rmax_infall', 'vmax': 'vmax_infall', 'Redshift': 'Redshift_infall'}
+
+
+def en21_columns(tree, comoving=True):
+    """The tree with the columns roadrunner appends for halo_model 'errani_navarro' (MergerTreeHandlerCSV.
+    compute_infall and compute_cut_radii, copied): INFALL_COLUMNS' values of each branch's row just before its
+    first host (host_id set; its own first row if a satellite from the start), carried on from the first infall
+    on (NaN before), and x_cut = r_cut / r_s_infall, EN21 eq. 9 with mu = r_max v_max^2 / (r_max0 v_max0^2) (both
+    radii physical) clipped to ERRANI_NAVARRO_MASS_RATIO, floored at ERRANI_NAVARRO_MIN_CUT. Needs the tree's
+    rmax, vmax and host_id. Returns a structured array (rows in the tree's order)."""
+    import pandas as pd
+    names = tree.dtype.names
+    miss = [k for k in ('rmax', 'vmax', 'host_id', 'scale_radius', 'virial_radius', 'mass', 'Redshift', 'Sub_tree_id',
+                        'Snapshot') if k not in names]
+    if miss:
+        raise KeyError(f"energy fallback: errani_navarro needs the tree columns {miss}, missing from the catalogue's tree")
+    df = pd.DataFrame({k: np.asarray(tree[k]).astype(tree[k].dtype.newbyteorder('=')) for k in names})
+    d = df.sort_values(['Sub_tree_id', 'Snapshot'])
+    branch = d['Sub_tree_id']
+    columns = list(INFALL_COLUMNS)
+    satellite = (d['host_id'] != -1).groupby(branch).cummax()
+    infall = satellite & ~satellite.groupby(branch).shift(fill_value=False)
+    initial = d.groupby(branch)[columns].shift(1)
+    opens = ~branch.duplicated()
+    initial.loc[opens] = d.loc[opens, columns]
+    initial.loc[~infall] = np.nan
+    df[list(INFALL_COLUMNS.values())] = initial.groupby(branch).ffill().rename(columns=INFALL_COLUMNS)
+    f = (lambda z: 1.0 / (1.0 + z)) if comoving else (lambda z: 1.0 + 0 * z)
+    r_mx = df['rmax'] * f(df['Redshift'])
+    r_mx0 = df['rmax_infall'] * f(df['Redshift_infall'])
+    mu = np.clip(r_mx * df['vmax'] ** 2 / (r_mx0 * df['vmax_infall'] ** 2), *ERRANI_NAVARRO_MASS_RATIO)
+    r_cut = 0.44 * mu ** 0.44 * (1 - mu ** 0.3) ** -1.1
+    df['x_cut'] = np.maximum(r_cut * df['rmax_infall'] / df['r_s_infall'], ERRANI_NAVARRO_MIN_CUT)
+    out = np.empty(len(df), dtype=[(k, df[k].to_numpy().dtype) for k in df.columns])
+    for k in df.columns:
+        out[k] = df[k].to_numpy()
+    return out
+
+
 ERRANI_NAVARRO_KAPPA = 0.3        # EN21 eq. 7: the central depletion (1 + Rs / r_cut)^-kappa
 
 
@@ -183,6 +225,8 @@ class Fallback:
 
     def __init__(self, rr_out, particle_dir, tree, particles=None):
         self.rr_out, self.particle_dir, self.tree = rr_out, particle_dir, tree
+        if 'x_cut' not in tree.dtype.names and run_settings(rr_out)['halo_model'] == 'errani_navarro':
+            self.tree = en21_columns(tree, run_settings(rr_out)['comoving'])   # as roadrunner appends them
         self._particles = particles
         self._settings = None
         self._cache = (None, None)                     # (snapshot, its particles)
