@@ -104,6 +104,7 @@ def _shell_potential(x, m, centre, G=G_KM, softening=SOFTENING_KEPLER, n_nodes=N
 
 ERRANI_NAVARRO_MASS_RATIO = (1e-4, 0.999)   # roadrunner.physics.potentials: mu = M_mx / M_mx0 kept in [floor, cap]
 ERRANI_NAVARRO_MIN_CUT = 1e-2               # x_cut = r_cut / Rs at least this
+RMAX_OVER_RS = 2.163                        # NFW: r_max = 2.163 r_s, where the tree has no r_max
 INFALL_COLUMNS = {'mass': 'M_vir_infall', 'scale_radius': 'r_s_infall', 'virial_radius': 'virial_radius_infall',
                   'rmax': 'rmax_infall', 'vmax': 'vmax_infall', 'Redshift': 'Redshift_infall'}
 
@@ -114,14 +115,16 @@ def en21_columns(tree, comoving=True):
     first host (host_id set; its own first row if a satellite from the start), carried on from the first infall
     on (NaN before), and x_cut = r_cut / r_s_infall, EN21 eq. 9 with mu = r_max v_max^2 / (r_max0 v_max0^2) (both
     radii physical) clipped to ERRANI_NAVARRO_MASS_RATIO, floored at ERRANI_NAVARRO_MIN_CUT. Needs the tree's
-    rmax, vmax and host_id. Returns a structured array (rows in the tree's order)."""
+    vmax and host_id; rmax is the tree's rmax (else r_max) where finite, else RMAX_OVER_RS * scale_radius. Returns a structured array (rows in the tree's order)."""
     import pandas as pd
     names = tree.dtype.names
-    miss = [k for k in ('rmax', 'vmax', 'host_id', 'scale_radius', 'virial_radius', 'mass', 'Redshift', 'Sub_tree_id',
+    miss = [k for k in ('vmax', 'host_id', 'scale_radius', 'virial_radius', 'mass', 'Redshift', 'Sub_tree_id',
                         'Snapshot') if k not in names]
     if miss:
         raise KeyError(f"energy fallback: errani_navarro needs the tree columns {miss}, missing from the catalogue's tree")
     df = pd.DataFrame({k: np.asarray(tree[k]).astype(tree[k].dtype.newbyteorder('=')) for k in names})
+    rmax = df['rmax'] if 'rmax' in df else df['r_max'] if 'r_max' in df else pd.Series(np.nan, index=df.index)
+    df['rmax'] = rmax.where(np.isfinite(rmax), RMAX_OVER_RS * df['scale_radius'])   # missing: the NFW peak, 2.163 r_s
     d = df.sort_values(['Sub_tree_id', 'Snapshot'])
     branch = d['Sub_tree_id']
     columns = list(INFALL_COLUMNS)
