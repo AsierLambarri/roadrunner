@@ -38,7 +38,7 @@ from scipy.special import betainc, exp1
 from roadrunner._defaults import CONCENTRIC_OFFSET, MONOPOLE_MAX_PULL
 from roadrunner._mcf_types import PotentialModel
 from roadrunner.mixture._math import row_squared_norms
-from roadrunner.physics.constants import G_KM, SOFTENING_KEPLER
+from roadrunner.physics.constants import G_KM, KEPLER_MIN_RADIUS, SOFTENING_KEPLER
 from roadrunner.physics.distribution import (
     GL_NODES,
     GL_WEIGHTS,
@@ -685,7 +685,7 @@ class KeplerPotential(PlummerPotential):
 
         The softened central value is set by the softening alone, so the well is taken as deep
         as the data resolve it: the unsoftened point mass at the innermost particle's distance
-        ``r_in``. Without one (``inner`` None) it is ``-inf``.
+        ``r_in`` (floored at :const:`KEPLER_MIN_RADIUS`, so finite even for a star on the centre). Without one (``inner`` None) it is ``-G M / KEPLER_MIN_RADIUS``.
 
         Parameters
         ----------
@@ -701,11 +701,11 @@ class KeplerPotential(PlummerPotential):
     def _potential_at(self, x, inner):
         """The unsoftened point mass at ``x``, no deeper than at the innermost particle: ``-G M / max(|x - c|, r_in)``.
 
-        ``r_in = 0`` without an innermost particle, so ``-inf`` at the centre.
+        ``r_in = 0`` without an innermost particle: the radius is floored at :const:`KEPLER_MIN_RADIUS`, so never ``-inf``.
         """
         r_in = np.linalg.norm((self.centre if inner is None else np.asarray(inner, dtype=np.float64)) - self.centre)
         with np.errstate(divide="ignore"):
-            return float(-self.G * self.M / max(np.linalg.norm(x - self.centre), r_in))
+            return float(-self.G * self.M / max(np.linalg.norm(x - self.centre), r_in, KEPLER_MIN_RADIUS))
 
     def distribution_function(self, E):
         """Not defined: a point mass has no extended mass distribution, so no energy distribution.

@@ -13,6 +13,7 @@ G_GALACTIC = 4.49850215E-6  # kpc^3 / (Msun * Gyr^2)
 DYN_TIME_FACTOR = sqrt(G_GALACTIC/G_KM)  # converts km/s to kpc/Gyr
 
 SOFTENING_KEPLER = 1E-3
+KEPLER_MIN_RADIUS = 1E-6  # kpc: floor of the point mass's well radius, so its depth G M / r is never infinite
 
 RILEY_BOUND_THRESHOLD = 0.97
 RILEY_SVM_SLOPE = 3.51
@@ -42,6 +43,7 @@ __all__ = [
     "G_GALACTIC",
     "DYN_TIME_FACTOR",
     "SOFTENING_KEPLER",
+    "KEPLER_MIN_RADIUS",
     "RILEY_BOUND_THRESHOLD",
     "RILEY_SVM_SLOPE",
     "RILEY_SVM_INTERCEPT",
